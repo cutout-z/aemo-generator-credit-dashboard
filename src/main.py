@@ -13,7 +13,7 @@ from . import config
 from .aggregate import aggregate_month, build_mlf_lookup
 from .download_dispatch import fetch_dispatch_price_month
 from .download_metadata import fetch_generators
-from .download_mlf import fetch_mlf_history
+from .download_mlf import fetch_connection_points, fetch_mlf_history
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .generate_json import generate_all
 
@@ -74,10 +74,15 @@ def main():
         logger.info(f"Done. Wrote index + {count} generator files.")
         return
 
-    # Step 2: MLF history
+    # Step 2: MLF history + connection points
     logger.info("=== Step 2: MLF history ===")
     mlf_history = fetch_mlf_history(str(data_dir), force=args.full_refresh)
     logger.info(f"Loaded {len(mlf_history)} DUID×FY MLF records")
+
+    # Enrich generators with connection points from DUDETAILSUMMARY
+    cp_map = fetch_connection_points(str(data_dir), force=args.full_refresh)
+    generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
+    logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
 
     # Step 3: Monthly SCADA + price aggregation
     aggregates_path = data_dir / "monthly_aggregates.feather"

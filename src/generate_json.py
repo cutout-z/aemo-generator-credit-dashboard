@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -106,8 +107,19 @@ def generate_generator_json(
     if price_distribution:
         doc["price_distribution"] = price_distribution
 
-    json_path.write_text(json.dumps(doc, separators=(",", ":")))
+    json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
     return json_path
+
+
+def _sanitize(obj):
+    """Replace NaN/Inf floats with None for valid JSON."""
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
 
 
 def generate_all(

@@ -44,15 +44,7 @@ def fetch_mlf_history(cache_dir: str, force: bool = False) -> pd.DataFrame:
         logger.info("Loading cached MLF history")
         return pd.read_feather(feather_path)
 
-    # Find latest available month
-    latest = _get_latest_available_month()
-    if latest is None:
-        raise RuntimeError("Could not determine latest available month from AEMO")
-
-    year, month = latest
-
-    # Download raw DUDETAILSUMMARY
-    raw = _download_dudetailsummary(year, month)
+    raw = _download_latest_dudetailsummary()
 
     # Extract per-FY MLFs
     fy_end = config.current_fy_start()
@@ -62,6 +54,37 @@ def fetch_mlf_history(cache_dir: str, force: bool = False) -> pd.DataFrame:
     result.to_feather(feather_path)
     logger.info(f"Cached MLF history: {len(result)} DUID×FY records")
     return result
+
+
+def fetch_connection_points(cache_dir: str, force: bool = False) -> dict[str, str]:
+    """Extract DUID -> connection point ID mapping from DUDETAILSUMMARY.
+
+    Returns dict mapping DUID to CONNECTIONPOINTID.
+    """
+    cache_path = Path(cache_dir)
+    cp_path = cache_path / "connection_points.feather"
+
+    if cp_path.exists() and not force:
+        df = pd.read_feather(cp_path)
+        return dict(zip(df["DUID"], df["CONNECTIONPOINTID"]))
+
+    raw = _download_latest_dudetailsummary()
+
+    # Take the latest record per DUID
+    latest = raw.sort_values("START_DATE").drop_duplicates("DUID", keep="last")
+    cp = latest[["DUID", "CONNECTIONPOINTID"]].copy()
+    cp.to_feather(cp_path)
+    logger.info(f"Cached connection points for {len(cp)} DUIDs")
+    return dict(zip(cp["DUID"], cp["CONNECTIONPOINTID"]))
+
+
+def _download_latest_dudetailsummary() -> pd.DataFrame:
+    """Download the latest available DUDETAILSUMMARY."""
+    latest = _get_latest_available_month()
+    if latest is None:
+        raise RuntimeError("Could not determine latest available month from AEMO")
+    year, month = latest
+    return _download_dudetailsummary(year, month)
 
 
 def _get_latest_available_month() -> tuple[int, int] | None:
