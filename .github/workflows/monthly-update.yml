@@ -1,0 +1,98 @@
+name: Monthly Generator Credit Update
+
+on:
+  schedule:
+    # 18th of each month at midnight UTC (~10am AEST)
+    - cron: '0 0 18 * *'
+  workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: 'Re-download all 5 years of data'
+        required: false
+        default: 'false'
+        type: boolean
+      months_back:
+        description: 'Number of months to process (default: 2)'
+        required: false
+        default: '2'
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/monthly_aggregates.feather
+            data/generators.feather
+            data/mlf_history.feather
+          key: gen-credit-data-${{ github.run_number }}
+          restore-keys: gen-credit-data-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        run: |
+          ARGS=""
+          if [ "${{ inputs.full_refresh }}" = "true" ]; then
+            ARGS="--full-refresh"
+          else
+            ARGS="--months-back ${{ inputs.months_back || '2' }}"
+          fi
+          python -m src.main $ARGS
+
+      - name: Commit and push updated outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/data/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update generator credit data $(date +%Y-%m)"
+            git push
+          fi
+
+  deploy-pages:
+    needs: update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Pull latest
+        run: git pull origin main
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

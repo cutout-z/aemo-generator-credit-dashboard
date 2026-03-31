@@ -1,0 +1,1 @@
+{"duid":"BUSF1","station_name":"Bundaberg Solar Farm","region":"QLD1","fuel_category":"Solar","capacity_mw":101.0,"technology":"Renewable","connection_point":"","monthly":{"months":["2026-02"],"generation_mwh":[0.0],"revenue_aud":[0.0],"capacity_factor":[0.0],"curtailment_pct":[NaN],"captured_price":[NaN],"avg_rrp":[57.69],"price_capture_ratio":[NaN]}}

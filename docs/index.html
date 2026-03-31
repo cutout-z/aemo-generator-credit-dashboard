@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AEMO Generator Credit Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface-hover: #242836;
+            --border: #2d3140;
+            --text: #e1e4eb;
+            --text-dim: #8b8fa3;
+            --accent: #4a9eff;
+            --accent-dim: #2d6bbf;
+            --green: #22c55e;
+            --red: #ef4444;
+            --yellow: #eab308;
+            --orange: #f97316;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        header h1 span {
+            color: var(--text-dim);
+            font-weight: 400;
+        }
+
+        /* Search */
+        .search-container {
+            position: relative;
+            flex: 1;
+            min-width: 280px;
+            max-width: 500px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 10px 16px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .search-input:focus {
+            border-color: var(--accent);
+        }
+
+        .search-input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .search-dropdown {
+            display: none;
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 100;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        .search-dropdown.visible { display: block; }
+
+        .search-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.15s;
+        }
+
+        .search-item:last-child { border-bottom: none; }
+        .search-item:hover, .search-item.active { background: var(--surface-hover); }
+
+        .search-item .name {
+            font-weight: 500;
+            flex: 1;
+        }
+
+        .search-item .duid {
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .badge-region {
+            background: var(--accent-dim);
+            color: #fff;
+        }
+
+        .badge-fuel {
+            color: #fff;
+        }
+        .badge-fuel[data-fuel="Solar"] { background: #d97706; }
+        .badge-fuel[data-fuel="Wind"] { background: #0891b2; }
+        .badge-fuel[data-fuel="Hydro"] { background: #2563eb; }
+        .badge-fuel[data-fuel="Battery"] { background: #7c3aed; }
+        .badge-fuel[data-fuel="Fossil"] { background: #64748b; }
+        .badge-fuel[data-fuel="Other Renewable"] { background: #16a34a; }
+        .badge-fuel[data-fuel="Other"] { background: #475569; }
+
+        /* Filters */
+        .filters {
+            display: flex;
+            gap: 8px;
+        }
+
+        .filter-select {
+            padding: 8px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 8px 24px;
+            font-size: 13px;
+            color: var(--text-dim);
+            display: flex;
+            gap: 24px;
+        }
+
+        .stats-bar strong { color: var(--text); }
+
+        /* Main content */
+        .content {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Welcome state */
+        .welcome {
+            text-align: center;
+            padding: 80px 24px;
+        }
+
+        .welcome h2 {
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+
+        .welcome p {
+            color: var(--text-dim);
+            font-size: 15px;
+            max-width: 500px;
+            margin: 0 auto 32px;
+        }
+
+        .welcome .hint {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-top: 16px;
+        }
+
+        /* Identity card */
+        .identity-card {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+        }
+
+        .identity-card.visible { display: block; }
+
+        .identity-card h2 {
+            font-size: 22px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .identity-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 24px;
+        }
+
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .meta-item .label {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .meta-item .value {
+            font-size: 15px;
+            font-weight: 500;
+        }
+
+        .meta-item .value.mono {
+            font-family: monospace;
+        }
+
+        /* Chart grid */
+        .chart-grid {
+            display: none;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .chart-grid.visible {
+            display: grid;
+        }
+
+        .chart-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            min-height: 320px;
+        }
+
+        .chart-panel h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--text-dim);
+        }
+
+        .chart-panel .placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 250px;
+            color: var(--text-dim);
+            font-size: 14px;
+            font-style: italic;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .chart-grid { grid-template-columns: 1fr; }
+            header { flex-direction: column; align-items: flex-start; }
+            .search-container { max-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>AEMO Generator Credit <span>Dashboard</span></h1>
+    <div class="search-container">
+        <input type="text" class="search-input" id="searchInput"
+               placeholder="Search by generator name or DUID..."
+               autocomplete="off">
+        <div class="search-dropdown" id="searchDropdown"></div>
+    </div>
+    <div class="filters">
+        <select class="filter-select" id="filterRegion">
+            <option value="">All Regions</option>
+        </select>
+        <select class="filter-select" id="filterFuel">
+            <option value="">All Fuel Types</option>
+        </select>
+    </div>
+</header>
+
+<div class="stats-bar" id="statsBar">
+    <span>Loading generator data...</span>
+</div>
+
+<div class="content">
+    <!-- Welcome state -->
+    <div class="welcome" id="welcomeState">
+        <h2>Generator Credit Risk Dashboard</h2>
+        <p>Search for any NEM generator by name or DUID to view its credit risk profile: revenue, capacity factor, curtailment, MLF trajectory, and price capture.</p>
+        <div class="hint">Tip: Use the URL hash to bookmark generators — e.g. #CLRKCWF1</div>
+    </div>
+
+    <!-- Identity card -->
+    <div class="identity-card" id="identityCard">
+        <h2 id="genName"></h2>
+        <div class="identity-meta">
+            <div class="meta-item">
+                <span class="label">DUID</span>
+                <span class="value mono" id="genDUID"></span>
+            </div>
+            <div class="meta-item">
+                <span class="label">Region</span>
+                <span class="value" id="genRegion"></span>
+            </div>
+            <div class="meta-item">
+                <span class="label">Fuel Type</span>
+                <span class="value" id="genFuel"></span>
+            </div>
+            <div class="meta-item">
+                <span class="label">Technology</span>
+                <span class="value" id="genTech"></span>
+            </div>
+            <div class="meta-item">
+                <span class="label">Nameplate Capacity</span>
+                <span class="value" id="genCapacity"></span>
+            </div>
+            <div class="meta-item">
+                <span class="label">Connection Point</span>
+                <span class="value mono" id="genConnection"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart grid -->
+    <div class="chart-grid" id="chartGrid">
+        <div class="chart-panel">
+            <h3>Estimated Spot Revenue</h3>
+            <div id="chartRevenue"><div class="placeholder">Data available after Phase 2</div></div>
+        </div>
+        <div class="chart-panel">
+            <h3>Capacity Factor</h3>
+            <div id="chartCapacity"><div class="placeholder">Data available after Phase 2</div></div>
+        </div>
+        <div class="chart-panel" id="panelCurtailment">
+            <h3>Curtailment Analysis</h3>
+            <div id="chartCurtailment"><div class="placeholder">Data available after Phase 3</div></div>
+        </div>
+        <div class="chart-panel">
+            <h3>MLF Trajectory</h3>
+            <div id="chartMLF"><div class="placeholder">Data available after Phase 3</div></div>
+        </div>
+        <div class="chart-panel">
+            <h3>Price Capture</h3>
+            <div id="chartPriceCapture"><div class="placeholder">Data available after Phase 4</div></div>
+        </div>
+        <div class="chart-panel">
+            <h3>Spot Price Exposure</h3>
+            <div id="chartPriceDistribution"><div class="placeholder">Data available after Phase 4</div></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ─── State ─────────────────────────────────────────────────────────────
+let generators = [];
+let activeIndex = -1;
+
+const PLOTLY_LAYOUT_BASE = {
+    paper_bgcolor: '#1a1d27',
+    plot_bgcolor: '#1a1d27',
+    font: { color: '#e1e4eb', size: 12 },
+    margin: { t: 10, r: 20, b: 40, l: 60 },
+    xaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140' },
+    yaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140' },
+};
+
+const PLOTLY_CONFIG = { responsive: true, displayModeBar: false };
+
+// ─── Init ──────────────────────────────────────────────────────────────
+async function init() {
+    try {
+        const resp = await fetch('data/index.json');
+        generators = await resp.json();
+        updateStats();
+        populateFilters();
+        handleHash();
+    } catch (e) {
+        document.getElementById('statsBar').innerHTML =
+            '<span style="color:var(--red)">Failed to load generator index. Run the pipeline first.</span>';
+    }
+}
+
+function updateStats() {
+    const regions = new Set(generators.map(g => g.region));
+    const fuels = new Set(generators.map(g => g.fuel_category));
+    document.getElementById('statsBar').innerHTML =
+        `<span><strong>${generators.length}</strong> generators</span>` +
+        `<span><strong>${regions.size}</strong> regions</span>` +
+        `<span><strong>${fuels.size}</strong> fuel types</span>`;
+}
+
+function populateFilters() {
+    const regionSelect = document.getElementById('filterRegion');
+    const fuelSelect = document.getElementById('filterFuel');
+
+    const regions = [...new Set(generators.map(g => g.region))].sort();
+    regions.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r;
+        opt.textContent = r;
+        regionSelect.appendChild(opt);
+    });
+
+    const fuels = [...new Set(generators.map(g => g.fuel_category))].sort();
+    fuels.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        fuelSelect.appendChild(opt);
+    });
+}
+
+// ─── Search ────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('searchInput');
+const searchDropdown = document.getElementById('searchDropdown');
+
+function getFilteredGenerators(query) {
+    const regionFilter = document.getElementById('filterRegion').value;
+    const fuelFilter = document.getElementById('filterFuel').value;
+    const q = query.toLowerCase().trim();
+
+    return generators.filter(g => {
+        if (regionFilter && g.region !== regionFilter) return false;
+        if (fuelFilter && g.fuel_category !== fuelFilter) return false;
+        if (!q) return true;
+        return g.station_name.toLowerCase().includes(q) ||
+               g.duid.toLowerCase().includes(q);
+    });
+}
+
+function renderDropdown(results) {
+    searchDropdown.innerHTML = '';
+    activeIndex = -1;
+
+    if (results.length === 0) {
+        searchDropdown.innerHTML = '<div class="search-item"><span class="name" style="color:var(--text-dim)">No generators found</span></div>';
+        searchDropdown.classList.add('visible');
+        return;
+    }
+
+    // Show max 50 results
+    const shown = results.slice(0, 50);
+    shown.forEach((g, i) => {
+        const item = document.createElement('div');
+        item.className = 'search-item';
+        item.dataset.index = i;
+        item.innerHTML = `
+            <span class="name">${highlightMatch(g.station_name, searchInput.value)}</span>
+            <span class="duid">${g.duid}</span>
+            <span class="badge badge-region">${g.region}</span>
+            <span class="badge badge-fuel" data-fuel="${g.fuel_category}">${g.fuel_category}</span>
+            ${g.capacity_mw ? `<span style="font-size:12px;color:var(--text-dim)">${g.capacity_mw} MW</span>` : ''}
+        `;
+        item.addEventListener('click', () => selectGenerator(g.duid));
+        searchDropdown.appendChild(item);
+    });
+
+    if (results.length > 50) {
+        const more = document.createElement('div');
+        more.className = 'search-item';
+        more.innerHTML = `<span class="name" style="color:var(--text-dim)">${results.length - 50} more results...</span>`;
+        searchDropdown.appendChild(more);
+    }
+
+    searchDropdown.classList.add('visible');
+}
+
+function highlightMatch(text, query) {
+    if (!query.trim()) return text;
+    const re = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return text.replace(re, '<strong style="color:var(--accent)">$1</strong>');
+}
+
+searchInput.addEventListener('input', () => {
+    const results = getFilteredGenerators(searchInput.value);
+    renderDropdown(results);
+});
+
+searchInput.addEventListener('focus', () => {
+    if (searchInput.value || generators.length <= 50) {
+        const results = getFilteredGenerators(searchInput.value);
+        renderDropdown(results);
+    }
+});
+
+searchInput.addEventListener('keydown', (e) => {
+    const items = searchDropdown.querySelectorAll('.search-item[data-index]');
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIndex = Math.min(activeIndex + 1, items.length - 1);
+        updateActiveItem(items);
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIndex = Math.max(activeIndex - 1, 0);
+        updateActiveItem(items);
+    } else if (e.key === 'Enter' && activeIndex >= 0) {
+        e.preventDefault();
+        const results = getFilteredGenerators(searchInput.value);
+        if (results[activeIndex]) selectGenerator(results[activeIndex].duid);
+    } else if (e.key === 'Escape') {
+        searchDropdown.classList.remove('visible');
+    }
+});
+
+function updateActiveItem(items) {
+    items.forEach((item, i) => {
+        item.classList.toggle('active', i === activeIndex);
+        if (i === activeIndex) item.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.search-container')) {
+        searchDropdown.classList.remove('visible');
+    }
+});
+
+// Filter change triggers search refresh
+document.getElementById('filterRegion').addEventListener('change', () => {
+    const results = getFilteredGenerators(searchInput.value);
+    renderDropdown(results);
+});
+document.getElementById('filterFuel').addEventListener('change', () => {
+    const results = getFilteredGenerators(searchInput.value);
+    renderDropdown(results);
+});
+
+// ─── Generator Selection ───────────────────────────────────────────────
+async function selectGenerator(duid) {
+    searchDropdown.classList.remove('visible');
+    window.location.hash = duid;
+
+    const gen = generators.find(g => g.duid === duid);
+    if (!gen) return;
+
+    searchInput.value = gen.station_name;
+
+    // Show identity card
+    document.getElementById('welcomeState').style.display = 'none';
+    document.getElementById('identityCard').classList.add('visible');
+    document.getElementById('chartGrid').classList.add('visible');
+
+    document.getElementById('genName').innerHTML = `
+        ${gen.station_name}
+        <span class="badge badge-fuel" data-fuel="${gen.fuel_category}">${gen.fuel_category}</span>
+    `;
+    document.getElementById('genDUID').textContent = gen.duid;
+    document.getElementById('genRegion').textContent = gen.region;
+    document.getElementById('genFuel').textContent = gen.fuel_category;
+    document.getElementById('genTech').textContent = gen.technology;
+    document.getElementById('genCapacity').textContent = gen.capacity_mw ? `${gen.capacity_mw} MW` : 'N/A';
+    document.getElementById('genConnection').textContent = gen.connection_point;
+
+    // Hide curtailment for non-solar/wind
+    const curtPanel = document.getElementById('panelCurtailment');
+    const isSolarWind = gen.fuel_category === 'Solar' || gen.fuel_category === 'Wind';
+    curtPanel.style.display = isSolarWind ? 'block' : 'none';
+
+    // Load detailed data
+    try {
+        const fileKey = gen.file || duid;
+        const resp = await fetch(`data/generators/${fileKey}.json`);
+        const data = await resp.json();
+        renderCharts(data);
+    } catch (e) {
+        console.log(`No detailed data for ${duid} yet`);
+    }
+}
+
+// ─── Charts ────────────────────────────────────────────────────────────
+function renderCharts(data) {
+    const catXaxis = { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' };
+
+    // Revenue chart
+    if (data.monthly && data.monthly.revenue_aud) {
+        Plotly.newPlot('chartRevenue', [{
+            x: data.monthly.months,
+            y: data.monthly.revenue_aud,
+            type: 'bar',
+            marker: { color: '#4a9eff' },
+            hovertemplate: '%{x}<br>$%{y:,.0f}<extra></extra>',
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: catXaxis,
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'AUD', tickformat: '$,.0s' },
+        }, PLOTLY_CONFIG);
+    }
+
+    // Capacity factor chart
+    if (data.monthly && data.monthly.capacity_factor) {
+        Plotly.newPlot('chartCapacity', [{
+            x: data.monthly.months,
+            y: data.monthly.capacity_factor,
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#22c55e', width: 2 },
+            marker: { size: 4 },
+            hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: catXaxis,
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Capacity Factor', range: [0, 1], tickformat: '.0%' },
+            shapes: [{
+                type: 'line', y0: 0.25, y1: 0.25, x0: 0, x1: 1, xref: 'paper',
+                line: { color: '#475569', width: 1, dash: 'dash' },
+            }],
+        }, PLOTLY_CONFIG);
+    }
+
+    // Curtailment chart
+    if (data.monthly && data.monthly.curtailment_pct) {
+        Plotly.newPlot('chartCurtailment', [{
+            x: data.monthly.months,
+            y: data.monthly.curtailment_pct,
+            type: 'scatter',
+            fill: 'tozeroy',
+            line: { color: '#f97316', width: 2 },
+            fillcolor: 'rgba(249, 115, 22, 0.2)',
+            hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: catXaxis,
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Curtailment %', tickformat: '.0%' },
+        }, PLOTLY_CONFIG);
+    }
+
+    // MLF trajectory
+    if (data.mlf && data.mlf.values) {
+        Plotly.newPlot('chartMLF', [{
+            x: data.mlf.years,
+            y: data.mlf.values,
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#a78bfa', width: 2 },
+            marker: { size: 6 },
+            hovertemplate: '%{x}<br>MLF: %{y:.4f}<extra></extra>',
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'MLF' },
+            shapes: [{
+                type: 'line', y0: 1.0, y1: 1.0, x0: 0, x1: 1, xref: 'paper',
+                line: { color: '#475569', width: 1, dash: 'dash' },
+            }],
+        }, PLOTLY_CONFIG);
+    }
+
+    // Price capture
+    if (data.monthly && data.monthly.captured_price) {
+        Plotly.newPlot('chartPriceCapture', [
+            {
+                x: data.monthly.months,
+                y: data.monthly.avg_rrp,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Regional Avg RRP',
+                line: { color: '#64748b', width: 1.5 },
+                hovertemplate: '%{x}<br>$%{y:.2f}/MWh<extra>Avg RRP</extra>',
+            },
+            {
+                x: data.monthly.months,
+                y: data.monthly.captured_price,
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'Captured Price',
+                line: { color: '#22c55e', width: 2 },
+                marker: { size: 4 },
+                hovertemplate: '%{x}<br>$%{y:.2f}/MWh<extra>Captured</extra>',
+            },
+        ], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: catXaxis,
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: '$/MWh' },
+            showlegend: true,
+            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 11 } },
+        }, PLOTLY_CONFIG);
+    }
+
+    // Price distribution
+    if (data.price_distribution) {
+        Plotly.newPlot('chartPriceDistribution', [{
+            x: data.price_distribution.generation_share.map(v => v * 100),
+            y: data.price_distribution.bins,
+            type: 'bar',
+            orientation: 'h',
+            marker: {
+                color: ['#ef4444', '#22c55e', '#4a9eff', '#eab308', '#f97316', '#a78bfa'],
+            },
+            hovertemplate: '%{y}: %{x:.1f}%<extra></extra>',
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: '% of Generation', ticksuffix: '%' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: '$/MWh Bucket', type: 'category' },
+        }, PLOTLY_CONFIG);
+    }
+}
+
+// ─── Hash Routing ──────────────────────────────────────────────────────
+function handleHash() {
+    const hash = window.location.hash.replace('#', '');
+    if (hash) {
+        const gen = generators.find(g => g.duid === hash);
+        if (gen) selectGenerator(hash);
+    }
+}
+
+window.addEventListener('hashchange', handleHash);
+
+// ─── Start ─────────────────────────────────────────────────────────────
+init();
+</script>
+
+</body>
+</html>

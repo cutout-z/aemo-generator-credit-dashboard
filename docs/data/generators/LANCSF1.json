@@ -1,0 +1,1 @@
+{"duid":"LANCSF1","station_name":"Lancaster Solar Farm","region":"VIC1","fuel_category":"Solar","capacity_mw":94.0,"technology":"Renewable","connection_point":"","monthly":{"months":["2026-02"],"generation_mwh":[0.0],"revenue_aud":[0.0],"capacity_factor":[0.0],"curtailment_pct":[NaN],"captured_price":[NaN],"avg_rrp":[43.64],"price_capture_ratio":[NaN]}}
