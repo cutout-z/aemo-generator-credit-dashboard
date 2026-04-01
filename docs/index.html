@@ -646,7 +646,7 @@
             </div>
             <div id="chartMLF"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel">
+        <div class="chart-panel full-width">
             <div class="chart-title-wrap">
                 <h3>Price Capture</h3>
                 <div class="chart-tooltip">
@@ -657,7 +657,7 @@
             </div>
             <div id="chartPriceCapture"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel">
+        <div class="chart-panel full-width">
             <div class="chart-title-wrap">
                 <h3>Spot Price Exposure</h3>
                 <div class="chart-tooltip">
@@ -1383,14 +1383,14 @@ function renderCharts(data) {
             yaxis: {
                 ...PLOTLY_LAYOUT_BASE.yaxis,
                 title: 'Daily Generation (MWh)',
-                domain: [0.35, 1],
+                domain: [0.45, 1],
                 anchor: 'x',
             },
             // Bottom subplot: capacity factor
             yaxis2: {
                 ...PLOTLY_LAYOUT_BASE.yaxis,
                 title: { text: 'Capacity Factor (%)', font: { color: '#a78bfa' } },
-                domain: [0, 0.28],
+                domain: [0, 0.38],
                 anchor: 'x2',
                 range: [0, Math.min(100, Math.max(...cfValues) + 10)],
                 ticksuffix: '%',
@@ -1423,7 +1423,7 @@ function renderCharts(data) {
                 },
             ],
             margin: { ...PLOTLY_LAYOUT_BASE.margin, r: 70, t: 10 },
-            height: 500,
+            height: 600,
             showlegend: true,
             legend: { x: 0, y: 1.06, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
