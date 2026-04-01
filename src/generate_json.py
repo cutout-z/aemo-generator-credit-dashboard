@@ -46,7 +46,7 @@ def generate_index(generators: pd.DataFrame, output_dir: str | None = None) -> P
     # Sort by station name for consistent output
     entries.sort(key=lambda e: (e["station_name"], e["duid"]))
 
-    index_path.write_text(json.dumps(entries, indent=None, separators=(",", ":")))
+    index_path.write_text(json.dumps(_sanitize(entries), indent=None, separators=(",", ":")))
     logger.info(f"Wrote index.json with {len(entries)} generators ({index_path.stat().st_size / 1024:.1f} KB)")
     return index_path
 
@@ -363,7 +363,7 @@ def _generate_station_files(
         existing = [e for e in existing if e.get("type") != "station"]
         existing.extend(station_entries)
         existing.sort(key=lambda e: (e["station_name"], e.get("duid", "")))
-        index_path.write_text(json.dumps(existing, indent=None, separators=(",", ":")))
+        index_path.write_text(json.dumps(_sanitize(existing), indent=None, separators=(",", ":")))
         logger.info(f"Added {len(station_entries)} station entries to index.json")
 
     return count
