@@ -101,6 +101,7 @@ def aggregate_month(
 
         # Curtailment (solar/wind only)
         curtailment = None
+        econ_curtailment = None
         if fuel in config.CURTAILMENT_FUEL_TYPES:
             avail_valid = group.dropna(subset=["AVAILABILITY"])
             if not avail_valid.empty:
@@ -108,6 +109,19 @@ def aggregate_month(
                 total_avail = avail_valid["AVAILABILITY"].clip(lower=0).sum()
                 if total_avail > 0:
                     curtailment = max(0.0, 1.0 - total_actual / total_avail)
+
+            # Economic curtailment: generation forgone during negative price periods
+            # Intervals where AVAILABILITY > 0 AND RRP < 0 AND SCADA is low
+            avail_price = group.dropna(subset=["AVAILABILITY", "RRP"])
+            if not avail_price.empty:
+                neg_price = avail_price[avail_price["RRP"] < 0]
+                if not neg_price.empty:
+                    avail_during_neg = neg_price["AVAILABILITY"].clip(lower=0).sum()
+                    actual_during_neg = neg_price["SCADAVALUE"].clip(lower=0).sum()
+                    total_avail_all = avail_price["AVAILABILITY"].clip(lower=0).sum()
+                    if total_avail_all > 0 and avail_during_neg > 0:
+                        forgone = max(0.0, avail_during_neg - actual_during_neg)
+                        econ_curtailment = forgone / total_avail_all
 
         # Captured price (volume-weighted average RRP)
         captured = None
@@ -132,6 +146,7 @@ def aggregate_month(
             "revenue_aud": round(revenue, 0),
             "capacity_factor": round(cap_factor, 4) if cap_factor is not None else None,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
+            "econ_curtailment_pct": round(econ_curtailment, 4) if econ_curtailment is not None else None,
             "captured_price": round(captured, 2) if captured is not None else None,
             "avg_rrp": round(avg_rrp, 2) if avg_rrp is not None else None,
             "price_capture_ratio": round(pcr, 4) if pcr is not None else None,
@@ -191,3 +206,50 @@ def build_mlf_lookup(
     # Fall back to latest available FY per DUID
     latest = mlf_history.sort_values("fy_start_year").drop_duplicates("DUID", keep="last")
     return dict(zip(latest["DUID"], latest["mlf"]))
+
+
+FCAS_COLS = [
+    "RAISE6SECRRP", "RAISE60SECRRP", "RAISE5MINRRP", "RAISEREGRRP",
+    "LOWER6SECRRP", "LOWER60SECRRP", "LOWER5MINRRP", "LOWERREGRRP",
+]
+
+FCAS_LABELS = {
+    "RAISE6SECRRP": "Raise 6s",
+    "RAISE60SECRRP": "Raise 60s",
+    "RAISE5MINRRP": "Raise 5min",
+    "RAISEREGRRP": "Raise Reg",
+    "LOWER6SECRRP": "Lower 6s",
+    "LOWER60SECRRP": "Lower 60s",
+    "LOWER5MINRRP": "Lower 5min",
+    "LOWERREGRRP": "Lower Reg",
+}
+
+
+def aggregate_fcas_prices(
+    prices: pd.DataFrame,
+    year: int,
+    month: int,
+) -> dict[str, dict[str, float]]:
+    """Compute monthly average FCAS prices per region.
+
+    Returns dict mapping REGIONID -> {service_label: avg_price}.
+    """
+    if prices is None or prices.empty:
+        return {}
+
+    available_cols = [c for c in FCAS_COLS if c in prices.columns]
+    if not available_cols:
+        return {}
+
+    month_label = f"{year}-{month:02d}"
+    result = {}
+    for region, group in prices.groupby("REGIONID"):
+        region_fcas = {}
+        for col in available_cols:
+            vals = pd.to_numeric(group[col], errors="coerce").dropna()
+            if not vals.empty:
+                region_fcas[FCAS_LABELS[col]] = round(float(vals.mean()), 2)
+        if region_fcas:
+            result[region] = region_fcas
+
+    return result

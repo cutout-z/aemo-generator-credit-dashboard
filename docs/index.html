@@ -270,6 +270,7 @@
             border-radius: 12px;
             padding: 16px;
             min-height: 320px;
+            position: relative;
         }
 
         .chart-panel h3 {
@@ -288,6 +289,53 @@
             font-size: 14px;
             font-style: italic;
         }
+
+        /* Fullscreen expand button */
+        .chart-expand-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-dim);
+            width: 28px;
+            height: 28px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            transition: all 0.15s;
+            z-index: 10;
+            opacity: 0;
+        }
+
+        .chart-panel:hover .chart-expand-btn { opacity: 1; }
+        .chart-expand-btn:hover { border-color: var(--accent); color: var(--text); }
+
+        .chart-panel.fullscreen {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 1000;
+            border-radius: 0;
+            margin: 0;
+            min-height: 100vh;
+            padding: 24px;
+            overflow: auto;
+        }
+
+        .chart-panel.fullscreen .chart-expand-btn { opacity: 1; }
+
+        .fullscreen-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 999;
+        }
+
+        .fullscreen-overlay.visible { display: block; }
 
         /* Time controls */
         .time-controls {
@@ -321,10 +369,62 @@
         .time-btn.active { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
 
         /* Chart title tooltips */
+        .chart-title-wrap {
+            position: relative;
+            display: inline-block;
+        }
+
         .chart-panel h3 {
             cursor: help;
             border-bottom: 1px dotted var(--text-dim);
             display: inline-block;
+        }
+
+        .chart-tooltip {
+            display: none;
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            z-index: 200;
+            background: #242836;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            width: 340px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            font-size: 13px;
+            font-weight: 400;
+            line-height: 1.5;
+            color: var(--text);
+        }
+
+        .chart-tooltip .tooltip-title {
+            font-weight: 600;
+            color: var(--accent);
+            margin-bottom: 6px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .chart-tooltip .tooltip-formula {
+            font-family: monospace;
+            font-size: 12px;
+            background: var(--bg);
+            border-radius: 4px;
+            padding: 6px 10px;
+            margin: 8px 0;
+            color: var(--green);
+        }
+
+        .chart-tooltip .tooltip-caveat {
+            font-size: 12px;
+            color: var(--yellow);
+            margin-top: 8px;
+        }
+
+        .chart-title-wrap:hover .chart-tooltip {
+            display: block;
         }
 
         /* Responsive */
@@ -405,37 +505,121 @@
         <button class="time-btn" data-months="6">6M</button>
         <button class="time-btn" data-months="12">12M</button>
         <button class="time-btn" data-months="36">3Y</button>
+        <button class="time-btn" data-months="60">5Y</button>
         <button class="time-btn active" data-months="0">All</button>
     </div>
 
     <!-- Chart grid -->
     <div class="chart-grid" id="chartGrid">
         <div class="chart-panel">
-            <h3 title="Monthly spot revenue = sum of (MWh per 5-min interval x regional RRP x MLF). Does not include PPA, FCAS, or LGC income.">Estimated Spot Revenue</h3>
+            <div class="chart-title-wrap">
+                <h3>Implied 100% Merchant Revenue</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">Revenue = Σ (MWh_5min × RRP × MLF)</div>
+                    Assumes the generator sells 100% of output at the spot price with no PPA or hedge in place. Useful as a stress-test floor for revenue.
+                    <div class="tooltip-caveat">Does not include PPA income, FCAS, or LGC revenue.</div>
+                </div>
+            </div>
             <div id="chartRevenue"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel">
-            <h3 title="Capacity factor = actual monthly MWh / (nameplate MW x hours in month). Dashed line at 25% for reference.">Capacity Factor</h3>
+            <div class="chart-title-wrap">
+                <h3>Monthly Generation</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">MWh = Σ (SCADAVALUE / 12)</div>
+                    Total energy generated each month from 5-minute SCADA data. Each 5-minute interval is divided by 12 to convert MW to MWh.
+                    <div class="tooltip-caveat">For LGC-eligible renewables (solar, wind, hydro), 1 MWh ≈ 1 LGC created. Actual LGC volumes may differ due to station use and accreditation periods.</div>
+                </div>
+            </div>
+            <div id="chartGeneration"><div class="placeholder">No data yet</div></div>
+        </div>
+        <div class="chart-panel">
+            <div class="chart-title-wrap">
+                <h3>Capacity Factor</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">CF = MWh_actual / (MW_nameplate × hours_in_month)</div>
+                    Ratio of actual output to theoretical maximum. Dashed line at 25% as a reference benchmark.
+                    <div class="tooltip-caveat">Low CF may reflect weather, curtailment, outages, or commissioning ramp-up.</div>
+                </div>
+            </div>
             <div id="chartCapacity"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel" id="panelCurtailment">
-            <h3 title="Curtailment % = 1 - (actual SCADA output / unconstrained forecast UIGF). Only meaningful for solar and wind. Higher = more energy lost to grid constraints.">Curtailment Analysis</h3>
+            <div class="chart-title-wrap">
+                <h3>Grid Curtailment Analysis</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">Curtailment % = 1 − (SCADA / UIGF)</div>
+                    Compares actual output to AEMO's unconstrained intermittent generation forecast (UIGF) from DISPATCHLOAD.
+                    <div class="tooltip-caveat">Caveat: does not distinguish grid curtailment from mechanical downtime. INTERMITTENT_GEN_SCADA quality flags (available from Aug 2024) can separate the two but are not yet incorporated.</div>
+                </div>
+            </div>
             <div id="chartCurtailment"><div class="placeholder">No data yet</div></div>
         </div>
+        <div class="chart-panel" id="panelEconCurtailment">
+            <div class="chart-title-wrap">
+                <h3>Estimated Economic Curtailment</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">Econ curtailment = forgone generation during RRP &lt; $0 / total UIGF</div>
+                    Estimates energy not generated during negative spot price periods — a proxy for voluntary economic curtailment where generators bid off to avoid paying to export.
+                    <div class="tooltip-caveat">Proxy only: cannot distinguish voluntary bid-off from AEMO dispatch instructions without bid data.</div>
+                </div>
+            </div>
+            <div id="chartEconCurtailment"><div class="placeholder">No data yet</div></div>
+        </div>
         <div class="chart-panel">
-            <h3 title="Annual Marginal Loss Factor from AEMO DUDETAILSUMMARY. MLF < 1.0 means the generator loses revenue to transmission losses. Dashed line at 1.0 (no loss).">MLF Trajectory (Annual)</h3>
+            <div class="chart-title-wrap">
+                <h3>MLF Trajectory (Annual)</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">MLF from AEMO DUDETAILSUMMARY per financial year</div>
+                    Marginal Loss Factor reflects transmission losses from the generator's connection point to the regional reference node. MLF &lt; 1.0 means the generator's effective revenue is reduced.
+                    <div class="tooltip-caveat">Dashed line at 1.0 = no transmission loss. Draft values are indicative and may change before finalisation.</div>
+                </div>
+            </div>
             <div id="chartMLF"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel">
-            <h3 title="Captured price = volume-weighted average RRP at times the generator dispatches. Regional Avg = simple time-weighted average. Ratio < 1.0 means the generator captures below-average prices (common for solar).">Price Capture</h3>
+            <div class="chart-title-wrap">
+                <h3>Price Capture</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">Captured = Σ(MWh × RRP) / Σ(MWh)</div>
+                    Volume-weighted average price received vs. simple time-weighted regional average. Ratio &lt; 1.0 means the generator captures below-average prices (common for solar due to price cannibalisation).
+                </div>
+            </div>
             <div id="chartPriceCapture"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel">
-            <h3 title="Distribution of generation volume across spot price buckets ($/MWh). Shows what proportion of energy was dispatched during negative, low, moderate, or high price periods.">Spot Price Exposure</h3>
+            <div class="chart-title-wrap">
+                <h3>Spot Price Exposure</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    Distribution of generation volume across spot price buckets ($/MWh). Shows what proportion of energy was dispatched during negative, low, moderate, or high price periods.
+                    <div class="tooltip-caveat">High exposure to &lt;$0 indicates revenue erosion risk without a PPA floor.</div>
+                </div>
+            </div>
             <div id="chartPriceDistribution"><div class="placeholder">No data yet</div></div>
+        </div>
+        <div class="chart-panel" id="panelFCAS">
+            <div class="chart-title-wrap">
+                <h3>Regional FCAS Prices</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Context</div>
+                    Monthly average FCAS (Frequency Control Ancillary Services) prices for this generator's NEM region. Shows the 8 FCAS markets: Raise/Lower × 6s/60s/5min/Regulation.
+                    <div class="tooltip-caveat">Regional averages only — actual per-generator FCAS revenue requires participant-only enablement data.</div>
+                </div>
+            </div>
+            <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
         </div>
     </div>
 </div>
+
+<div class="fullscreen-overlay" id="fullscreenOverlay"></div>
 
 <script>
 // ─── State ─────────────────────────────────────────────────────────────
@@ -531,9 +715,11 @@ function renderDropdown(results) {
         const item = document.createElement('div');
         item.className = 'search-item';
         item.dataset.index = i;
+        const isStation = g.type === 'station';
         item.innerHTML = `
+            ${isStation ? '<span class="badge" style="background:#0d9488;color:#fff;font-size:10px">STATION</span>' : ''}
             <span class="name">${highlightMatch(g.station_name, searchInput.value)}</span>
-            <span class="duid">${g.duid}</span>
+            <span class="duid">${isStation ? g.duid_count + ' DUIDs' : g.duid}</span>
             <span class="badge badge-region">${g.region}</span>
             <span class="badge badge-fuel" data-fuel="${g.fuel_category}">${g.fuel_category}</span>
             ${g.capacity_mw ? `<span style="font-size:12px;color:var(--text-dim)">${g.capacity_mw} MW</span>` : ''}
@@ -628,21 +814,23 @@ async function selectGenerator(duid) {
     document.getElementById('timeControls').classList.add('visible');
     document.getElementById('chartGrid').classList.add('visible');
 
+    const isStation = gen.type === 'station';
     document.getElementById('genName').innerHTML = `
         ${gen.station_name}
         <span class="badge badge-fuel" data-fuel="${gen.fuel_category}">${gen.fuel_category}</span>
+        ${isStation ? '<span class="badge" style="background:#0d9488;color:#fff">STATION</span>' : ''}
     `;
-    document.getElementById('genDUID').textContent = gen.duid;
+    document.getElementById('genDUID').textContent = isStation ? `${gen.duid_count} DUIDs` : gen.duid;
     document.getElementById('genRegion').textContent = gen.region;
     document.getElementById('genFuel').textContent = gen.fuel_category;
     document.getElementById('genTech').textContent = gen.technology;
     document.getElementById('genCapacity').textContent = gen.capacity_mw ? `${gen.capacity_mw} MW` : 'N/A';
     document.getElementById('genConnection').textContent = gen.connection_point;
 
-    // Hide curtailment for non-solar/wind
-    const curtPanel = document.getElementById('panelCurtailment');
+    // Hide curtailment panels for non-solar/wind
     const isSolarWind = gen.fuel_category === 'Solar' || gen.fuel_category === 'Wind';
-    curtPanel.style.display = isSolarWind ? 'block' : 'none';
+    document.getElementById('panelCurtailment').style.display = isSolarWind ? 'block' : 'none';
+    document.getElementById('panelEconCurtailment').style.display = isSolarWind ? 'block' : 'none';
 
     // Load detailed data
     try {
@@ -699,6 +887,24 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
+    // Generation chart (MWh) — also shows LGC annotation for eligible generators
+    if (monthly && monthly.generation_mwh) {
+        const genYTitle = data.lgc_eligible ? 'MWh (≈ LGCs)' : 'MWh';
+        Plotly.newPlot('chartGeneration', [{
+            x: monthly.months,
+            y: monthly.generation_mwh,
+            type: 'bar',
+            marker: { color: '#22c55e' },
+            hovertemplate: data.lgc_eligible
+                ? '%{x}<br>%{y:,.0f} MWh (≈ %{y:,.0f} LGCs)<extra></extra>'
+                : '%{x}<br>%{y:,.0f} MWh<extra></extra>',
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: catXaxis,
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: genYTitle, tickformat: ',.0s' },
+        }, PLOTLY_CONFIG);
+    }
+
     // Capacity factor chart
     if (monthly && monthly.capacity_factor) {
         Plotly.newPlot('chartCapacity', [{
@@ -737,20 +943,81 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
-    // MLF trajectory (always shows all years — annual, not monthly)
-    if (data.mlf && data.mlf.values) {
-        Plotly.newPlot('chartMLF', [{
-            x: data.mlf.years,
-            y: data.mlf.values,
+    // Economic curtailment chart
+    const econPanel = document.getElementById('panelEconCurtailment');
+    if (monthly && monthly.econ_curtailment_pct) {
+        econPanel.style.display = 'block';
+        Plotly.newPlot('chartEconCurtailment', [{
+            x: monthly.months,
+            y: monthly.econ_curtailment_pct,
             type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: '#a78bfa', width: 2 },
-            marker: { size: 6 },
-            hovertemplate: '%{x}<br>MLF: %{y:.4f}<extra></extra>',
+            fill: 'tozeroy',
+            line: { color: '#ef4444', width: 2 },
+            fillcolor: 'rgba(239, 68, 68, 0.2)',
+            hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
         }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: catXaxis,
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Economic Curtailment %', tickformat: '.0%' },
+        }, PLOTLY_CONFIG);
+    } else if (econPanel) {
+        econPanel.style.display = 'none';
+    }
+
+    // MLF trajectory (always shows all years — annual, not monthly)
+    // Handles both single-DUID (data.mlf) and station view (data.mlf_by_duid)
+    const mlfTraces = [];
+    const duidColors = ['#a78bfa', '#4a9eff', '#22c55e', '#f97316', '#ef4444', '#eab308', '#ec4899', '#06b6d4'];
+
+    if (data.mlf_by_duid) {
+        // Station view: one trace per DUID
+        const duids = Object.keys(data.mlf_by_duid);
+        duids.forEach((duid, i) => {
+            const m = data.mlf_by_duid[duid];
+            const color = duidColors[i % duidColors.length];
+            mlfTraces.push({
+                x: m.years, y: m.values,
+                type: 'scatter', mode: 'lines+markers',
+                name: duid,
+                line: { color, width: 2 },
+                marker: { size: 5 },
+                hovertemplate: `%{x}<br>${duid}: %{y:.4f}<extra></extra>`,
+            });
+            if (m.draft_year && m.draft_value != null) {
+                mlfTraces.push({
+                    x: [m.draft_year + ' (Draft)'], y: [m.draft_value],
+                    type: 'scatter', mode: 'markers',
+                    name: duid + ' Draft', showlegend: false,
+                    marker: { size: 9, color: 'rgba(255,255,255,0.2)', line: { color, width: 2 }, symbol: 'diamond' },
+                    hovertemplate: `%{x}<br>${duid}: %{y:.4f} (Draft)<extra></extra>`,
+                });
+            }
+        });
+    } else if (data.mlf && data.mlf.values) {
+        // Single DUID view
+        mlfTraces.push({
+            x: data.mlf.years, y: data.mlf.values,
+            type: 'scatter', mode: 'lines+markers', name: 'Final',
+            line: { color: '#a78bfa', width: 2 }, marker: { size: 6 },
+            hovertemplate: '%{x}<br>MLF: %{y:.4f} (Final)<extra></extra>',
+        });
+        if (data.mlf.draft_year && data.mlf.draft_value != null) {
+            mlfTraces.push({
+                x: [data.mlf.draft_year + ' (Draft)'], y: [data.mlf.draft_value],
+                type: 'scatter', mode: 'markers', name: 'Draft',
+                marker: { size: 10, color: 'rgba(167,139,250,0.3)', line: { color: '#a78bfa', width: 2 }, symbol: 'diamond' },
+                hovertemplate: '%{x}<br>MLF: %{y:.4f} (Draft)<extra></extra>',
+            });
+        }
+    }
+
+    if (mlfTraces.length > 0) {
+        Plotly.newPlot('chartMLF', mlfTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category', title: 'Financial Year' },
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'MLF' },
+            showlegend: mlfTraces.length > 1,
+            legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
             shapes: [{
                 type: 'line', y0: 1.0, y1: 1.0, x0: 0, x1: 1, xref: 'paper',
                 line: { color: '#475569', width: 1, dash: 'dash' },
@@ -811,6 +1078,36 @@ function renderCharts(data) {
             margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 70 },
         }, PLOTLY_CONFIG);
     }
+
+    // FCAS regional price context
+    const fcasPanel = document.getElementById('panelFCAS');
+    if (data.fcas && data.fcas.services) {
+        fcasPanel.style.display = 'block';
+        const fcasColors = [
+            '#ef4444', '#f97316', '#eab308', '#22c55e',
+            '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
+        ];
+        const services = Object.keys(data.fcas.services);
+        const fcasTraces = services.map((service, i) => ({
+            x: data.fcas.months,
+            y: data.fcas.services[service],
+            type: 'scatter',
+            mode: 'lines',
+            name: service,
+            line: { color: fcasColors[i % fcasColors.length], width: 1.5 },
+            hovertemplate: '%{x}<br>' + service + ': $%{y:.2f}/MWh<extra></extra>',
+        }));
+        Plotly.newPlot('chartFCAS', fcasTraces, {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: '$/MWh' },
+            showlegend: true,
+            legend: { x: 0, y: 1.25, orientation: 'h', font: { size: 10 }, traceorder: 'normal' },
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40 },
+        }, PLOTLY_CONFIG);
+    } else if (fcasPanel) {
+        fcasPanel.style.display = 'none';
+    }
 }
 
 // ─── Hash Routing ──────────────────────────────────────────────────────
@@ -823,6 +1120,62 @@ function handleHash() {
 }
 
 window.addEventListener('hashchange', handleHash);
+
+// ─── Fullscreen Chart Expansion ───────────────────────────────────────
+function initExpandButtons() {
+    document.querySelectorAll('.chart-panel').forEach(panel => {
+        const btn = document.createElement('button');
+        btn.className = 'chart-expand-btn';
+        btn.innerHTML = '⛶';
+        btn.title = 'Expand chart';
+        btn.addEventListener('click', () => toggleFullscreen(panel));
+        panel.appendChild(btn);
+    });
+
+    document.getElementById('fullscreenOverlay').addEventListener('click', closeFullscreen);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeFullscreen();
+    });
+}
+
+function toggleFullscreen(panel) {
+    const overlay = document.getElementById('fullscreenOverlay');
+    if (panel.classList.contains('fullscreen')) {
+        panel.classList.remove('fullscreen');
+        overlay.classList.remove('visible');
+        panel.querySelector('.chart-expand-btn').innerHTML = '⛶';
+        panel.querySelector('.chart-expand-btn').title = 'Expand chart';
+    } else {
+        // Close any other fullscreen panel first
+        document.querySelectorAll('.chart-panel.fullscreen').forEach(p => {
+            p.classList.remove('fullscreen');
+        });
+        panel.classList.add('fullscreen');
+        overlay.classList.add('visible');
+        panel.querySelector('.chart-expand-btn').innerHTML = '✕';
+        panel.querySelector('.chart-expand-btn').title = 'Close';
+    }
+    // Trigger Plotly resize for the chart inside
+    const plotDiv = panel.querySelector('[id^="chart"]');
+    if (plotDiv && plotDiv.data) {
+        setTimeout(() => Plotly.Plots.resize(plotDiv), 50);
+    }
+}
+
+function closeFullscreen() {
+    document.querySelectorAll('.chart-panel.fullscreen').forEach(panel => {
+        panel.classList.remove('fullscreen');
+        panel.querySelector('.chart-expand-btn').innerHTML = '⛶';
+        panel.querySelector('.chart-expand-btn').title = 'Expand chart';
+        const plotDiv = panel.querySelector('[id^="chart"]');
+        if (plotDiv && plotDiv.data) {
+            setTimeout(() => Plotly.Plots.resize(plotDiv), 50);
+        }
+    });
+    document.getElementById('fullscreenOverlay').classList.remove('visible');
+}
+
+initExpandButtons();
 
 // ─── Start ─────────────────────────────────────────────────────────────
 init();

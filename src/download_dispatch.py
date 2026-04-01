@@ -37,12 +37,16 @@ def fetch_dispatch_price_month(
         end_time = f"{year}/{month + 1:02d}/01 00:00:00"
 
     logger.info(f"Fetching DISPATCHPRICE for {year}-{month:02d}...")
+    fcas_cols = [
+        "RAISE6SECRRP", "RAISE60SECRRP", "RAISE5MINRRP", "RAISEREGRRP",
+        "LOWER6SECRRP", "LOWER60SECRRP", "LOWER5MINRRP", "LOWERREGRRP",
+    ]
     prices = dynamic_data_compiler(
         start_time=start_time,
         end_time=end_time,
         table_name="DISPATCHPRICE",
         raw_data_location=nemosis_cache,
-        select_columns=["SETTLEMENTDATE", "REGIONID", "RRP", "INTERVENTION"],
+        select_columns=["SETTLEMENTDATE", "REGIONID", "RRP", "INTERVENTION"] + fcas_cols,
         fformat="parquet",
         rebuild=rebuild,
     )
@@ -58,6 +62,9 @@ def fetch_dispatch_price_month(
 
     prices["SETTLEMENTDATE"] = pd.to_datetime(prices["SETTLEMENTDATE"])
     prices["RRP"] = pd.to_numeric(prices["RRP"], errors="coerce")
+    for col in fcas_cols:
+        if col in prices.columns:
+            prices[col] = pd.to_numeric(prices[col], errors="coerce")
     prices = prices.dropna(subset=["RRP"])
 
     # Deduplicate (NEMOSIS can return duplicates across file boundaries)

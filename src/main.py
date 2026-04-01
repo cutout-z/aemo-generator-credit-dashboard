@@ -10,8 +10,9 @@ from pathlib import Path
 import pandas as pd
 
 from . import config
-from .aggregate import aggregate_month, build_mlf_lookup
+from .aggregate import aggregate_fcas_prices, aggregate_month, build_mlf_lookup
 from .download_dispatch import fetch_dispatch_price_month
+from .download_draft_mlf import fetch_draft_mlfs, get_draft_fy
 from .download_metadata import fetch_generators
 from .download_mlf import fetch_connection_points, fetch_mlf_history
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
@@ -103,6 +104,7 @@ def main():
             existing = pd.DataFrame()
 
         new_rows = []
+        fcas_by_region_month = {}  # (region, month_label) -> {service: avg_price}
         for year, month in months:
             month_label = f"{year}-{month:02d}"
             logger.info(f"--- Processing {month_label} ---")
@@ -132,6 +134,11 @@ def main():
                 if not monthly.empty:
                     new_rows.append(monthly)
 
+                # FCAS regional prices
+                fcas_prices = aggregate_fcas_prices(prices, year, month)
+                for region, services in fcas_prices.items():
+                    fcas_by_region_month[(region, month_label)] = services
+
             except Exception as e:
                 logger.error(f"Failed to process {month_label}: {e}")
                 continue
@@ -157,10 +164,23 @@ def main():
             all_monthly.to_feather(aggregates_path)
             logger.info(f"Saved {len(all_monthly)} aggregate rows to {aggregates_path}")
 
-    # Step 4: Generate JSON output
-    logger.info("=== Step 4: Generating JSON output ===")
+    # Step 4: Draft/indicative MLFs for upcoming FY
+    logger.info("=== Step 4: Draft MLFs ===")
+    draft_mlfs = fetch_draft_mlfs(str(data_dir), force=args.full_refresh)
+    draft_fy_label = None
+    if draft_mlfs:
+        fy_start, fy_label, _ = get_draft_fy()
+        draft_fy_label = config.fy_label(fy_start)
+        logger.info(f"Loaded {len(draft_mlfs)} draft MLFs for {draft_fy_label}")
+    else:
+        logger.info("No draft MLFs available")
+
+    # Step 5: Generate JSON output
+    logger.info("=== Step 5: Generating JSON output ===")
     monthly_agg = all_monthly if not all_monthly.empty else None
-    count = generate_all(generators, monthly_agg, mlf_history)
+    count = generate_all(generators, monthly_agg, mlf_history,
+                         draft_mlfs=draft_mlfs, draft_fy_label=draft_fy_label,
+                         fcas_data=fcas_by_region_month if fcas_by_region_month else None)
     logger.info(f"Done. Wrote index + {count} generator files.")
 
 

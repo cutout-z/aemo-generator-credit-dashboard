@@ -1,1 +1,1 @@
-{"duid":"HASTING1","station_name":"Hastings Generation Site","region":"VIC1","fuel_category":"Fossil","capacity_mw":14.8,"technology":"Combustion","connection_point":"VTBT1H","mlf":{"years":["FY23-24","FY24-25","FY25-26"],"values":[0.996,0.9959,0.9964]}}
+{"duid":"HASTING1","station_name":"Hastings Generation Site","region":"VIC1","fuel_category":"Fossil","capacity_mw":14.8,"technology":"Combustion","connection_point":"VTBT1H","lgc_eligible":false,"mlf":{"years":["FY23-24","FY24-25","FY25-26"],"values":[0.996,0.9959,0.9964],"draft_year":"FY26-27","draft_value":0.9967}}

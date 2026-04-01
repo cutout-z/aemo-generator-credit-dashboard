@@ -48,6 +48,9 @@ FUEL_TYPE_MAP = {
 # Fuel types where curtailment analysis is meaningful
 CURTAILMENT_FUEL_TYPES = {"Solar", "Wind"}
 
+# Fuel types eligible for LGC creation (1 LGC ≈ 1 MWh)
+LGC_ELIGIBLE_FUEL_TYPES = {"Solar", "Wind", "Hydro", "Other Renewable"}
+
 # ─── Data Sources ───────────────────────────────────────────────────────────
 
 # NEM Registration and Exemption List
