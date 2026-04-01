@@ -253,19 +253,18 @@
             font-family: monospace;
         }
 
-        /* Chart grid */
+        /* Chart grid — flexbox for resizable widths */
         .chart-grid {
             display: none;
-            grid-template-columns: 1fr 1fr;
+            flex-wrap: wrap;
             gap: 16px;
         }
 
         .chart-grid.visible {
-            display: grid;
+            display: flex;
         }
 
-        .chart-panel[draggable="true"] { cursor: grab; }
-        .chart-panel[draggable="true"]:active { cursor: grabbing; }
+        .chart-panel[draggable="true"] .chart-title-wrap { cursor: grab; }
         .chart-panel.drag-over { border: 2px dashed var(--accent); }
         .chart-panel.dragging { opacity: 0.4; }
 
@@ -275,26 +274,67 @@
             border-radius: 12px;
             padding: 16px;
             min-height: 320px;
+            min-width: 300px;
             position: relative;
             overflow: hidden;
+            /* Default: half width minus gap */
+            flex: 1 1 calc(50% - 8px);
+            max-width: 100%;
         }
 
-        /* Resize handle */
+        .chart-panel.full-width {
+            flex: 1 1 100%;
+        }
+
+        /* Corner resize handle (bottom-right) */
         .chart-resize-handle {
             position: absolute;
             bottom: 0;
-            left: 0;
             right: 0;
-            height: 8px;
-            cursor: ns-resize;
-            background: transparent;
+            width: 16px;
+            height: 16px;
+            cursor: nwse-resize;
             z-index: 15;
-            transition: background 0.15s;
+            opacity: 0;
+            transition: opacity 0.15s;
         }
-        .chart-resize-handle:hover,
-        .chart-resize-handle.active {
-            background: var(--accent-dim);
-            border-radius: 0 0 12px 12px;
+        .chart-resize-handle::after {
+            content: '';
+            position: absolute;
+            bottom: 3px;
+            right: 3px;
+            width: 8px;
+            height: 8px;
+            border-right: 2px solid var(--text-dim);
+            border-bottom: 2px solid var(--text-dim);
+            border-radius: 0 0 4px 0;
+        }
+        .chart-panel:hover .chart-resize-handle { opacity: 1; }
+        .chart-resize-handle:hover::after,
+        .chart-resize-handle.active::after {
+            border-color: var(--accent);
+        }
+
+        /* Bottom edge resize (vertical only) */
+        .chart-resize-bottom {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 16px;
+            height: 6px;
+            cursor: ns-resize;
+            z-index: 14;
+        }
+
+        /* Right edge resize (horizontal only) */
+        .chart-resize-right {
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 16px;
+            width: 6px;
+            cursor: ew-resize;
+            z-index: 14;
         }
 
         .chart-panel h3 {
@@ -628,7 +668,7 @@
             </div>
             <div id="chartPriceDistribution"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel" id="panelDailyCF" style="grid-column: 1 / -1;">
+        <div class="chart-panel full-width" id="panelDailyCF">
             <div class="chart-title-wrap">
                 <h3>Generation (Last 12 Months)</h3>
                 <div class="chart-tooltip">
@@ -1459,7 +1499,7 @@ function closeFullscreen() {
 
 initExpandButtons();
 
-// ─── Drag-to-Reorder Charts ──────────────────────────────────────────
+// ─── Drag-to-Reorder Charts (title bar only) ────────────────────────
 function initDragReorder() {
     const grid = document.getElementById('chartGrid');
     let dragSrc = null;
@@ -1467,6 +1507,14 @@ function initDragReorder() {
     function getPanels() {
         return [...grid.querySelectorAll('.chart-panel')];
     }
+
+    // Only start drag from the title area
+    grid.addEventListener('mousedown', (e) => {
+        const titleWrap = e.target.closest('.chart-title-wrap');
+        if (!titleWrap) return;
+        const panel = titleWrap.closest('.chart-panel');
+        if (panel) panel.setAttribute('draggable', 'true');
+    });
 
     grid.addEventListener('dragstart', (e) => {
         const panel = e.target.closest('.chart-panel');
@@ -1495,7 +1543,6 @@ function initDragReorder() {
         e.preventDefault();
         const target = e.target.closest('.chart-panel');
         if (!target || target === dragSrc || !dragSrc) return;
-        // Swap positions
         const panels = getPanels();
         const srcIdx = panels.indexOf(dragSrc);
         const tgtIdx = panels.indexOf(target);
@@ -1504,7 +1551,6 @@ function initDragReorder() {
         } else {
             target.before(dragSrc);
         }
-        // Resize plotly charts after DOM move
         [dragSrc, target].forEach(p => {
             const plotDiv = p.querySelector('[id^="chart"]');
             if (plotDiv && plotDiv.data) setTimeout(() => Plotly.Plots.resize(plotDiv), 50);
@@ -1515,53 +1561,75 @@ function initDragReorder() {
         getPanels().forEach(p => {
             p.classList.remove('dragging');
             p.classList.remove('drag-over');
+            p.removeAttribute('draggable');
         });
         dragSrc = null;
     });
-
-    // Make all panels draggable
-    getPanels().forEach(p => p.setAttribute('draggable', 'true'));
 }
 
 initDragReorder();
 
-// ─── Vertical Resize Handles ─────────────────────────────────────────
+// ─── Resize Handles (corner, bottom edge, right edge) ───────────────
 function initResizeHandles() {
     document.querySelectorAll('.chart-panel').forEach(panel => {
-        const handle = document.createElement('div');
-        handle.className = 'chart-resize-handle';
-        panel.appendChild(handle);
+        // Corner handle (both axes)
+        const corner = document.createElement('div');
+        corner.className = 'chart-resize-handle';
+        panel.appendChild(corner);
 
-        let startY, startH;
+        // Bottom edge handle (vertical only)
+        const bottom = document.createElement('div');
+        bottom.className = 'chart-resize-bottom';
+        panel.appendChild(bottom);
 
-        handle.addEventListener('mousedown', (e) => {
+        // Right edge handle (horizontal only)
+        const right = document.createElement('div');
+        right.className = 'chart-resize-right';
+        panel.appendChild(right);
+
+        function resizePlotly() {
+            const plotDiv = panel.querySelector('[id^="chart"]');
+            if (plotDiv && plotDiv.data) {
+                Plotly.relayout(plotDiv, {
+                    height: panel.offsetHeight - 50,
+                    width: panel.offsetWidth - 32,
+                });
+            }
+        }
+
+        function startResize(e, resizeX, resizeY) {
             e.preventDefault();
             e.stopPropagation();
-            startY = e.clientY;
-            startH = panel.offsetHeight;
-            handle.classList.add('active');
-            panel.removeAttribute('draggable');
+            const startX = e.clientX, startY = e.clientY;
+            const startW = panel.offsetWidth, startH = panel.offsetHeight;
+            if (e.target.classList.contains('chart-resize-handle')) e.target.classList.add('active');
 
             function onMove(ev) {
-                const newH = Math.max(200, startH + (ev.clientY - startY));
-                panel.style.height = newH + 'px';
-                // Resize Plotly chart inside
-                const plotDiv = panel.querySelector('[id^="chart"]');
-                if (plotDiv && plotDiv.data) {
-                    Plotly.relayout(plotDiv, { height: newH - 50 });
+                if (resizeY) {
+                    const newH = Math.max(200, startH + (ev.clientY - startY));
+                    panel.style.height = newH + 'px';
                 }
+                if (resizeX) {
+                    const newW = Math.max(300, startW + (ev.clientX - startX));
+                    panel.style.flex = 'none';
+                    panel.style.width = newW + 'px';
+                }
+                resizePlotly();
             }
 
             function onUp() {
-                handle.classList.remove('active');
-                panel.setAttribute('draggable', 'true');
+                corner.classList.remove('active');
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
             }
 
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp);
-        });
+        }
+
+        corner.addEventListener('mousedown', (e) => startResize(e, true, true));
+        bottom.addEventListener('mousedown', (e) => startResize(e, false, true));
+        right.addEventListener('mousedown', (e) => startResize(e, true, false));
     });
 }
 
