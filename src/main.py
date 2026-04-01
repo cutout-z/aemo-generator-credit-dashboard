@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import config
-from .aggregate import aggregate_fcas_prices, aggregate_month, build_mlf_lookup
+from .aggregate import aggregate_fcas_prices, aggregate_month, aggregate_month_daily, build_mlf_lookup
 from .download_dispatch import fetch_dispatch_price_month
 from .download_draft_mlf import fetch_draft_mlfs, get_draft_fy
 from .download_metadata import fetch_generators
@@ -88,9 +88,14 @@ def main():
     # Step 3: Monthly SCADA + price aggregation
     aggregates_path = data_dir / "monthly_aggregates.feather"
 
+    daily_path = data_dir / "daily_aggregates.feather"
+
+    fcas_by_region_month = {}
+
     if args.skip_scada and aggregates_path.exists():
         logger.info("=== Step 3: Loading cached aggregates (--skip-scada) ===")
         all_monthly = pd.read_feather(aggregates_path)
+        all_daily = pd.read_feather(daily_path) if daily_path.exists() else pd.DataFrame()
     else:
         logger.info("=== Step 3: Monthly SCADA + price aggregation ===")
         months = _months_to_process(args.months_back, args.full_refresh)
@@ -104,6 +109,7 @@ def main():
             existing = pd.DataFrame()
 
         new_rows = []
+        new_daily_rows = []
         fcas_by_region_month = {}  # (region, month_label) -> {service: avg_price}
         for year, month in months:
             month_label = f"{year}-{month:02d}"
@@ -133,6 +139,11 @@ def main():
                 )
                 if not monthly.empty:
                     new_rows.append(monthly)
+
+                # Daily aggregation for capacity factor chart
+                daily = aggregate_month_daily(scada, generators, year, month)
+                if not daily.empty:
+                    new_daily_rows.append(daily)
 
                 # FCAS regional prices
                 fcas_prices = aggregate_fcas_prices(prices, year, month)
@@ -164,6 +175,33 @@ def main():
             all_monthly.to_feather(aggregates_path)
             logger.info(f"Saved {len(all_monthly)} aggregate rows to {aggregates_path}")
 
+        # Daily aggregates — keep only last 12 months
+        if new_daily_rows:
+            new_daily = pd.concat(new_daily_rows, ignore_index=True)
+            # Deduplicate boundary dates (NEMOSIS returns overlapping months)
+            # Keep the max values per (duid, date) since partial days get split
+            new_daily = new_daily.groupby(["duid", "date"], as_index=False).agg(
+                daily_generation_mwh=("daily_generation_mwh", "max"),
+                daily_capacity_factor=("daily_capacity_factor", "max"),
+            )
+            if daily_path.exists() and not args.full_refresh:
+                existing_daily = pd.read_feather(daily_path)
+                reprocessed_dates = set(new_daily["date"].unique())
+                existing_daily = existing_daily[~existing_daily["date"].isin(reprocessed_dates)]
+                all_daily = pd.concat([existing_daily, new_daily], ignore_index=True)
+            else:
+                all_daily = new_daily
+            # Trim to last 12 months
+            cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+            all_daily = all_daily[all_daily["date"] >= cutoff]
+            all_daily = all_daily.sort_values(["duid", "date"]).reset_index(drop=True)
+            all_daily.to_feather(daily_path)
+            logger.info(f"Saved {len(all_daily)} daily aggregate rows to {daily_path}")
+        elif daily_path.exists():
+            all_daily = pd.read_feather(daily_path)
+        else:
+            all_daily = pd.DataFrame()
+
     # Step 4: Draft/indicative MLFs for upcoming FY
     logger.info("=== Step 4: Draft MLFs ===")
     draft_mlfs = fetch_draft_mlfs(str(data_dir), force=args.full_refresh)
@@ -178,9 +216,11 @@ def main():
     # Step 5: Generate JSON output
     logger.info("=== Step 5: Generating JSON output ===")
     monthly_agg = all_monthly if not all_monthly.empty else None
+    daily_agg = all_daily if not all_daily.empty else None
     count = generate_all(generators, monthly_agg, mlf_history,
                          draft_mlfs=draft_mlfs, draft_fy_label=draft_fy_label,
-                         fcas_data=fcas_by_region_month if fcas_by_region_month else None)
+                         fcas_data=fcas_by_region_month if fcas_by_region_month else None,
+                         daily_aggregates=daily_agg)
     logger.info(f"Done. Wrote index + {count} generator files.")
 
 

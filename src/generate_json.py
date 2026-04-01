@@ -60,6 +60,7 @@ def generate_generator_json(
     draft_mlf: float | None = None,
     draft_fy_label: str | None = None,
     fcas_monthly: dict | None = None,
+    daily_data: pd.DataFrame | None = None,
     output_dir: str | None = None,
 ) -> Path:
     """Write a single generator's JSON file with all dashboard data.
@@ -121,6 +122,14 @@ def generate_generator_json(
     if fcas_monthly:
         doc["fcas"] = fcas_monthly
 
+    # Daily capacity factor (last 12 months)
+    if daily_data is not None and not daily_data.empty:
+        doc["daily"] = {
+            "dates": daily_data["date"].tolist(),
+            "capacity_factor": daily_data["daily_capacity_factor"].tolist(),
+            "generation_mwh": daily_data["daily_generation_mwh"].tolist(),
+        }
+
     json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
     return json_path
 
@@ -144,6 +153,7 @@ def generate_all(
     draft_mlfs: dict[str, float] | None = None,
     draft_fy_label: str | None = None,
     fcas_data: dict | None = None,
+    daily_aggregates: pd.DataFrame | None = None,
 ) -> int:
     """Generate all per-generator JSON files and the index.
 
@@ -224,10 +234,17 @@ def generate_all(
             if fcas_services:
                 fcas_monthly = {"months": fcas_months, "services": fcas_services}
 
+        # Extract daily data for this DUID
+        daily = None
+        if daily_aggregates is not None and not daily_aggregates.empty:
+            daily = daily_aggregates[daily_aggregates["duid"] == duid].copy()
+            if daily.empty:
+                daily = None
+
         generate_generator_json(
             duid, metadata, monthly, mlf, price_dist,
             draft_mlf=d_mlf, draft_fy_label=draft_fy_label,
-            fcas_monthly=fcas_monthly, output_dir=gen_dir,
+            fcas_monthly=fcas_monthly, daily_data=daily, output_dir=gen_dir,
         )
         count += 1
 
@@ -237,6 +254,7 @@ def generate_all(
     station_count = _generate_station_files(
         generators, monthly_aggregates, mlf_history,
         draft_mlfs, draft_fy_label, fcas_data, gen_dir, docs_dir,
+        daily_aggregates=daily_aggregates,
     )
     logger.info(f"Wrote {station_count} station aggregate files")
 
@@ -260,6 +278,7 @@ def _generate_station_files(
     fcas_data: dict | None,
     gen_dir: str,
     docs_dir: str,
+    daily_aggregates: pd.DataFrame | None = None,
 ) -> int:
     """Generate station-level aggregation files for multi-DUID stations."""
     # Group generators by station name
@@ -336,6 +355,27 @@ def _generate_station_files(
                         fcas_services[service].append(None)
             if fcas_services:
                 doc["fcas"] = {"months": months_list, "services": fcas_services}
+
+        # Daily data: sum across station DUIDs
+        if daily_aggregates is not None and not daily_aggregates.empty:
+            station_daily = daily_aggregates[daily_aggregates["duid"].isin(duids)]
+            if not station_daily.empty:
+                grouped_daily = station_daily.groupby("date").agg(
+                    daily_generation_mwh=("daily_generation_mwh", "sum"),
+                ).reset_index()
+                # Recompute CF from total generation and total capacity
+                if total_capacity and total_capacity > 0:
+                    grouped_daily["daily_capacity_factor"] = (
+                        grouped_daily["daily_generation_mwh"] / (total_capacity * 24)
+                    ).round(4)
+                else:
+                    grouped_daily["daily_capacity_factor"] = None
+                grouped_daily = grouped_daily.sort_values("date")
+                doc["daily"] = {
+                    "dates": grouped_daily["date"].tolist(),
+                    "capacity_factor": grouped_daily["daily_capacity_factor"].tolist(),
+                    "generation_mwh": grouped_daily["daily_generation_mwh"].round(1).tolist(),
+                }
 
         json_path = out_dir / f"{file_key}.json"
         json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))

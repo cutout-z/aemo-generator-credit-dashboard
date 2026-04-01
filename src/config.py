@@ -93,9 +93,17 @@ HISTORY_YEARS = 5
 # Default months to reprocess on incremental run (overlap for late data)
 DEFAULT_MONTHS_BACK = 2
 
-# Price distribution bins (AUD/MWh)
-PRICE_BINS = [float("-inf"), 0, 50, 100, 200, 300, float("inf")]
-PRICE_BIN_LABELS = ["<0", "0-50", "50-100", "100-200", "200-300", "300+"]
+# Price distribution bins (AUD/MWh) — $10 increments from -100 to +100
+PRICE_BINS = (
+    [float("-inf")]
+    + list(range(-100, 110, 10))  # -100, -90, ..., 90, 100
+    + [float("inf")]
+)
+PRICE_BIN_LABELS = (
+    ["< -100"]
+    + [f"{lo} to {lo+10}" for lo in range(-100, 100, 10)]
+    + ["> 100"]
+)
 
 # ─── Network ────────────────────────────────────────────────────────────────
 

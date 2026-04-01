@@ -264,6 +264,11 @@
             display: grid;
         }
 
+        .chart-panel[draggable="true"] { cursor: grab; }
+        .chart-panel[draggable="true"]:active { cursor: grabbing; }
+        .chart-panel.drag-over { border: 2px dashed var(--accent); }
+        .chart-panel.dragging { opacity: 0.4; }
+
         .chart-panel {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -505,15 +510,14 @@
         <button class="time-btn" data-months="6">6M</button>
         <button class="time-btn" data-months="12">12M</button>
         <button class="time-btn" data-months="36">3Y</button>
-        <button class="time-btn" data-months="60">5Y</button>
-        <button class="time-btn active" data-months="0">All</button>
+        <button class="time-btn active" data-months="60">5Y</button>
     </div>
 
     <!-- Chart grid -->
     <div class="chart-grid" id="chartGrid">
         <div class="chart-panel">
             <div class="chart-title-wrap">
-                <h3>Implied 100% Merchant Revenue</h3>
+                <h3>Potential Revenue (100% merchant basis)</h3>
                 <div class="chart-tooltip">
                     <div class="tooltip-title">Methodology</div>
                     <div class="tooltip-formula">Revenue = Σ (MWh_5min × RRP × MLF)</div>
@@ -525,7 +529,7 @@
         </div>
         <div class="chart-panel">
             <div class="chart-title-wrap">
-                <h3>Monthly Generation</h3>
+                <h3>Generation</h3>
                 <div class="chart-tooltip">
                     <div class="tooltip-title">Methodology</div>
                     <div class="tooltip-formula">MWh = Σ (SCADAVALUE / 12)</div>
@@ -605,7 +609,19 @@
             </div>
             <div id="chartPriceDistribution"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel" id="panelFCAS">
+        <div class="chart-panel" id="panelDailyCF" style="grid-column: 1 / -1;">
+            <div class="chart-title-wrap">
+                <h3>Generation (Last 12 Months)</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
+                    Bars show daily generation (MWh) colour-coded by capacity factor band: red (&lt;15%), orange (15-30%), yellow (30-50%), green (≥50%). The line overlay shows daily capacity factor (%) on the right axis.
+                    <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
+                </div>
+            </div>
+            <div id="chartDailyCF"><div class="placeholder">No daily data yet — run pipeline to populate</div></div>
+        </div>
+        <div class="chart-panel" id="panelFCAS" style="display:none;">
             <div class="chart-title-wrap">
                 <h3>Regional FCAS Prices</h3>
                 <div class="chart-tooltip">
@@ -630,8 +646,8 @@ const PLOTLY_LAYOUT_BASE = {
     paper_bgcolor: '#1a1d27',
     plot_bgcolor: '#1a1d27',
     font: { color: '#e1e4eb', size: 12 },
-    margin: { t: 10, r: 20, b: 40, l: 60 },
-    xaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140' },
+    margin: { t: 10, r: 20, b: 60, l: 60 },
+    xaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140', tickangle: -45, tickfont: { size: 11 } },
     yaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140' },
 };
 
@@ -845,7 +861,7 @@ async function selectGenerator(duid) {
 
 // ─── Time Period Controls ──────────────────────────────────────────────
 let currentData = null;
-let selectedMonths = 0; // 0 = all
+let selectedMonths = 60; // default 5Y
 
 document.querySelectorAll('.time-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -867,15 +883,27 @@ function sliceMonthly(data) {
 }
 
 // ─── Charts ────────────────────────────────────────────────────────────
+// Format "2024-10" → "Oct 24"
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fmtMonth(label) {
+    const parts = label.split('-');
+    if (parts.length === 2) {
+        const mi = parseInt(parts[1], 10) - 1;
+        return MONTH_ABBR[mi] + ' ' + parts[0].slice(2);
+    }
+    return label;
+}
+
 function renderCharts(data) {
     currentData = data;
     const monthly = sliceMonthly(data);
+    const fmtMonths = monthly && monthly.months ? monthly.months.map(fmtMonth) : [];
     const catXaxis = { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' };
 
     // Revenue chart
     if (monthly && monthly.revenue_aud) {
         Plotly.newPlot('chartRevenue', [{
-            x: monthly.months,
+            x: fmtMonths,
             y: monthly.revenue_aud,
             type: 'bar',
             marker: { color: '#4a9eff' },
@@ -891,7 +919,7 @@ function renderCharts(data) {
     if (monthly && monthly.generation_mwh) {
         const genYTitle = data.lgc_eligible ? 'MWh (≈ LGCs)' : 'MWh';
         Plotly.newPlot('chartGeneration', [{
-            x: monthly.months,
+            x: fmtMonths,
             y: monthly.generation_mwh,
             type: 'bar',
             marker: { color: '#22c55e' },
@@ -908,7 +936,7 @@ function renderCharts(data) {
     // Capacity factor chart
     if (monthly && monthly.capacity_factor) {
         Plotly.newPlot('chartCapacity', [{
-            x: monthly.months,
+            x: fmtMonths,
             y: monthly.capacity_factor,
             type: 'scatter',
             mode: 'lines+markers',
@@ -929,7 +957,7 @@ function renderCharts(data) {
     // Curtailment chart
     if (monthly && monthly.curtailment_pct) {
         Plotly.newPlot('chartCurtailment', [{
-            x: monthly.months,
+            x: fmtMonths,
             y: monthly.curtailment_pct,
             type: 'scatter',
             fill: 'tozeroy',
@@ -948,7 +976,7 @@ function renderCharts(data) {
     if (monthly && monthly.econ_curtailment_pct) {
         econPanel.style.display = 'block';
         Plotly.newPlot('chartEconCurtailment', [{
-            x: monthly.months,
+            x: fmtMonths,
             y: monthly.econ_curtailment_pct,
             type: 'scatter',
             fill: 'tozeroy',
@@ -966,6 +994,11 @@ function renderCharts(data) {
 
     // MLF trajectory (always shows all years — annual, not monthly)
     // Handles both single-DUID (data.mlf) and station view (data.mlf_by_duid)
+    // Shorten FY labels: "FY24-25" → "FY25"
+    function shortenFY(label) {
+        const m = label.match(/^FY\d{2}-(\d{2})/);
+        return m ? 'FY' + m[1] : label;
+    }
     const mlfTraces = [];
     const duidColors = ['#a78bfa', '#4a9eff', '#22c55e', '#f97316', '#ef4444', '#eab308', '#ec4899', '#06b6d4'];
 
@@ -976,7 +1009,7 @@ function renderCharts(data) {
             const m = data.mlf_by_duid[duid];
             const color = duidColors[i % duidColors.length];
             mlfTraces.push({
-                x: m.years, y: m.values,
+                x: m.years.map(shortenFY), y: m.values,
                 type: 'scatter', mode: 'lines+markers',
                 name: duid,
                 line: { color, width: 2 },
@@ -985,7 +1018,7 @@ function renderCharts(data) {
             });
             if (m.draft_year && m.draft_value != null) {
                 mlfTraces.push({
-                    x: [m.draft_year + ' (Draft)'], y: [m.draft_value],
+                    x: [shortenFY(m.draft_year) + ' (D)'], y: [m.draft_value],
                     type: 'scatter', mode: 'markers',
                     name: duid + ' Draft', showlegend: false,
                     marker: { size: 9, color: 'rgba(255,255,255,0.2)', line: { color, width: 2 }, symbol: 'diamond' },
@@ -996,14 +1029,14 @@ function renderCharts(data) {
     } else if (data.mlf && data.mlf.values) {
         // Single DUID view
         mlfTraces.push({
-            x: data.mlf.years, y: data.mlf.values,
+            x: data.mlf.years.map(shortenFY), y: data.mlf.values,
             type: 'scatter', mode: 'lines+markers', name: 'Final',
             line: { color: '#a78bfa', width: 2 }, marker: { size: 6 },
             hovertemplate: '%{x}<br>MLF: %{y:.4f} (Final)<extra></extra>',
         });
         if (data.mlf.draft_year && data.mlf.draft_value != null) {
             mlfTraces.push({
-                x: [data.mlf.draft_year + ' (Draft)'], y: [data.mlf.draft_value],
+                x: [shortenFY(data.mlf.draft_year) + ' (D)'], y: [data.mlf.draft_value],
                 type: 'scatter', mode: 'markers', name: 'Draft',
                 marker: { size: 10, color: 'rgba(167,139,250,0.3)', line: { color: '#a78bfa', width: 2 }, symbol: 'diamond' },
                 hovertemplate: '%{x}<br>MLF: %{y:.4f} (Draft)<extra></extra>',
@@ -1014,7 +1047,7 @@ function renderCharts(data) {
     if (mlfTraces.length > 0) {
         Plotly.newPlot('chartMLF', mlfTraces, {
             ...PLOTLY_LAYOUT_BASE,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category', title: 'Financial Year' },
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'MLF' },
             showlegend: mlfTraces.length > 1,
             legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
@@ -1029,7 +1062,7 @@ function renderCharts(data) {
     if (monthly && monthly.captured_price) {
         Plotly.newPlot('chartPriceCapture', [
             {
-                x: monthly.months,
+                x: fmtMonths,
                 y: monthly.avg_rrp,
                 type: 'scatter',
                 mode: 'lines',
@@ -1038,7 +1071,7 @@ function renderCharts(data) {
                 hovertemplate: '%{x}<br>$%{y:.2f}/MWh<extra>Avg RRP</extra>',
             },
             {
-                x: monthly.months,
+                x: fmtMonths,
                 y: monthly.captured_price,
                 type: 'scatter',
                 mode: 'lines+markers',
@@ -1056,26 +1089,40 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
-    // Spot price exposure (horizontal bar)
+    // Spot price exposure (horizontal bar) — colour by price range
     if (data.price_distribution) {
+        const bins = data.price_distribution.bins;
         const pctValues = data.price_distribution.generation_share.map(v => Math.round(v * 1000) / 10);
+        // Color by price: red=negative, green=0-50, blue=50-100, purple=>100
+        function priceColor(label) {
+            if (label.startsWith('< -') || label.startsWith('> ')) {
+                return label.startsWith('< -') ? '#ef4444' : '#a78bfa';
+            }
+            const m = label.match(/^(-?\d+)/);
+            if (!m) return '#64748b';
+            const v = parseInt(m[1]);
+            if (v < 0) return '#ef4444';
+            if (v < 50) return '#22c55e';
+            if (v < 100) return '#4a9eff';
+            return '#a78bfa';
+        }
+        const barColors = bins.map(priceColor);
         Plotly.newPlot('chartPriceDistribution', [{
             x: pctValues,
-            y: data.price_distribution.bins,
+            y: bins,
             type: 'bar',
             orientation: 'h',
-            marker: {
-                color: ['#ef4444', '#22c55e', '#4a9eff', '#eab308', '#f97316', '#a78bfa'],
-            },
-            text: pctValues.map(v => v.toFixed(1) + '%'),
+            marker: { color: barColors },
+            text: pctValues.map(v => v > 0.5 ? v.toFixed(1) + '%' : ''),
             textposition: 'outside',
-            textfont: { color: '#8b8fa3', size: 11 },
+            textfont: { color: '#8b8fa3', size: 10 },
             hovertemplate: '%{y}: %{x:.1f}%<extra></extra>',
         }], {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: '% of Generation', type: 'linear', ticksuffix: '%', range: [0, Math.max(...pctValues) * 1.15] },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, type: 'category', autorange: true },
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 70 },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, type: 'category', autorange: true, dtick: 1 },
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 80 },
+            height: 500,
         }, PLOTLY_CONFIG);
     }
 
@@ -1089,7 +1136,7 @@ function renderCharts(data) {
         ];
         const services = Object.keys(data.fcas.services);
         const fcasTraces = services.map((service, i) => ({
-            x: data.fcas.months,
+            x: data.fcas.months.map(fmtMonth),
             y: data.fcas.services[service],
             type: 'scatter',
             mode: 'lines',
@@ -1107,6 +1154,87 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     } else if (fcasPanel) {
         fcasPanel.style.display = 'none';
+    }
+
+    // Generation (Last 12 Months) — daily MWh bars + CF line overlay
+    const dailyCFPanel = document.getElementById('panelDailyCF');
+    if (data.daily && data.daily.dates && data.daily.dates.length > 0) {
+        dailyCFPanel.style.display = 'block';
+
+        // Trim: find last date with meaningful generation (>10 MWh) and show 12 months back
+        let lastIdx = data.daily.dates.length - 1;
+        while (lastIdx > 0 && (data.daily.generation_mwh[lastIdx] == null || data.daily.generation_mwh[lastIdx] < 10)) {
+            lastIdx--;
+        }
+        const lastDate = new Date(data.daily.dates[lastIdx]);
+        const cutoff = new Date(lastDate);
+        cutoff.setFullYear(cutoff.getFullYear() - 1);
+        const cutoffStr = cutoff.toISOString().slice(0, 10);
+        const startIdx = data.daily.dates.findIndex(d => d >= cutoffStr);
+        const sliceStart = startIdx >= 0 ? startIdx : 0;
+
+        const dates = data.daily.dates.slice(sliceStart, lastIdx + 1);
+        const cfValues = data.daily.capacity_factor.slice(sliceStart, lastIdx + 1).map(v => v != null ? v * 100 : 0);
+        const genMwh = data.daily.generation_mwh.slice(sliceStart, lastIdx + 1);
+
+        // CF band colors (applied to generation bars)
+        function cfColor(val) {
+            if (val < 15) return '#ef4444';
+            if (val < 30) return '#f97316';
+            if (val < 50) return '#eab308';
+            return '#22c55e';
+        }
+        const barColors = cfValues.map(cfColor);
+
+        // Period average CF line
+        const validCF = cfValues.filter(v => v > 0);
+        const avgCF = validCF.length > 0 ? validCF.reduce((a, b) => a + b, 0) / validCF.length : 0;
+
+        Plotly.newPlot('chartDailyCF', [
+            {
+                x: dates, y: genMwh,
+                type: 'bar',
+                marker: { color: barColors },
+                hovertemplate: '%{x}<br>%{y:,.0f} MWh<extra></extra>',
+                yaxis: 'y',
+                name: 'Daily Generation (MWh)',
+            },
+            {
+                x: dates, y: cfValues,
+                type: 'scatter', mode: 'lines',
+                line: { color: '#a78bfa', width: 1.5 },
+                yaxis: 'y2',
+                name: 'Capacity Factor (%)',
+                hovertemplate: '%{x}<br>CF: %{y:.1f}%<extra></extra>',
+            },
+        ], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'date', tickangle: 0 },
+            yaxis: {
+                ...PLOTLY_LAYOUT_BASE.yaxis,
+                title: 'Daily Generation (MWh)',
+                side: 'left',
+            },
+            yaxis2: {
+                ...PLOTLY_LAYOUT_BASE.yaxis,
+                title: { text: 'Capacity Factor (%)', font: { color: '#a78bfa' } },
+                overlaying: 'y',
+                side: 'right',
+                range: [0, 100],
+                tickfont: { color: '#a78bfa' },
+                ticksuffix: '%',
+            },
+            shapes: [{
+                type: 'line', y0: avgCF, y1: avgCF, x0: 0, x1: 1, xref: 'paper', yref: 'y2',
+                line: { color: '#ef4444', width: 1, dash: 'dash' },
+            }],
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, r: 60, t: 10 },
+            height: 350,
+            showlegend: true,
+            legend: { x: 0, y: 1.12, orientation: 'h', font: { size: 10 } },
+        }, PLOTLY_CONFIG);
+    } else if (dailyCFPanel) {
+        dailyCFPanel.style.display = 'none';
     }
 }
 
@@ -1176,6 +1304,72 @@ function closeFullscreen() {
 }
 
 initExpandButtons();
+
+// ─── Drag-to-Reorder Charts ──────────────────────────────────────────
+function initDragReorder() {
+    const grid = document.getElementById('chartGrid');
+    let dragSrc = null;
+
+    function getPanels() {
+        return [...grid.querySelectorAll('.chart-panel')];
+    }
+
+    grid.addEventListener('dragstart', (e) => {
+        const panel = e.target.closest('.chart-panel');
+        if (!panel) return;
+        dragSrc = panel;
+        panel.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+    });
+
+    grid.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const panel = e.target.closest('.chart-panel');
+        if (panel && panel !== dragSrc) {
+            getPanels().forEach(p => p.classList.remove('drag-over'));
+            panel.classList.add('drag-over');
+        }
+    });
+
+    grid.addEventListener('dragleave', (e) => {
+        const panel = e.target.closest('.chart-panel');
+        if (panel) panel.classList.remove('drag-over');
+    });
+
+    grid.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const target = e.target.closest('.chart-panel');
+        if (!target || target === dragSrc || !dragSrc) return;
+        // Swap positions
+        const panels = getPanels();
+        const srcIdx = panels.indexOf(dragSrc);
+        const tgtIdx = panels.indexOf(target);
+        if (srcIdx < tgtIdx) {
+            target.after(dragSrc);
+        } else {
+            target.before(dragSrc);
+        }
+        // Resize plotly charts after DOM move
+        [dragSrc, target].forEach(p => {
+            const plotDiv = p.querySelector('[id^="chart"]');
+            if (plotDiv && plotDiv.data) setTimeout(() => Plotly.Plots.resize(plotDiv), 50);
+        });
+    });
+
+    grid.addEventListener('dragend', () => {
+        getPanels().forEach(p => {
+            p.classList.remove('dragging');
+            p.classList.remove('drag-over');
+        });
+        dragSrc = null;
+    });
+
+    // Make all panels draggable
+    getPanels().forEach(p => p.setAttribute('draggable', 'true'));
+}
+
+initDragReorder();
 
 // ─── Start ─────────────────────────────────────────────────────────────
 init();

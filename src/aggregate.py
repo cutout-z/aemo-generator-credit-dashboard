@@ -187,6 +187,39 @@ def _price_distribution(
     return shares
 
 
+def aggregate_month_daily(
+    scada: pd.DataFrame,
+    generators: pd.DataFrame,
+    year: int,
+    month: int,
+) -> pd.DataFrame:
+    """Aggregate a single month of 5-minute SCADA data to daily per-generator metrics.
+
+    Returns DataFrame with columns: duid, date, daily_generation_mwh, daily_capacity_factor
+    """
+    if scada.empty:
+        return pd.DataFrame()
+
+    duid_capacity = generators.set_index("DUID")["CAPACITY_MW"].to_dict()
+
+    scada = scada.copy()
+    scada["date"] = scada["SETTLEMENTDATE"].dt.date.astype(str)
+
+    rows = []
+    for (duid, date_str), group in scada.groupby(["DUID", "date"]):
+        capacity = duid_capacity.get(duid)
+        mwh = group["SCADAVALUE"].clip(lower=0).sum() / 12.0
+        cf = mwh / (capacity * 24) if capacity and capacity > 0 else None
+        rows.append({
+            "duid": duid,
+            "date": date_str,
+            "daily_generation_mwh": round(mwh, 1),
+            "daily_capacity_factor": round(cf, 4) if cf is not None else None,
+        })
+
+    return pd.DataFrame(rows)
+
+
 def build_mlf_lookup(
     mlf_history: pd.DataFrame,
     target_fy_start: int,
