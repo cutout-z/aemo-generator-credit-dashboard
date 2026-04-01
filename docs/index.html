@@ -276,6 +276,25 @@
             padding: 16px;
             min-height: 320px;
             position: relative;
+            overflow: hidden;
+        }
+
+        /* Resize handle */
+        .chart-resize-handle {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            cursor: ns-resize;
+            background: transparent;
+            z-index: 15;
+            transition: background 0.15s;
+        }
+        .chart-resize-handle:hover,
+        .chart-resize-handle.active {
+            background: var(--accent-dim);
+            border-radius: 0 0 12px 12px;
         }
 
         .chart-panel h3 {
@@ -894,6 +913,37 @@ function fmtMonth(label) {
     return label;
 }
 
+// Compute trailing 12-month simple moving average
+function rolling12(arr) {
+    if (!arr || arr.length < 12) return null;
+    const result = new Array(arr.length).fill(null);
+    for (let i = 11; i < arr.length; i++) {
+        let sum = 0, count = 0;
+        for (let j = i - 11; j <= i; j++) {
+            if (arr[j] != null && !isNaN(arr[j])) { sum += arr[j]; count++; }
+        }
+        result[i] = count >= 6 ? sum / count : null; // need at least 6 months of data
+    }
+    return result;
+}
+
+// Add a 12-month rolling average trace (only when period >= 12 months)
+function makeRollingTrace(fmtMonths, values, color) {
+    if (selectedMonths < 12) return null;
+    const avg = rolling12(values);
+    if (!avg) return null;
+    return {
+        x: fmtMonths,
+        y: avg,
+        type: 'scatter',
+        mode: 'lines',
+        name: '12M Avg',
+        line: { color, width: 2, dash: 'dash' },
+        hovertemplate: '%{x}<br>12M Avg: %{y:,.0f}<extra></extra>',
+        showlegend: true,
+    };
+}
+
 function renderCharts(data) {
     currentData = data;
     const monthly = sliceMonthly(data);
@@ -902,23 +952,30 @@ function renderCharts(data) {
 
     // Revenue chart
     if (monthly && monthly.revenue_aud) {
-        Plotly.newPlot('chartRevenue', [{
+        const revTraces = [{
             x: fmtMonths,
             y: monthly.revenue_aud,
             type: 'bar',
             marker: { color: '#4a9eff' },
             hovertemplate: '%{x}<br>$%{y:,.0f}<extra></extra>',
-        }], {
+            name: 'Monthly Revenue',
+            showlegend: false,
+        }];
+        const revRolling = makeRollingTrace(fmtMonths, monthly.revenue_aud, '#ffffff');
+        if (revRolling) { revRolling.hovertemplate = '%{x}<br>12M Avg: $%{y:,.0f}<extra></extra>'; revTraces.push(revRolling); }
+        Plotly.newPlot('chartRevenue', revTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'AUD', tickformat: '$,.0s' },
+            showlegend: !!revRolling,
+            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     }
 
     // Generation chart (MWh) — also shows LGC annotation for eligible generators
     if (monthly && monthly.generation_mwh) {
         const genYTitle = data.lgc_eligible ? 'MWh (≈ LGCs)' : 'MWh';
-        Plotly.newPlot('chartGeneration', [{
+        const genTraces = [{
             x: fmtMonths,
             y: monthly.generation_mwh,
             type: 'bar',
@@ -926,16 +983,23 @@ function renderCharts(data) {
             hovertemplate: data.lgc_eligible
                 ? '%{x}<br>%{y:,.0f} MWh (≈ %{y:,.0f} LGCs)<extra></extra>'
                 : '%{x}<br>%{y:,.0f} MWh<extra></extra>',
-        }], {
+            name: 'Monthly Generation',
+            showlegend: false,
+        }];
+        const genRolling = makeRollingTrace(fmtMonths, monthly.generation_mwh, '#ffffff');
+        if (genRolling) genTraces.push(genRolling);
+        Plotly.newPlot('chartGeneration', genTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: genYTitle, tickformat: ',.0s' },
+            showlegend: !!genRolling,
+            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     }
 
     // Capacity factor chart
     if (monthly && monthly.capacity_factor) {
-        Plotly.newPlot('chartCapacity', [{
+        const cfTraces = [{
             x: fmtMonths,
             y: monthly.capacity_factor,
             type: 'scatter',
@@ -943,20 +1007,27 @@ function renderCharts(data) {
             line: { color: '#22c55e', width: 2 },
             marker: { size: 4 },
             hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
-        }], {
+            name: 'Capacity Factor',
+            showlegend: false,
+        }];
+        const cfRolling = makeRollingTrace(fmtMonths, monthly.capacity_factor, '#ffffff');
+        if (cfRolling) { cfRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; cfTraces.push(cfRolling); }
+        Plotly.newPlot('chartCapacity', cfTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Capacity Factor', range: [0, 1], tickformat: '.0%' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Capacity Factor', range: [0, Math.min(1, Math.max(...monthly.capacity_factor.filter(v => v != null)) + 0.1)], tickformat: '.0%' },
             shapes: [{
                 type: 'line', y0: 0.25, y1: 0.25, x0: 0, x1: 1, xref: 'paper',
                 line: { color: '#475569', width: 1, dash: 'dash' },
             }],
+            showlegend: !!cfRolling,
+            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     }
 
     // Curtailment chart
     if (monthly && monthly.curtailment_pct) {
-        Plotly.newPlot('chartCurtailment', [{
+        const curtTraces = [{
             x: fmtMonths,
             y: monthly.curtailment_pct,
             type: 'scatter',
@@ -964,10 +1035,17 @@ function renderCharts(data) {
             line: { color: '#f97316', width: 2 },
             fillcolor: 'rgba(249, 115, 22, 0.2)',
             hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
-        }], {
+            name: 'Grid Curtailment',
+            showlegend: false,
+        }];
+        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
+        if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
+        Plotly.newPlot('chartCurtailment', curtTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Curtailment %', tickformat: '.0%' },
+            showlegend: !!curtRolling,
+            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     }
 
@@ -975,7 +1053,7 @@ function renderCharts(data) {
     const econPanel = document.getElementById('panelEconCurtailment');
     if (monthly && monthly.econ_curtailment_pct) {
         econPanel.style.display = 'block';
-        Plotly.newPlot('chartEconCurtailment', [{
+        const econTraces = [{
             x: fmtMonths,
             y: monthly.econ_curtailment_pct,
             type: 'scatter',
@@ -983,10 +1061,17 @@ function renderCharts(data) {
             line: { color: '#ef4444', width: 2 },
             fillcolor: 'rgba(239, 68, 68, 0.2)',
             hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
-        }], {
+            name: 'Economic Curtailment',
+            showlegend: false,
+        }];
+        const econRolling = makeRollingTrace(fmtMonths, monthly.econ_curtailment_pct, '#ffffff');
+        if (econRolling) { econRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; econTraces.push(econRolling); }
+        Plotly.newPlot('chartEconCurtailment', econTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Economic Curtailment %', tickformat: '.0%' },
+            showlegend: !!econRolling,
+            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     } else if (econPanel) {
         econPanel.style.display = 'none';
@@ -1017,6 +1102,16 @@ function renderCharts(data) {
                 hovertemplate: `%{x}<br>${duid}: %{y:.4f}<extra></extra>`,
             });
             if (m.draft_year && m.draft_value != null) {
+                // Dashed connector from last final to draft
+                const lastFY = shortenFY(m.years[m.years.length - 1]);
+                const lastVal = m.values[m.values.length - 1];
+                mlfTraces.push({
+                    x: [lastFY, shortenFY(m.draft_year) + ' (D)'], y: [lastVal, m.draft_value],
+                    type: 'scatter', mode: 'lines',
+                    name: duid + ' → Draft', showlegend: false,
+                    line: { color, width: 1.5, dash: 'dash' },
+                    hoverinfo: 'skip',
+                });
                 mlfTraces.push({
                     x: [shortenFY(m.draft_year) + ' (D)'], y: [m.draft_value],
                     type: 'scatter', mode: 'markers',
@@ -1035,6 +1130,16 @@ function renderCharts(data) {
             hovertemplate: '%{x}<br>MLF: %{y:.4f} (Final)<extra></extra>',
         });
         if (data.mlf.draft_year && data.mlf.draft_value != null) {
+            // Dashed connector from last final to draft
+            const lastFY = shortenFY(data.mlf.years[data.mlf.years.length - 1]);
+            const lastVal = data.mlf.values[data.mlf.values.length - 1];
+            mlfTraces.push({
+                x: [lastFY, shortenFY(data.mlf.draft_year) + ' (D)'], y: [lastVal, data.mlf.draft_value],
+                type: 'scatter', mode: 'lines',
+                name: '→ Draft', showlegend: false,
+                line: { color: '#a78bfa', width: 1.5, dash: 'dash' },
+                hoverinfo: 'skip',
+            });
             mlfTraces.push({
                 x: [shortenFY(data.mlf.draft_year) + ' (D)'], y: [data.mlf.draft_value],
                 type: 'scatter', mode: 'markers', name: 'Draft',
@@ -1156,7 +1261,7 @@ function renderCharts(data) {
         fcasPanel.style.display = 'none';
     }
 
-    // Generation (Last 12 Months) — daily MWh bars + CF line overlay
+    // Generation (Last 12 Months) — two stacked subplots: daily MWh bars (top) + CF line (bottom)
     const dailyCFPanel = document.getElementById('panelDailyCF');
     if (data.daily && data.daily.dates && data.daily.dates.length > 0) {
         dailyCFPanel.style.display = 'block';
@@ -1186,52 +1291,101 @@ function renderCharts(data) {
         }
         const barColors = cfValues.map(cfColor);
 
-        // Period average CF line
+        // Averages
+        const validGen = genMwh.filter(v => v != null && v > 0);
+        const avgGen = validGen.length > 0 ? validGen.reduce((a, b) => a + b, 0) / validGen.length : 0;
         const validCF = cfValues.filter(v => v > 0);
         const avgCF = validCF.length > 0 ? validCF.reduce((a, b) => a + b, 0) / validCF.length : 0;
 
+        // CF color bands for the CF subplot
+        const cfLineColors = cfValues.map(cfColor);
+
         Plotly.newPlot('chartDailyCF', [
+            // Top subplot: daily generation bars
             {
                 x: dates, y: genMwh,
                 type: 'bar',
                 marker: { color: barColors },
                 hovertemplate: '%{x}<br>%{y:,.0f} MWh<extra></extra>',
+                xaxis: 'x',
                 yaxis: 'y',
                 name: 'Daily Generation (MWh)',
             },
+            // Bottom subplot: capacity factor line with markers
             {
                 x: dates, y: cfValues,
                 type: 'scatter', mode: 'lines',
                 line: { color: '#a78bfa', width: 1.5 },
+                xaxis: 'x2',
                 yaxis: 'y2',
                 name: 'Capacity Factor (%)',
                 hovertemplate: '%{x}<br>CF: %{y:.1f}%<extra></extra>',
             },
         ], {
             ...PLOTLY_LAYOUT_BASE,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'date', tickangle: 0 },
+            // Top x-axis (hidden tick labels — shared with bottom)
+            xaxis: {
+                ...PLOTLY_LAYOUT_BASE.xaxis,
+                type: 'date', tickangle: 0,
+                domain: [0, 1],
+                anchor: 'y',
+                showticklabels: false,
+            },
+            // Bottom x-axis (visible labels)
+            xaxis2: {
+                ...PLOTLY_LAYOUT_BASE.xaxis,
+                type: 'date', tickangle: 0,
+                domain: [0, 1],
+                anchor: 'y2',
+                matches: 'x',
+            },
+            // Top subplot: generation
             yaxis: {
                 ...PLOTLY_LAYOUT_BASE.yaxis,
                 title: 'Daily Generation (MWh)',
-                side: 'left',
+                domain: [0.35, 1],
+                anchor: 'x',
             },
+            // Bottom subplot: capacity factor
             yaxis2: {
                 ...PLOTLY_LAYOUT_BASE.yaxis,
                 title: { text: 'Capacity Factor (%)', font: { color: '#a78bfa' } },
-                overlaying: 'y',
-                side: 'right',
-                range: [0, 100],
-                tickfont: { color: '#a78bfa' },
+                domain: [0, 0.28],
+                anchor: 'x2',
+                range: [0, Math.min(100, Math.max(...cfValues) + 10)],
                 ticksuffix: '%',
+                tickfont: { color: '#a78bfa' },
             },
-            shapes: [{
-                type: 'line', y0: avgCF, y1: avgCF, x0: 0, x1: 1, xref: 'paper', yref: 'y2',
-                line: { color: '#ef4444', width: 1, dash: 'dash' },
-            }],
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, r: 60, t: 10 },
-            height: 350,
+            shapes: [
+                // Avg generation line (top subplot)
+                {
+                    type: 'line', y0: avgGen, y1: avgGen, x0: 0, x1: 1, xref: 'paper', yref: 'y',
+                    line: { color: '#4a9eff', width: 1.5, dash: 'dash' },
+                },
+                // Avg CF line (bottom subplot)
+                {
+                    type: 'line', y0: avgCF, y1: avgCF, x0: 0, x1: 1, xref: 'paper', yref: 'y2',
+                    line: { color: '#ef4444', width: 1.5, dash: 'dash' },
+                },
+            ],
+            annotations: [
+                {
+                    x: 1, y: avgGen, xref: 'paper', yref: 'y',
+                    text: `Avg: ${avgGen.toFixed(0)} MWh`,
+                    showarrow: false, font: { color: '#4a9eff', size: 10 },
+                    xanchor: 'left', xshift: 4,
+                },
+                {
+                    x: 1, y: avgCF, xref: 'paper', yref: 'y2',
+                    text: `Avg: ${avgCF.toFixed(1)}%`,
+                    showarrow: false, font: { color: '#ef4444', size: 10 },
+                    xanchor: 'left', xshift: 4,
+                },
+            ],
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, r: 70, t: 10 },
+            height: 500,
             showlegend: true,
-            legend: { x: 0, y: 1.12, orientation: 'h', font: { size: 10 } },
+            legend: { x: 0, y: 1.06, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     } else if (dailyCFPanel) {
         dailyCFPanel.style.display = 'none';
@@ -1370,6 +1524,48 @@ function initDragReorder() {
 }
 
 initDragReorder();
+
+// ─── Vertical Resize Handles ─────────────────────────────────────────
+function initResizeHandles() {
+    document.querySelectorAll('.chart-panel').forEach(panel => {
+        const handle = document.createElement('div');
+        handle.className = 'chart-resize-handle';
+        panel.appendChild(handle);
+
+        let startY, startH;
+
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            startY = e.clientY;
+            startH = panel.offsetHeight;
+            handle.classList.add('active');
+            panel.removeAttribute('draggable');
+
+            function onMove(ev) {
+                const newH = Math.max(200, startH + (ev.clientY - startY));
+                panel.style.height = newH + 'px';
+                // Resize Plotly chart inside
+                const plotDiv = panel.querySelector('[id^="chart"]');
+                if (plotDiv && plotDiv.data) {
+                    Plotly.relayout(plotDiv, { height: newH - 50 });
+                }
+            }
+
+            function onUp() {
+                handle.classList.remove('active');
+                panel.setAttribute('draggable', 'true');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    });
+}
+
+initResizeHandles();
 
 // ─── Start ─────────────────────────────────────────────────────────────
 init();
