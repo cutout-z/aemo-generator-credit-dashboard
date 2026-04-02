@@ -1082,58 +1082,58 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
-    // Curtailment chart — stacked grid/mechanical when available, total otherwise
+    // Curtailment chart — always show total as area, overlay grid/mechanical bars where available
     if (monthly && monthly.curtailment_pct) {
         const curtTraces = [];
-        const hasGridSplit = monthly.grid_curtailment_pct && monthly.grid_curtailment_pct.some(v => v != null);
+        const gridData = monthly.grid_curtailment_pct;
+        const mechData = monthly.mechanical_curtailment_pct;
+        const hasGridSplit = gridData && gridData.some(v => v != null);
 
+        // Total curtailment as area (always shown)
+        curtTraces.push({
+            x: fmtMonths,
+            y: monthly.curtailment_pct,
+            type: 'scatter',
+            fill: 'tozeroy',
+            line: { color: '#f97316', width: 2 },
+            fillcolor: 'rgba(249, 115, 22, 0.2)',
+            hovertemplate: '%{x}<br>Total: %{y:.1%}<extra></extra>',
+            name: 'Total Curtailment',
+        });
+
+        // Rolling average
+        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
+        if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
+
+        // Overlay grid/mechanical bars for months that have split data
         if (hasGridSplit) {
             curtTraces.push({
                 x: fmtMonths,
-                y: monthly.grid_curtailment_pct,
+                y: gridData,
                 type: 'bar',
-                name: 'Grid Curtailment',
-                marker: { color: '#f97316' },
+                name: 'Grid (from Aug 2024)',
+                marker: { color: 'rgba(34, 197, 94, 0.7)' },
                 hovertemplate: '%{x}<br>Grid: %{y:.1%}<extra></extra>',
+                width: 0.6,
             });
-            curtTraces.push({
-                x: fmtMonths,
-                y: monthly.mechanical_curtailment_pct,
-                type: 'bar',
-                name: 'Mechanical',
-                marker: { color: '#ef4444' },
-                hovertemplate: '%{x}<br>Mechanical: %{y:.1%}<extra></extra>',
-            });
-            // Total as dotted line overlay
-            curtTraces.push({
-                x: fmtMonths,
-                y: monthly.curtailment_pct,
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#ffffff', width: 1.5, dash: 'dot' },
-                name: 'Total',
-                hovertemplate: '%{x}<br>Total: %{y:.1%}<extra></extra>',
-            });
-        } else {
-            curtTraces.push({
-                x: fmtMonths,
-                y: monthly.curtailment_pct,
-                type: 'scatter',
-                fill: 'tozeroy',
-                line: { color: '#f97316', width: 2 },
-                fillcolor: 'rgba(249, 115, 22, 0.2)',
-                hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
-                name: 'Total Curtailment',
-            });
-            const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
-            if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
+            if (mechData && mechData.some(v => v != null)) {
+                curtTraces.push({
+                    x: fmtMonths,
+                    y: mechData,
+                    type: 'bar',
+                    name: 'Mechanical',
+                    marker: { color: 'rgba(239, 68, 68, 0.7)' },
+                    hovertemplate: '%{x}<br>Mechanical: %{y:.1%}<extra></extra>',
+                    width: 0.6,
+                });
+            }
         }
 
         Plotly.newPlot('chartCurtailment', curtTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Curtailment %', tickformat: '.0%' },
-            barmode: hasGridSplit ? 'stack' : undefined,
+            barmode: 'stack',
             showlegend: true,
             legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
