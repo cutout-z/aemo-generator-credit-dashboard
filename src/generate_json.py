@@ -61,6 +61,7 @@ def generate_generator_json(
     draft_fy_label: str | None = None,
     fcas_monthly: dict | None = None,
     daily_data: pd.DataFrame | None = None,
+    constraint_data: pd.DataFrame | None = None,
     output_dir: str | None = None,
 ) -> Path:
     """Write a single generator's JSON file with all dashboard data.
@@ -98,6 +99,10 @@ def generate_generator_json(
         # Curtailment only for solar/wind
         if "curtailment_pct" in monthly_data.columns:
             doc["monthly"]["curtailment_pct"] = monthly_data["curtailment_pct"].round(4).tolist()
+        if "grid_curtailment_pct" in monthly_data.columns:
+            doc["monthly"]["grid_curtailment_pct"] = monthly_data["grid_curtailment_pct"].round(4).tolist()
+        if "mechanical_curtailment_pct" in monthly_data.columns:
+            doc["monthly"]["mechanical_curtailment_pct"] = monthly_data["mechanical_curtailment_pct"].round(4).tolist()
         if "econ_curtailment_pct" in monthly_data.columns:
             doc["monthly"]["econ_curtailment_pct"] = monthly_data["econ_curtailment_pct"].round(4).tolist()
         # Price capture
@@ -130,6 +135,41 @@ def generate_generator_json(
             "generation_mwh": daily_data["daily_generation_mwh"].tolist(),
         }
 
+    # Binding constraint data
+    if constraint_data is not None and not constraint_data.empty:
+        top = (
+            constraint_data.groupby(["constraint_id", "description"])["hours_bound"]
+            .sum()
+            .nlargest(15)
+            .reset_index()
+        )
+        if not top.empty:
+            months = sorted(constraint_data["month"].unique())
+            heatmap = {}
+            for _, row in top.iterrows():
+                cid = row["constraint_id"]
+                monthly_hours = []
+                for m in months:
+                    match = constraint_data[
+                        (constraint_data["constraint_id"] == cid)
+                        & (constraint_data["month"] == m)
+                    ]
+                    monthly_hours.append(
+                        round(float(match["hours_bound"].sum()), 1) if not match.empty else 0
+                    )
+                heatmap[cid] = monthly_hours
+            doc["constraints"] = {
+                "top_constraints": [
+                    {
+                        "id": row["constraint_id"],
+                        "description": row["description"],
+                        "total_hours": round(float(row["hours_bound"]), 1),
+                    }
+                    for _, row in top.iterrows()
+                ],
+                "heatmap": {"months": months, "constraints": heatmap},
+            }
+
     json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
     return json_path
 
@@ -154,6 +194,7 @@ def generate_all(
     draft_fy_label: str | None = None,
     fcas_data: dict | None = None,
     daily_aggregates: pd.DataFrame | None = None,
+    constraint_data: pd.DataFrame | None = None,
 ) -> int:
     """Generate all per-generator JSON files and the index.
 
@@ -241,10 +282,18 @@ def generate_all(
             if daily.empty:
                 daily = None
 
+        # Extract constraint data for this DUID
+        duid_constraints = None
+        if constraint_data is not None and not constraint_data.empty:
+            duid_constraints = constraint_data[constraint_data["duid"] == duid].copy()
+            if duid_constraints.empty:
+                duid_constraints = None
+
         generate_generator_json(
             duid, metadata, monthly, mlf, price_dist,
             draft_mlf=d_mlf, draft_fy_label=draft_fy_label,
-            fcas_monthly=fcas_monthly, daily_data=daily, output_dir=gen_dir,
+            fcas_monthly=fcas_monthly, daily_data=daily,
+            constraint_data=duid_constraints, output_dir=gen_dir,
         )
         count += 1
 

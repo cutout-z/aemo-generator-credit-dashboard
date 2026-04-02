@@ -44,6 +44,9 @@ jobs:
             data/monthly_aggregates.feather
             data/generators.feather
             data/mlf_history.feather
+            data/constraint_aggregates.feather
+            data/gencondata.feather
+            data/spdcp_constraint.feather
           key: gen-credit-data-${{ github.run_number }}
           restore-keys: gen-credit-data-
 

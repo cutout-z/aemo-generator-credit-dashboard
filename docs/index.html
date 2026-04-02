@@ -622,7 +622,7 @@
                     <div class="tooltip-title">Methodology</div>
                     <div class="tooltip-formula">Curtailment % = 1 − (SCADA / UIGF)</div>
                     Compares actual output to AEMO's unconstrained intermittent generation forecast (UIGF) from DISPATCHLOAD.
-                    <div class="tooltip-caveat">Caveat: does not distinguish grid curtailment from mechanical downtime. INTERMITTENT_GEN_SCADA quality flags (available from Aug 2024) can separate the two but are not yet incorporated.</div>
+                    <div class="tooltip-caveat">From Aug 2024: split into grid curtailment (Good quality, output below availability) vs mechanical (non-Good quality flags). Pre-Aug 2024: total only.</div>
                 </div>
             </div>
             <div id="chartCurtailment"><div class="placeholder">No data yet</div></div>
@@ -695,6 +695,18 @@
                 </div>
             </div>
             <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
+        </div>
+        <div class="chart-panel full-width" id="panelConstraints" style="display:none;">
+            <div class="chart-title-wrap">
+                <h3>Binding Network Constraints</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    Maps generator connection point to network constraints via SPDCONNECTIONPOINTCONSTRAINT, then counts hours each constraint was binding (marginal value &gt; 0) from DISPATCHCONSTRAINT.
+                    <div class="tooltip-caveat">~20% of generators lack connection point data. Constraint mapping is approximate.</div>
+                </div>
+            </div>
+            <div id="chartConstraintsBar"><div class="placeholder">No constraint data</div></div>
+            <div id="chartConstraintsHeatmap" style="margin-top: 8px;"></div>
         </div>
     </div>
 </div>
@@ -1070,26 +1082,59 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
-    // Curtailment chart
+    // Curtailment chart — stacked grid/mechanical when available, total otherwise
     if (monthly && monthly.curtailment_pct) {
-        const curtTraces = [{
-            x: fmtMonths,
-            y: monthly.curtailment_pct,
-            type: 'scatter',
-            fill: 'tozeroy',
-            line: { color: '#f97316', width: 2 },
-            fillcolor: 'rgba(249, 115, 22, 0.2)',
-            hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
-            name: 'Grid Curtailment',
-            showlegend: false,
-        }];
-        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
-        if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
+        const curtTraces = [];
+        const hasGridSplit = monthly.grid_curtailment_pct && monthly.grid_curtailment_pct.some(v => v != null);
+
+        if (hasGridSplit) {
+            curtTraces.push({
+                x: fmtMonths,
+                y: monthly.grid_curtailment_pct,
+                type: 'bar',
+                name: 'Grid Curtailment',
+                marker: { color: '#f97316' },
+                hovertemplate: '%{x}<br>Grid: %{y:.1%}<extra></extra>',
+            });
+            curtTraces.push({
+                x: fmtMonths,
+                y: monthly.mechanical_curtailment_pct,
+                type: 'bar',
+                name: 'Mechanical',
+                marker: { color: '#ef4444' },
+                hovertemplate: '%{x}<br>Mechanical: %{y:.1%}<extra></extra>',
+            });
+            // Total as dotted line overlay
+            curtTraces.push({
+                x: fmtMonths,
+                y: monthly.curtailment_pct,
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#ffffff', width: 1.5, dash: 'dot' },
+                name: 'Total',
+                hovertemplate: '%{x}<br>Total: %{y:.1%}<extra></extra>',
+            });
+        } else {
+            curtTraces.push({
+                x: fmtMonths,
+                y: monthly.curtailment_pct,
+                type: 'scatter',
+                fill: 'tozeroy',
+                line: { color: '#f97316', width: 2 },
+                fillcolor: 'rgba(249, 115, 22, 0.2)',
+                hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
+                name: 'Total Curtailment',
+            });
+            const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
+            if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
+        }
+
         Plotly.newPlot('chartCurtailment', curtTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Curtailment %', tickformat: '.0%' },
-            showlegend: !!curtRolling,
+            barmode: hasGridSplit ? 'stack' : undefined,
+            showlegend: true,
             legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     }
@@ -1434,6 +1479,55 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     } else if (dailyCFPanel) {
         dailyCFPanel.style.display = 'none';
+    }
+
+    // Binding network constraints
+    const constraintPanel = document.getElementById('panelConstraints');
+    if (data.constraints && data.constraints.top_constraints && data.constraints.top_constraints.length > 0) {
+        constraintPanel.style.display = 'block';
+        const tc = data.constraints.top_constraints;
+
+        // Horizontal bar chart — top constraints by hours bound
+        Plotly.newPlot('chartConstraintsBar', [{
+            y: tc.map(c => c.id),
+            x: tc.map(c => c.total_hours),
+            type: 'bar',
+            orientation: 'h',
+            marker: { color: '#4a9eff' },
+            text: tc.map(c => c.description ? c.description.substring(0, 60) : ''),
+            hovertemplate: '%{y}<br>%{text}<br>%{x:.1f} hours bound<extra></extra>',
+            textposition: 'none',
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            height: Math.max(300, tc.length * 28),
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, automargin: true, type: 'category' },
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: 'Hours Bound' },
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 160 },
+        }, PLOTLY_CONFIG);
+
+        // Monthly heatmap
+        const hm = data.constraints.heatmap;
+        if (hm && hm.months && hm.months.length > 0) {
+            const constraintIds = Object.keys(hm.constraints);
+            Plotly.newPlot('chartConstraintsHeatmap', [{
+                x: hm.months.map(fmtMonth),
+                y: constraintIds,
+                z: constraintIds.map(id => hm.constraints[id]),
+                type: 'heatmap',
+                colorscale: [[0, '#1a1d27'], [0.5, '#f97316'], [1, '#ef4444']],
+                hovertemplate: '%{y}<br>%{x}<br>%{z:.1f} hours<extra></extra>',
+                showscale: true,
+                colorbar: { title: 'Hours', titleside: 'right', len: 0.8 },
+            }], {
+                ...PLOTLY_LAYOUT_BASE,
+                height: Math.max(250, constraintIds.length * 22),
+                yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, automargin: true, type: 'category' },
+                xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
+                margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 160 },
+            }, PLOTLY_CONFIG);
+        }
+    } else if (constraintPanel) {
+        constraintPanel.style.display = 'none';
     }
 }
 

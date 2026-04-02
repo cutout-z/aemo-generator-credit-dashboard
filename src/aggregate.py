@@ -30,6 +30,7 @@ def aggregate_month(
     mlf_lookup: dict[str, float] | None,
     year: int,
     month: int,
+    intermittent_scada: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Aggregate a single month of 5-minute data to per-generator monthly metrics.
 
@@ -102,6 +103,8 @@ def aggregate_month(
         # Curtailment (solar/wind only)
         curtailment = None
         econ_curtailment = None
+        grid_curtailment = None
+        mech_curtailment = None
         if fuel in config.CURTAILMENT_FUEL_TYPES:
             avail_valid = group.dropna(subset=["AVAILABILITY"])
             if not avail_valid.empty:
@@ -109,6 +112,40 @@ def aggregate_month(
                 total_avail = avail_valid["AVAILABILITY"].clip(lower=0).sum()
                 if total_avail > 0:
                     curtailment = max(0.0, 1.0 - total_actual / total_avail)
+
+            # Split curtailment using INTERMITTENT_GEN_SCADA quality flags
+            if intermittent_scada is not None and not intermittent_scada.empty:
+                duid_int = intermittent_scada[intermittent_scada["DUID"] == duid]
+                if not duid_int.empty:
+                    # Pivot to get ELAV (availability) and LOCL (local output) per interval
+                    elav = duid_int[duid_int["SCADA_TYPE"] == "ELAV"]
+                    locl = duid_int[duid_int["SCADA_TYPE"] == "LOCL"]
+                    if not elav.empty and not locl.empty:
+                        # Merge on timestamp
+                        merged_int = pd.merge(
+                            elav[["SETTLEMENTDATE", "SCADA_VALUE", "SCADA_QUALITY"]].rename(
+                                columns={"SCADA_VALUE": "ELAV", "SCADA_QUALITY": "QUALITY"}
+                            ),
+                            locl[["SETTLEMENTDATE", "SCADA_VALUE"]].rename(
+                                columns={"SCADA_VALUE": "LOCL"}
+                            ),
+                            on="SETTLEMENTDATE",
+                            how="inner",
+                        )
+                        if not merged_int.empty:
+                            total_elav = merged_int["ELAV"].clip(lower=0).sum()
+                            if total_elav > 0:
+                                # Good quality + LOCL < ELAV → grid curtailment
+                                good = merged_int[merged_int["QUALITY"] == "Good"]
+                                if not good.empty:
+                                    grid_forgone = (good["ELAV"].clip(lower=0) - good["LOCL"].clip(lower=0)).clip(lower=0).sum()
+                                    grid_curtailment = grid_forgone / total_elav
+
+                                # Non-Good quality → mechanical/comms issues
+                                bad = merged_int[merged_int["QUALITY"] != "Good"]
+                                if not bad.empty:
+                                    mech_forgone = bad["ELAV"].clip(lower=0).sum() - bad["LOCL"].clip(lower=0).sum()
+                                    mech_curtailment = max(0.0, mech_forgone) / total_elav
 
             # Economic curtailment: generation forgone during negative price periods
             # Intervals where AVAILABILITY > 0 AND RRP < 0 AND SCADA is low
@@ -146,6 +183,8 @@ def aggregate_month(
             "revenue_aud": round(revenue, 0),
             "capacity_factor": round(cap_factor, 4) if cap_factor is not None else None,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
+            "grid_curtailment_pct": round(grid_curtailment, 4) if grid_curtailment is not None else None,
+            "mechanical_curtailment_pct": round(mech_curtailment, 4) if mech_curtailment is not None else None,
             "econ_curtailment_pct": round(econ_curtailment, 4) if econ_curtailment is not None else None,
             "captured_price": round(captured, 2) if captured is not None else None,
             "avg_rrp": round(avg_rrp, 2) if avg_rrp is not None else None,
@@ -285,4 +324,79 @@ def aggregate_fcas_prices(
         if region_fcas:
             result[region] = region_fcas
 
+    return result
+
+
+def aggregate_constraints_month(
+    dispatchconstraint: pd.DataFrame,
+    spdcp: pd.DataFrame,
+    gencondata: pd.DataFrame,
+    cp_map: dict[str, str],
+    year: int,
+    month: int,
+) -> pd.DataFrame:
+    """Aggregate binding constraint hours per DUID for a single month.
+
+    Args:
+        dispatchconstraint: Binding constraints with SETTLEMENTDATE, CONSTRAINTID, MARGINALVALUE
+        spdcp: Connection point → constraint mapping
+        gencondata: Constraint definitions with descriptions
+        cp_map: DUID → CONNECTIONPOINTID mapping
+        year, month: Period being processed
+
+    Returns:
+        DataFrame with columns: duid, month, constraint_id, description, hours_bound
+    """
+    if dispatchconstraint.empty or spdcp.empty:
+        return pd.DataFrame()
+
+    month_label = f"{year}-{month:02d}"
+
+    # Build connection point → set of constraint IDs
+    cp_to_constraints = spdcp.groupby("CONNECTIONPOINTID")["GENCONID"].apply(set).to_dict()
+
+    # Build constraint ID → description lookup
+    desc_lookup = {}
+    if not gencondata.empty:
+        desc_lookup = gencondata.set_index("GENCONID")["DESCRIPTION"].to_dict()
+
+    # Get unique constraint IDs that were binding
+    binding_ids = set(dispatchconstraint["CONSTRAINTID"].unique())
+
+    rows = []
+    for duid, cp in cp_map.items():
+        if not cp:
+            continue
+        # Find constraints associated with this connection point
+        duid_constraints = cp_to_constraints.get(cp, set())
+        if not duid_constraints:
+            continue
+
+        # Find which of those constraints were actually binding
+        relevant = duid_constraints & binding_ids
+        if not relevant:
+            continue
+
+        # Count binding intervals per constraint
+        binding_rows = dispatchconstraint[
+            dispatchconstraint["CONSTRAINTID"].isin(relevant)
+        ]
+        for cid, cgroup in binding_rows.groupby("CONSTRAINTID"):
+            intervals = len(cgroup)
+            hours = intervals / 12.0  # 5-min intervals
+            desc = desc_lookup.get(cid, "")
+            rows.append({
+                "duid": duid,
+                "month": month_label,
+                "constraint_id": cid,
+                "description": str(desc)[:200] if desc else "",
+                "hours_bound": round(hours, 1),
+            })
+
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        logger.info(
+            f"Constraints {month_label}: {len(result)} DUID×constraint pairs, "
+            f"{result['duid'].nunique()} DUIDs affected"
+        )
     return result

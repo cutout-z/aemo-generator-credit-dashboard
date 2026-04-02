@@ -48,6 +48,12 @@ FUEL_TYPE_MAP = {
 # Fuel types where curtailment analysis is meaningful
 CURTAILMENT_FUEL_TYPES = {"Solar", "Wind"}
 
+# INTERMITTENT_GEN_SCADA availability start (year, month)
+INTERMITTENT_SCADA_START = (2024, 8)
+
+# Binding constraints: how many months of history to fetch
+CONSTRAINTS_HISTORY_MONTHS = 24
+
 # Fuel types eligible for LGC creation (1 LGC ≈ 1 MWh)
 LGC_ELIGIBLE_FUEL_TYPES = {"Solar", "Wind", "Hydro", "Other Renewable"}
 

@@ -10,9 +10,17 @@ from pathlib import Path
 import pandas as pd
 
 from . import config
-from .aggregate import aggregate_fcas_prices, aggregate_month, aggregate_month_daily, build_mlf_lookup
+from .aggregate import (
+    aggregate_constraints_month, aggregate_fcas_prices,
+    aggregate_month, aggregate_month_daily, build_mlf_lookup,
+)
+from .download_constraints import (
+    fetch_binding_constraints_month, fetch_gencondata,
+    fetch_spdconnectionpointconstraint,
+)
 from .download_dispatch import fetch_dispatch_price_month
 from .download_draft_mlf import fetch_draft_mlfs, get_draft_fy
+from .download_intermittent import fetch_intermittent_month
 from .download_metadata import fetch_generators
 from .download_mlf import fetch_connection_points, fetch_mlf_history
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
@@ -129,13 +137,24 @@ def main():
 
                 dispatchload = fetch_dispatchload_month(year, month, str(data_dir), rebuild=args.full_refresh)
 
+                # INTERMITTENT_GEN_SCADA for curtailment splitting (Aug 2024+)
+                intermittent = None
+                if (year, month) >= config.INTERMITTENT_SCADA_START:
+                    try:
+                        intermittent = fetch_intermittent_month(
+                            year, month, str(data_dir), rebuild=args.full_refresh
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not fetch INTERMITTENT_GEN_SCADA for {month_label}: {e}")
+
                 # Build MLF lookup for this month's FY
                 fy_start = year if month >= 7 else year - 1
                 mlf_lookup = build_mlf_lookup(mlf_history, fy_start)
 
                 # Aggregate
                 monthly = aggregate_month(
-                    scada, prices, dispatchload, generators, mlf_lookup, year, month
+                    scada, prices, dispatchload, generators, mlf_lookup, year, month,
+                    intermittent_scada=intermittent,
                 )
                 if not monthly.empty:
                     new_rows.append(monthly)
@@ -202,6 +221,62 @@ def main():
         else:
             all_daily = pd.DataFrame()
 
+    # Step 3b: Binding constraint aggregation
+    constraint_path = data_dir / "constraint_aggregates.feather"
+    all_constraints = pd.DataFrame()
+    if not args.skip_scada and not args.metadata_only:
+        logger.info("=== Step 3b: Binding constraint aggregation ===")
+        try:
+            gencondata = fetch_gencondata(str(data_dir), rebuild=args.full_refresh)
+            spdcp = fetch_spdconnectionpointconstraint(str(data_dir), rebuild=args.full_refresh)
+
+            if not gencondata.empty and not spdcp.empty:
+                # Determine months to process for constraints
+                constraint_months = _months_to_process(
+                    config.CONSTRAINTS_HISTORY_MONTHS, args.full_refresh
+                )
+                if not args.full_refresh:
+                    constraint_months = constraint_months[-config.DEFAULT_MONTHS_BACK:]
+
+                constraint_rows = []
+                for year, month in constraint_months:
+                    try:
+                        dc = fetch_binding_constraints_month(
+                            year, month, str(data_dir), rebuild=args.full_refresh
+                        )
+                        if not dc.empty:
+                            mc = aggregate_constraints_month(
+                                dc, spdcp, gencondata, cp_map, year, month
+                            )
+                            if not mc.empty:
+                                constraint_rows.append(mc)
+                    except Exception as e:
+                        logger.warning(f"Constraint processing failed for {year}-{month:02d}: {e}")
+
+                if constraint_rows:
+                    new_constraints = pd.concat(constraint_rows, ignore_index=True)
+                    if constraint_path.exists() and not args.full_refresh:
+                        existing_constraints = pd.read_feather(constraint_path)
+                        reprocessed = set(new_constraints["month"].unique())
+                        existing_constraints = existing_constraints[
+                            ~existing_constraints["month"].isin(reprocessed)
+                        ]
+                        all_constraints = pd.concat(
+                            [existing_constraints, new_constraints], ignore_index=True
+                        )
+                    else:
+                        all_constraints = new_constraints
+                    all_constraints.to_feather(constraint_path)
+                    logger.info(f"Saved {len(all_constraints)} constraint aggregate rows")
+                elif constraint_path.exists():
+                    all_constraints = pd.read_feather(constraint_path)
+            else:
+                logger.warning("Skipping constraints: GENCONDATA or SPDCP unavailable")
+        except Exception as e:
+            logger.error(f"Constraint aggregation failed: {e}")
+    elif constraint_path.exists():
+        all_constraints = pd.read_feather(constraint_path)
+
     # Step 4: Draft/indicative MLFs for upcoming FY
     logger.info("=== Step 4: Draft MLFs ===")
     draft_mlfs = fetch_draft_mlfs(str(data_dir), force=args.full_refresh)
@@ -217,10 +292,12 @@ def main():
     logger.info("=== Step 5: Generating JSON output ===")
     monthly_agg = all_monthly if not all_monthly.empty else None
     daily_agg = all_daily if not all_daily.empty else None
+    constraint_agg = all_constraints if not all_constraints.empty else None
     count = generate_all(generators, monthly_agg, mlf_history,
                          draft_mlfs=draft_mlfs, draft_fy_label=draft_fy_label,
                          fcas_data=fcas_by_region_month if fcas_by_region_month else None,
-                         daily_aggregates=daily_agg)
+                         daily_aggregates=daily_agg,
+                         constraint_data=constraint_agg)
     logger.info(f"Done. Wrote index + {count} generator files.")
 
 
