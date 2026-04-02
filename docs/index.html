@@ -354,6 +354,11 @@
             font-style: italic;
         }
 
+        /* Hide placeholder once Plotly has rendered in the same container */
+        .plot-container.plotly ~ .placeholder {
+            display: none;
+        }
+
         /* Fullscreen expand button */
         .chart-expand-btn {
             position: absolute;
