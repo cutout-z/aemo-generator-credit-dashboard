@@ -1093,46 +1093,43 @@ function renderCharts(data) {
         const hasGridSplit = gridData && gridData.some(v => v != null);
 
         if (hasGridSplit) {
-            // Stacked bars: grid (green) + mechanical (red)
+            // For months with split data: stacked bars (orange=grid, red=mechanical)
+            // For months without: show total as orange bar
+            // Build per-month arrays that always have a value
+            const gridBars = fmtMonths.map((_, i) => {
+                if (gridData[i] != null) return gridData[i];
+                return monthly.curtailment_pct[i]; // fall back to total
+            });
+            const mechBars = fmtMonths.map((_, i) => {
+                if (gridData[i] != null && mechData) return mechData[i];
+                return 0; // no mechanical when no split data
+            });
+
             curtTraces.push({
                 x: fmtMonths,
-                y: gridData,
+                y: gridBars,
                 type: 'bar',
                 name: 'Grid',
-                marker: { color: '#22c55e' },
+                marker: { color: '#f97316' },
                 hovertemplate: '%{x}<br>Grid: %{y:.1%}<extra></extra>',
             });
-            if (mechData && mechData.some(v => v != null)) {
-                curtTraces.push({
-                    x: fmtMonths,
-                    y: mechData,
-                    type: 'bar',
-                    name: 'Mechanical',
-                    marker: { color: '#ef4444' },
-                    hovertemplate: '%{x}<br>Mechanical: %{y:.1%}<extra></extra>',
-                });
-            }
-            // Total as line on top
             curtTraces.push({
                 x: fmtMonths,
-                y: monthly.curtailment_pct,
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#f97316', width: 2 },
-                name: 'Total',
-                hovertemplate: '%{x}<br>Total: %{y:.1%}<extra></extra>',
+                y: mechBars,
+                type: 'bar',
+                name: 'Mechanical',
+                marker: { color: '#ef4444' },
+                hovertemplate: '%{x}<br>Mechanical: %{y:.1%}<extra></extra>',
             });
         } else {
-            // No split data — show total as filled area
+            // No split data at all — show total as bars
             curtTraces.push({
                 x: fmtMonths,
                 y: monthly.curtailment_pct,
-                type: 'scatter',
-                fill: 'tozeroy',
-                line: { color: '#f97316', width: 2 },
-                fillcolor: 'rgba(249, 115, 22, 0.2)',
-                hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
+                type: 'bar',
                 name: 'Total Curtailment',
+                marker: { color: '#f97316' },
+                hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
             });
         }
 
