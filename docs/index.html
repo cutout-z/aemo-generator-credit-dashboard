@@ -1085,39 +1085,22 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
-    // Curtailment chart — always show total as area, overlay grid/mechanical bars where available
+    // Curtailment chart — stacked bars for grid/mechanical, total line overlay
     if (monthly && monthly.curtailment_pct) {
         const curtTraces = [];
         const gridData = monthly.grid_curtailment_pct;
         const mechData = monthly.mechanical_curtailment_pct;
         const hasGridSplit = gridData && gridData.some(v => v != null);
 
-        // Total curtailment as area (always shown)
-        curtTraces.push({
-            x: fmtMonths,
-            y: monthly.curtailment_pct,
-            type: 'scatter',
-            fill: 'tozeroy',
-            line: { color: '#f97316', width: 2 },
-            fillcolor: 'rgba(249, 115, 22, 0.2)',
-            hovertemplate: '%{x}<br>Total: %{y:.1%}<extra></extra>',
-            name: 'Total Curtailment',
-        });
-
-        // Rolling average
-        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
-        if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
-
-        // Overlay grid/mechanical bars for months that have split data
         if (hasGridSplit) {
+            // Stacked bars: grid (green) + mechanical (red)
             curtTraces.push({
                 x: fmtMonths,
                 y: gridData,
                 type: 'bar',
-                name: 'Grid (from Aug 2024)',
-                marker: { color: 'rgba(34, 197, 94, 0.7)' },
+                name: 'Grid',
+                marker: { color: '#22c55e' },
                 hovertemplate: '%{x}<br>Grid: %{y:.1%}<extra></extra>',
-                width: 0.6,
             });
             if (mechData && mechData.some(v => v != null)) {
                 curtTraces.push({
@@ -1125,12 +1108,37 @@ function renderCharts(data) {
                     y: mechData,
                     type: 'bar',
                     name: 'Mechanical',
-                    marker: { color: 'rgba(239, 68, 68, 0.7)' },
+                    marker: { color: '#ef4444' },
                     hovertemplate: '%{x}<br>Mechanical: %{y:.1%}<extra></extra>',
-                    width: 0.6,
                 });
             }
+            // Total as line on top
+            curtTraces.push({
+                x: fmtMonths,
+                y: monthly.curtailment_pct,
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#f97316', width: 2 },
+                name: 'Total',
+                hovertemplate: '%{x}<br>Total: %{y:.1%}<extra></extra>',
+            });
+        } else {
+            // No split data — show total as filled area
+            curtTraces.push({
+                x: fmtMonths,
+                y: monthly.curtailment_pct,
+                type: 'scatter',
+                fill: 'tozeroy',
+                line: { color: '#f97316', width: 2 },
+                fillcolor: 'rgba(249, 115, 22, 0.2)',
+                hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
+                name: 'Total Curtailment',
+            });
         }
+
+        // Rolling average
+        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
+        if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
 
         Plotly.newPlot('chartCurtailment', curtTraces, {
             ...PLOTLY_LAYOUT_BASE,
