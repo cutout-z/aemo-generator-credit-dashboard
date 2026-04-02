@@ -81,6 +81,7 @@ def _parse_registration_list(xls_path: Path) -> pd.DataFrame:
     df = df.rename(columns=col_map)
     df = df.dropna(subset=["DUID"])
     df["DUID"] = df["DUID"].astype(str).str.strip()
+    df = df[df["DUID"] != "-"]  # Exclude placeholder DUIDs (e.g. Portland Wind Farm, Callide)
 
     # Filter to generators and bidirectional units (exclude pure loads)
     if "DISPATCH_TYPE" in df.columns:

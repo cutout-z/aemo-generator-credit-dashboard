@@ -80,7 +80,13 @@ def fetch_draft_mlfs(cache_dir: str, force: bool = False) -> dict[str, float] | 
                     time.sleep(wait)
                 else:
                     logger.warning(f"Could not download draft MLFs: {e}")
-                    return None
+                    if xlsx_path.exists():
+                        logger.info("Falling back to previously cached draft MLFs")
+                    else:
+                        logger.warning(
+                            f"No cached file available. Manually download from AEMO and save to: {xlsx_path}"
+                        )
+                        return None
 
     return _parse_draft_excel(xlsx_path, fy_label)
 

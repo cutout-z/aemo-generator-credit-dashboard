@@ -60,6 +60,9 @@ jobs:
           fi
           python -m src.main $ARGS
 
+      - name: Validate outputs
+        run: python -m pytest tests/test_outputs.py -v
+
       - name: Commit and push updated outputs
         run: |
           git config user.name "github-actions[bot]"
