@@ -622,7 +622,7 @@
                     <div class="tooltip-title">Methodology</div>
                     <div class="tooltip-formula">Curtailment % = 1 − (SCADA / UIGF)</div>
                     Compares actual output to AEMO's unconstrained intermittent generation forecast (UIGF) from DISPATCHLOAD.
-                    <div class="tooltip-caveat">From Aug 2024: split into grid curtailment (Good quality, output below availability) vs mechanical (non-Good quality flags). Pre-Aug 2024: total only.</div>
+                    <div class="tooltip-caveat">From Dec 2024: grid curtailment only (using INTERMITTENT_GEN_SCADA quality flags). Pre-Dec 2024: includes both grid curtailment and mechanical outages as they cannot be separated.</div>
                 </div>
             </div>
             <div id="chartCurtailment"><div class="placeholder">No data yet</div></div>
@@ -638,6 +638,18 @@
                 </div>
             </div>
             <div id="chartEconCurtailment"><div class="placeholder">No data yet</div></div>
+        </div>
+        <div class="chart-panel" id="panelMechOutage" style="display:none;">
+            <div class="chart-title-wrap">
+                <h3>Mechanical Outage</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">Outage % = (non-Good quality intervals / total intervals) &times; total curtailment</div>
+                    Proportion of curtailment attributable to mechanical/comms issues rather than grid constraints, derived from INTERMITTENT_GEN_SCADA quality flags (Uninitialised, RemotelySuspect, NotInService, etc.).
+                    <div class="tooltip-caveat">Available from Dec 2024 only. Does not distinguish planned maintenance from forced outages.</div>
+                </div>
+            </div>
+            <div id="chartMechOutage"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel">
             <div class="chart-title-wrap">
@@ -1093,43 +1105,33 @@ function renderCharts(data) {
         const hasGridSplit = gridData && gridData.some(v => v != null);
 
         if (hasGridSplit) {
-            // For months with split data: stacked bars (orange=grid, red=mechanical)
-            // For months without: show total as orange bar
-            // Build per-month arrays that always have a value
+            // Grid curtailment only; fall back to total for months without split data
             const gridBars = fmtMonths.map((_, i) => {
                 if (gridData[i] != null) return gridData[i];
-                return monthly.curtailment_pct[i]; // fall back to total
+                return monthly.curtailment_pct[i]; // total includes mechanical pre-Dec 2024
             });
-            const mechBars = fmtMonths.map((_, i) => {
-                if (gridData[i] != null && mechData) return mechData[i];
-                return 0; // no mechanical when no split data
-            });
-
             curtTraces.push({
                 x: fmtMonths,
                 y: gridBars,
                 type: 'bar',
-                name: 'Grid',
-                marker: { color: '#f97316' },
-                hovertemplate: '%{x}<br>Grid: %{y:.1%}<extra></extra>',
-            });
-            curtTraces.push({
-                x: fmtMonths,
-                y: mechBars,
-                type: 'bar',
-                name: 'Mechanical',
-                marker: { color: '#ef4444' },
-                hovertemplate: '%{x}<br>Mechanical: %{y:.1%}<extra></extra>',
+                name: 'Grid Curtailment',
+                marker: {
+                    color: fmtMonths.map((_, i) => gridData[i] != null ? '#f97316' : 'rgba(249, 115, 22, 0.5)'),
+                },
+                hovertemplate: fmtMonths.map((_, i) =>
+                    gridData[i] != null
+                        ? '%{x}<br>Grid: %{y:.1%}<extra></extra>'
+                        : '%{x}<br>Total (incl. outages): %{y:.1%}<extra></extra>'
+                ),
             });
         } else {
-            // No split data at all — show total as bars
             curtTraces.push({
                 x: fmtMonths,
                 y: monthly.curtailment_pct,
                 type: 'bar',
-                name: 'Total Curtailment',
-                marker: { color: '#f97316' },
-                hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
+                name: 'Total (incl. outages)',
+                marker: { color: 'rgba(249, 115, 22, 0.5)' },
+                hovertemplate: '%{x}<br>Total (incl. outages): %{y:.1%}<extra></extra>',
             });
         }
 
@@ -1173,6 +1175,38 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     } else if (econPanel) {
         econPanel.style.display = 'none';
+    }
+
+    // Mechanical outage chart (separate from curtailment, Dec 2024+ only)
+    const mechPanel = document.getElementById('panelMechOutage');
+    const mechData = monthly && monthly.mechanical_curtailment_pct;
+    const hasMechData = mechData && mechData.some(v => v != null && v > 0);
+    if (hasMechData) {
+        mechPanel.style.display = 'block';
+        // Only show months that have data
+        const mechMonths = [];
+        const mechValues = [];
+        fmtMonths.forEach((m, i) => {
+            if (mechData[i] != null) {
+                mechMonths.push(m);
+                mechValues.push(mechData[i]);
+            }
+        });
+        Plotly.newPlot('chartMechOutage', [{
+            x: mechMonths,
+            y: mechValues,
+            type: 'bar',
+            marker: { color: '#ef4444' },
+            hovertemplate: '%{x}<br>Outage: %{y:.1%}<extra></extra>',
+            name: 'Mechanical Outage',
+            showlegend: false,
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Outage %', tickformat: '.1%' },
+        }, PLOTLY_CONFIG);
+    } else if (mechPanel) {
+        mechPanel.style.display = 'none';
     }
 
     // MLF trajectory (always shows all years — annual, not monthly)
