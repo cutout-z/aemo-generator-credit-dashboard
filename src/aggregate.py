@@ -113,39 +113,23 @@ def aggregate_month(
                 if total_avail > 0:
                     curtailment = max(0.0, 1.0 - total_actual / total_avail)
 
-            # Split curtailment using INTERMITTENT_GEN_SCADA quality flags
-            if intermittent_scada is not None and not intermittent_scada.empty:
+            # Split curtailment using INTERMITTENT_GEN_SCADA quality flags.
+            # We apportion the total curtailment (from DISPATCHLOAD) into grid
+            # vs mechanical based on the quality flag ratio from INTERMITTENT_GEN_SCADA.
+            if curtailment is not None and curtailment > 0 and intermittent_scada is not None and not intermittent_scada.empty:
                 duid_int = intermittent_scada[intermittent_scada["DUID"] == duid]
                 if not duid_int.empty:
-                    # Pivot to get ELAV (availability) and LOCL (local output) per interval
                     elav = duid_int[duid_int["SCADA_TYPE"] == "ELAV"]
-                    locl = duid_int[duid_int["SCADA_TYPE"] == "LOCL"]
-                    if not elav.empty and not locl.empty:
-                        # Merge on timestamp
-                        merged_int = pd.merge(
-                            elav[["SETTLEMENTDATE", "SCADA_VALUE", "SCADA_QUALITY"]].rename(
-                                columns={"SCADA_VALUE": "ELAV", "SCADA_QUALITY": "QUALITY"}
-                            ),
-                            locl[["SETTLEMENTDATE", "SCADA_VALUE"]].rename(
-                                columns={"SCADA_VALUE": "LOCL"}
-                            ),
-                            on="SETTLEMENTDATE",
-                            how="inner",
-                        )
-                        if not merged_int.empty:
-                            total_elav = merged_int["ELAV"].clip(lower=0).sum()
-                            if total_elav > 0:
-                                # Good quality + LOCL < ELAV → grid curtailment
-                                good = merged_int[merged_int["QUALITY"] == "Good"]
-                                if not good.empty:
-                                    grid_forgone = (good["ELAV"].clip(lower=0) - good["LOCL"].clip(lower=0)).clip(lower=0).sum()
-                                    grid_curtailment = grid_forgone / total_elav
-
-                                # Non-Good quality → mechanical/comms issues
-                                bad = merged_int[merged_int["QUALITY"] != "Good"]
-                                if not bad.empty:
-                                    mech_forgone = bad["ELAV"].clip(lower=0).sum() - bad["LOCL"].clip(lower=0).sum()
-                                    mech_curtailment = max(0.0, mech_forgone) / total_elav
+                    if not elav.empty:
+                        total_intervals = len(elav)
+                        good_intervals = len(elav[elav["SCADA_QUALITY"] == "Good"])
+                        bad_intervals = total_intervals - good_intervals
+                        if total_intervals > 0:
+                            # Good quality = grid is constraining output
+                            # Bad quality = mechanical/comms issue
+                            good_ratio = good_intervals / total_intervals
+                            grid_curtailment = curtailment * good_ratio
+                            mech_curtailment = curtailment * (1 - good_ratio)
 
             # Economic curtailment: generation forgone during negative price periods
             # Intervals where AVAILABILITY > 0 AND RRP < 0 AND SCADA is low
