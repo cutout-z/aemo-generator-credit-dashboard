@@ -581,7 +581,7 @@
     <div class="chart-grid" id="chartGrid">
         <div class="chart-panel">
             <div class="chart-title-wrap">
-                <h3>Potential Revenue (100% merchant basis)</h3>
+                <h3>Potential Black Revenue (100% merchant basis)</h3>
                 <div class="chart-tooltip">
                     <div class="tooltip-title">Methodology</div>
                     <div class="tooltip-formula">Revenue = Σ (MWh_5min × RRP × MLF)</div>
@@ -974,12 +974,15 @@ function fmtMonth(label) {
 function rolling12(arr) {
     if (!arr || arr.length < 12) return null;
     const result = new Array(arr.length).fill(null);
-    for (let i = 11; i < arr.length; i++) {
+    // Use a shrinking window at the start: for index i, average over min(12, i+1) months
+    for (let i = 0; i < arr.length; i++) {
+        const windowStart = Math.max(0, i - 11);
         let sum = 0, count = 0;
-        for (let j = i - 11; j <= i; j++) {
+        for (let j = windowStart; j <= i; j++) {
             if (arr[j] != null && !isNaN(arr[j])) { sum += arr[j]; count++; }
         }
-        result[i] = count >= 6 ? sum / count : null; // need at least 6 months of data
+        const windowSize = i - windowStart + 1;
+        result[i] = count >= Math.min(6, windowSize) ? sum / count : null;
     }
     return result;
 }
@@ -1321,9 +1324,12 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
-    // FCAS regional price context
+    // FCAS regional price context — only show if enough non-null data points
     const fcasPanel = document.getElementById('panelFCAS');
-    if (data.fcas && data.fcas.services) {
+    const fcasHasData = data.fcas && data.fcas.services && Object.values(data.fcas.services).some(
+        vals => vals.filter(v => v != null).length >= 3
+    );
+    if (fcasHasData) {
         fcasPanel.style.display = 'block';
         const fcasColors = [
             '#ef4444', '#f97316', '#eab308', '#22c55e',
