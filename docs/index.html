@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AEMO Generator Credit Dashboard</title>
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <style>
         :root {
             --bg: #0f1117;
@@ -496,6 +497,39 @@
             display: block;
         }
 
+        /* Download buttons */
+        .download-buttons {
+            display: flex;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .download-btn {
+            padding: 6px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-dim);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .download-btn:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        .download-btn svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+
         /* Responsive */
         @media (max-width: 900px) {
             .chart-grid { grid-template-columns: 1fr; }
@@ -538,7 +572,19 @@
 
     <!-- Identity card -->
     <div class="identity-card" id="identityCard">
-        <h2 id="genName"></h2>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <h2 id="genName" style="flex:1;min-width:200px;"></h2>
+            <div class="download-buttons" id="downloadButtons" style="display:none;">
+                <button class="download-btn" onclick="downloadCSV()" title="Download monthly data as CSV">
+                    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 3.5L18.5 8H14V3.5zM6 20V4h7v5h5v11H6z"/><path d="M8 15h8v1.5H8z"/><path d="M8 12h8v1.5H8z"/></svg>
+                    CSV
+                </button>
+                <button class="download-btn" onclick="downloadXLSX()" title="Download data as Excel workbook">
+                    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 3.5L18.5 8H14V3.5zM6 20V4h7v5h5v11H6z"/><path d="M8 15h8v1.5H8z"/><path d="M8 12h8v1.5H8z"/></svg>
+                    XLSX
+                </button>
+            </div>
+        </div>
         <div class="identity-meta">
             <div class="meta-item">
                 <span class="label">DUID</span>
@@ -930,6 +976,7 @@ async function selectGenerator(duid) {
     document.getElementById('genTech').textContent = gen.technology;
     document.getElementById('genCapacity').textContent = gen.capacity_mw ? `${gen.capacity_mw} MW` : 'N/A';
     document.getElementById('genConnection').textContent = gen.connection_point;
+    document.getElementById('downloadButtons').style.display = 'flex';
 
     // Hide curtailment panels for non-solar/wind
     const isSolarWind = gen.fuel_category === 'Solar' || gen.fuel_category === 'Wind';
@@ -1778,6 +1825,115 @@ function initResizeHandles() {
 }
 
 initResizeHandles();
+
+// ─── Data Download ────────────────────────────────────────────────────
+function buildMonthlyRows(data) {
+    if (!data || !data.monthly || !data.monthly.months) return [];
+    const m = data.monthly;
+    return m.months.map((month, i) => {
+        const row = {
+            'Month': month,
+            'Generation (MWh)': m.generation_mwh ? m.generation_mwh[i] : null,
+            'Revenue (AUD)': m.revenue_aud ? m.revenue_aud[i] : null,
+            'Capacity Factor': m.capacity_factor ? m.capacity_factor[i] : null,
+            'Captured Price ($/MWh)': m.captured_price ? m.captured_price[i] : null,
+            'Avg Regional RRP ($/MWh)': m.avg_rrp ? m.avg_rrp[i] : null,
+            'Price Capture Ratio': m.price_capture_ratio ? m.price_capture_ratio[i] : null,
+        };
+        if (m.curtailment_pct) row['Total Curtailment'] = m.curtailment_pct[i];
+        if (m.grid_curtailment_pct) row['Grid Curtailment'] = m.grid_curtailment_pct[i];
+        if (m.mechanical_curtailment_pct) row['Mechanical Curtailment'] = m.mechanical_curtailment_pct[i];
+        if (m.econ_curtailment_pct) row['Economic Curtailment'] = m.econ_curtailment_pct[i];
+        return row;
+    });
+}
+
+function buildMLFRows(data) {
+    const rows = [];
+    if (data.mlf_by_duid) {
+        for (const [duid, m] of Object.entries(data.mlf_by_duid)) {
+            m.years.forEach((year, i) => {
+                rows.push({ 'DUID': duid, 'Financial Year': year, 'MLF': m.values[i], 'Type': 'Final' });
+            });
+            if (m.draft_year && m.draft_value != null) {
+                rows.push({ 'DUID': duid, 'Financial Year': m.draft_year, 'MLF': m.draft_value, 'Type': 'Draft' });
+            }
+        }
+    } else if (data.mlf && data.mlf.values) {
+        data.mlf.years.forEach((year, i) => {
+            rows.push({ 'Financial Year': year, 'MLF': data.mlf.values[i], 'Type': 'Final' });
+        });
+        if (data.mlf.draft_year && data.mlf.draft_value != null) {
+            rows.push({ 'Financial Year': data.mlf.draft_year, 'MLF': data.mlf.draft_value, 'Type': 'Draft' });
+        }
+    }
+    return rows;
+}
+
+function buildDailyRows(data) {
+    if (!data.daily || !data.daily.dates) return [];
+    const d = data.daily;
+    return d.dates.map((date, i) => ({
+        'Date': date,
+        'Generation (MWh)': d.generation_mwh ? d.generation_mwh[i] : null,
+        'Capacity Factor': d.capacity_factor ? d.capacity_factor[i] : null,
+    }));
+}
+
+function getExportFilename() {
+    const hash = window.location.hash.replace('#', '');
+    return hash || 'generator';
+}
+
+function downloadCSV() {
+    if (!currentData) return;
+    const rows = buildMonthlyRows(currentData);
+    if (rows.length === 0) return;
+
+    const headers = Object.keys(rows[0]);
+    const csvLines = [headers.join(',')];
+    rows.forEach(row => {
+        csvLines.push(headers.map(h => {
+            const v = row[h];
+            return v == null ? '' : v;
+        }).join(','));
+    });
+
+    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${getExportFilename()}_monthly.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
+
+function downloadXLSX() {
+    if (!currentData || typeof XLSX === 'undefined') return;
+    const wb = XLSX.utils.book_new();
+
+    // Monthly sheet
+    const monthlyRows = buildMonthlyRows(currentData);
+    if (monthlyRows.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(monthlyRows);
+        XLSX.utils.book_append_sheet(wb, ws, 'Monthly');
+    }
+
+    // MLF sheet
+    const mlfRows = buildMLFRows(currentData);
+    if (mlfRows.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(mlfRows);
+        XLSX.utils.book_append_sheet(wb, ws, 'MLF');
+    }
+
+    // Daily sheet
+    const dailyRows = buildDailyRows(currentData);
+    if (dailyRows.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(dailyRows);
+        XLSX.utils.book_append_sheet(wb, ws, 'Daily');
+    }
+
+    XLSX.writeFile(wb, `${getExportFilename()}_data.xlsx`);
+}
 
 // ─── Start ─────────────────────────────────────────────────────────────
 init();

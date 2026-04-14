@@ -53,7 +53,7 @@ All metrics are computed at monthly granularity from 5-minute interval data.
 | **Generation (MWh)** | `sum(SCADAVALUE) / 12` | 5-min MW readings converted to MWh. Negatives clipped to zero. |
 | **Implied 100% Merchant Revenue (AUD)** | `sum(SCADAVALUE / 12 × RRP × MLF)` | Revenue assuming 100% merchant (no PPA hedge). MLF adjusts for transmission losses. Excludes FCAS and LGC income. |
 | **Capacity Factor (%)** | `Generation_MWh / (Nameplate_MW × Hours_in_Month)` | Ratio of actual to theoretical maximum output. |
-| **Grid Curtailment (%)** | `1 - (Actual_SCADA / Unconstrained_AVAILABILITY)` | Solar and wind only. Measures energy lost to grid constraints using AEMO's UIGF forecast as the unconstrained baseline. **Caveat**: does not distinguish grid curtailment from mechanical downtime (see below). |
+| **Grid Curtailment (%)** | `1 - (Actual_SCADA / Unconstrained_AVAILABILITY)` | Solar and wind only. Total curtailment uses AEMO's UIGF forecast as the unconstrained baseline. From August 2024, split into grid vs. mechanical using `INTERMITTENT_GEN_SCADA` quality flags (see below). |
 | **Estimated Economic Curtailment (%)** | `Forgone generation during RRP < $0 / Total UIGF` | Solar and wind only. Proxy for voluntary bid-off during negative price periods. |
 | **Captured Price (AUD/MWh)** | `sum(SCADAVALUE × RRP) / sum(SCADAVALUE)` | Volume-weighted average price received when actually generating. |
 | **Avg Regional RRP (AUD/MWh)** | `mean(RRP)` | Time-weighted average spot price for the generator's region. |
@@ -71,9 +71,13 @@ All metrics are computed at monthly granularity from 5-minute interval data.
 
 ### Curtailment methodology note
 
-The current grid curtailment calculation uses `1 - (SCADA / AVAILABILITY)` from the DISPATCHLOAD table. This compares actual output to AEMO's unconstrained intermittent generation forecast (UIGF). However, this method **cannot distinguish grid curtailment from mechanical downtime** — a turbine offline for maintenance looks identical to one constrained off by the network.
+Total curtailment is calculated as `1 - (SCADA / AVAILABILITY)` from the DISPATCHLOAD table, comparing actual output to AEMO's unconstrained intermittent generation forecast (UIGF).
 
-AEMO's `INTERMITTENT_GEN_SCADA` table (available from August 2024) includes quality flags that separate mechanical availability from grid constraints, but this data source is not yet incorporated into the pipeline.
+From **August 2024 onwards**, the pipeline uses AEMO's `INTERMITTENT_GEN_SCADA` table to split total curtailment into two components:
+- **Grid curtailment**: intervals where the `SCADA_QUALITY` flag on `ELAV` (electrical availability) records is "Good" — the generator was mechanically available but constrained off by the network
+- **Mechanical curtailment**: intervals where the quality flag is non-Good — indicating mechanical downtime or communications issues
+
+The split is proportional: if 80% of intervals have "Good" quality, then 80% of total curtailment is attributed to grid constraints and 20% to mechanical causes. For months **before August 2024**, only total (unsplit) curtailment is available.
 
 ---
 
@@ -176,7 +180,7 @@ Hosted on **GitHub Pages** from the `docs/` directory. The GitHub Actions workfl
 ## Known Limitations
 
 - **Revenue is 100% merchant assumption**: Does not include PPA, FCAS, or LGC income — useful as a stress-test floor, not actual revenue
-- **Curtailment includes mechanical downtime**: Current method cannot separate grid curtailment from mechanical unavailability (INTERMITTENT_GEN_SCADA quality flags not yet incorporated)
+- **Pre-Aug 2024 curtailment is unsplit**: Before August 2024, curtailment cannot be separated into grid vs. mechanical components (INTERMITTENT_GEN_SCADA data not available)
 - **Economic curtailment is estimated**: Based on RRP < $0 proxy — cannot distinguish voluntary bid-off from AEMO dispatch instructions without bid data
 - **FCAS is regional context only**: Per-generator FCAS enablement and revenue requires participant-only data
 - **LGC volumes are estimated**: 1 MWh ≈ 1 LGC for eligible generators — actual creation may differ due to station use and accreditation
