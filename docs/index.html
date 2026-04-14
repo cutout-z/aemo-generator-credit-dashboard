@@ -649,6 +649,18 @@
             </div>
             <div id="chartGeneration"><div class="placeholder">No data yet</div></div>
         </div>
+        <div class="chart-panel full-width" id="panelDailyCF">
+            <div class="chart-title-wrap">
+                <h3>Generation (Last 12 Months)</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
+                    Bars show daily generation (MWh) colour-coded by capacity factor band: red (&lt;15%), orange (15-30%), yellow (30-50%), green (≥50%). The line overlay shows daily capacity factor (%) on the right axis.
+                    <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
+                </div>
+            </div>
+            <div id="chartDailyCF"><div class="placeholder">No daily data yet — run pipeline to populate</div></div>
+        </div>
         <div class="chart-panel">
             <div class="chart-title-wrap">
                 <h3>Capacity Factor</h3>
@@ -730,18 +742,6 @@
                 </div>
             </div>
             <div id="chartPriceDistribution"><div class="placeholder">No data yet</div></div>
-        </div>
-        <div class="chart-panel full-width" id="panelDailyCF">
-            <div class="chart-title-wrap">
-                <h3>Generation (Last 12 Months)</h3>
-                <div class="chart-tooltip">
-                    <div class="tooltip-title">Methodology</div>
-                    <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
-                    Bars show daily generation (MWh) colour-coded by capacity factor band: red (&lt;15%), orange (15-30%), yellow (30-50%), green (≥50%). The line overlay shows daily capacity factor (%) on the right axis.
-                    <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
-                </div>
-            </div>
-            <div id="chartDailyCF"><div class="placeholder">No daily data yet — run pipeline to populate</div></div>
         </div>
         <div class="chart-panel" id="panelFCAS" style="display:none;">
             <div class="chart-title-wrap">
