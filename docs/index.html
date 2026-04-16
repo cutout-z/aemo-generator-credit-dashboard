@@ -441,7 +441,17 @@
         /* Chart title tooltips */
         .chart-title-wrap {
             position: relative;
-            display: inline-block;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .chart-period {
+            font-size: 11px;
+            color: var(--text-dim);
+            font-weight: 400;
+            white-space: nowrap;
         }
 
         .chart-panel h3 {
@@ -1039,20 +1049,27 @@ function fmtMonthLong(label) {
     return label;
 }
 
-// Return a Plotly annotation array showing the data period (top-right of plot)
-function periodAnnotation(months) {
-    if (!months || months.length === 0) return [];
-    const first = fmtMonthLong(months[0]);
-    const last = fmtMonthLong(months[months.length - 1]);
-    return [{
-        x: 1, y: 1,
-        xref: 'paper', yref: 'paper',
-        text: `${first} – ${last}`,
-        showarrow: false,
-        font: { color: '#8b8fa3', size: 10 },
-        xanchor: 'right',
-        yanchor: 'top',
-    }];
+// Inject (or update) a period label span next to the chart panel's <h3> title
+function setPeriodLabel(chartId, months) {
+    const chartEl = document.getElementById(chartId);
+    if (!chartEl) return;
+    const panel = chartEl.closest('.chart-panel');
+    if (!panel) return;
+    const titleWrap = panel.querySelector('.chart-title-wrap');
+    if (!titleWrap) return;
+    let span = titleWrap.querySelector('.chart-period');
+    if (!span) {
+        span = document.createElement('span');
+        span.className = 'chart-period';
+        const h3 = titleWrap.querySelector('h3');
+        if (h3) h3.insertAdjacentElement('afterend', span);
+        else titleWrap.appendChild(span);
+    }
+    if (months && months.length > 0) {
+        span.textContent = fmtMonthLong(months[0]) + ' – ' + fmtMonthLong(months[months.length - 1]);
+    } else {
+        span.textContent = '';
+    }
 }
 
 // Compute trailing 12-month simple moving average
@@ -1433,8 +1450,8 @@ function renderCharts(data) {
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, type: 'category', autorange: true, dtick: 1 },
             margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 80 },
             height: 500,
-            annotations: periodAnnotation(data.monthly && data.monthly.months),
         }, PLOTLY_CONFIG);
+        setPeriodLabel('chartPriceDistribution', data.monthly && data.monthly.months);
     }
 
     // FCAS regional price context — only show if enough non-null data points
@@ -1623,8 +1640,8 @@ function renderCharts(data) {
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, automargin: true, type: 'category' },
             xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: 'Hours Bound' },
             margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 160 },
-            annotations: periodAnnotation(constraintMonths),
         }, PLOTLY_CONFIG);
+        setPeriodLabel('chartConstraintsBar', constraintMonths);
 
         // Monthly heatmap
         const hm = data.constraints.heatmap;
