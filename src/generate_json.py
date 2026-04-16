@@ -321,16 +321,13 @@ def generate_all(
             fcas_services = {}
             for m in months_list:
                 key = (region, m)
-                if key in fcas_data:
-                    fcas_months.append(m)
-                    for service, price in fcas_data[key].items():
-                        if service not in fcas_services:
-                            fcas_services[service] = []
-                        fcas_services[service].append(price)
-                else:
-                    fcas_months.append(m)
-                    for service in fcas_services:
-                        fcas_services[service].append(None)
+                if key not in fcas_data:
+                    continue  # skip — don't create misaligned None entries
+                fcas_months.append(m)
+                for service, price in fcas_data[key].items():
+                    if service not in fcas_services:
+                        fcas_services[service] = []
+                    fcas_services[service].append(price)
             if fcas_services:
                 fcas_monthly = {"months": fcas_months, "services": fcas_services}
 
@@ -450,19 +447,19 @@ def _generate_station_files(
         # FCAS (same region, so same data as any single DUID)
         if fcas_data and region and "monthly" in doc:
             months_list = doc["monthly"]["months"]
+            fcas_months = []
             fcas_services = {}
             for m in months_list:
                 key = (region, m)
-                if key in fcas_data:
-                    for service, price in fcas_data[key].items():
-                        if service not in fcas_services:
-                            fcas_services[service] = []
-                        fcas_services[service].append(price)
-                else:
-                    for service in fcas_services:
-                        fcas_services[service].append(None)
+                if key not in fcas_data:
+                    continue  # skip — don't create misaligned None entries
+                fcas_months.append(m)
+                for service, price in fcas_data[key].items():
+                    if service not in fcas_services:
+                        fcas_services[service] = []
+                    fcas_services[service].append(price)
             if fcas_services:
-                doc["fcas"] = {"months": months_list, "services": fcas_services}
+                doc["fcas"] = {"months": fcas_months, "services": fcas_services}
 
         # Daily data: sum across station DUIDs
         if daily_aggregates is not None and not daily_aggregates.empty:

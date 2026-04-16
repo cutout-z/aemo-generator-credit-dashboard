@@ -67,7 +67,11 @@ def main():
                         help="Only download metadata and generate index")
     parser.add_argument("--skip-scada", action="store_true",
                         help="Skip SCADA download (use cached aggregates only)")
+    parser.add_argument("--fcas-rebuild", action="store_true",
+                        help="Rebuild FCAS history from cached DISPATCHPRICE files (implies --skip-scada)")
     args = parser.parse_args()
+    if args.fcas_rebuild:
+        args.skip_scada = True
 
     project_root = Path(__file__).resolve().parent.parent
     data_dir = project_root / config.DATA_DIR
@@ -99,11 +103,50 @@ def main():
     daily_path = data_dir / "daily_aggregates.feather"
 
     fcas_by_region_month = {}
+    fcas_cache_path = data_dir / "fcas_aggregates.feather"
 
     if args.skip_scada and aggregates_path.exists():
         logger.info("=== Step 3: Loading cached aggregates (--skip-scada) ===")
         all_monthly = pd.read_feather(aggregates_path)
         all_daily = pd.read_feather(daily_path) if daily_path.exists() else pd.DataFrame()
+        # Load FCAS from cache
+        if fcas_cache_path.exists() and not args.fcas_rebuild:
+            cached_fcas = pd.read_feather(fcas_cache_path)
+            for _, row in cached_fcas.iterrows():
+                key = (row["region"], row["month"])
+                fcas_by_region_month[key] = {
+                    k: float(v) for k, v in row.items()
+                    if k not in ("region", "month") and pd.notna(v)
+                }
+            logger.info(f"Loaded {len(fcas_by_region_month)} region×month FCAS entries from cache")
+
+        # Rebuild FCAS by reading DISPATCHPRICE for all historical months
+        if args.fcas_rebuild:
+            logger.info("=== FCAS rebuild: reading DISPATCHPRICE from cache ===")
+            fcas_months_all = _months_to_process(config.HISTORY_YEARS * 12, full_refresh=False)
+            for year, month in fcas_months_all:
+                month_label = f"{year}-{month:02d}"
+                try:
+                    prices = fetch_dispatch_price_month(
+                        year, month, str(data_dir), rebuild=False
+                    )
+                    if not prices.empty:
+                        fcas_prices = aggregate_fcas_prices(prices, year, month)
+                        for region, services in fcas_prices.items():
+                            fcas_by_region_month[(region, month_label)] = services
+                        logger.info(f"FCAS {month_label}: {len(fcas_prices)} regions")
+                    else:
+                        logger.debug(f"No DISPATCHPRICE cache for {month_label}, skipping")
+                except Exception as e:
+                    logger.warning(f"FCAS rebuild failed for {month_label}: {e}")
+            # Save rebuilt cache
+            if fcas_by_region_month:
+                rebuild_rows = [
+                    {"region": region, "month": month, **services}
+                    for (region, month), services in fcas_by_region_month.items()
+                ]
+                pd.DataFrame(rebuild_rows).to_feather(fcas_cache_path)
+                logger.info(f"Saved rebuilt FCAS cache: {len(fcas_by_region_month)} region×month entries")
     else:
         logger.info("=== Step 3: Monthly SCADA + price aggregation ===")
         months = _months_to_process(args.months_back, args.full_refresh)
@@ -221,10 +264,35 @@ def main():
         else:
             all_daily = pd.DataFrame()
 
+        # Persist FCAS data and reload full history from cache
+        if fcas_by_region_month:
+            new_fcas_rows = [
+                {"region": region, "month": month, **services}
+                for (region, month), services in fcas_by_region_month.items()
+            ]
+            new_fcas = pd.DataFrame(new_fcas_rows)
+            if fcas_cache_path.exists() and not args.full_refresh:
+                old_fcas = pd.read_feather(fcas_cache_path)
+                reprocessed_months = set(new_fcas["month"].unique())
+                old_fcas = old_fcas[~old_fcas["month"].isin(reprocessed_months)]
+                merged_fcas = pd.concat([old_fcas, new_fcas], ignore_index=True)
+            else:
+                merged_fcas = new_fcas
+            merged_fcas.to_feather(fcas_cache_path)
+            # Expand fcas_by_region_month to full cached history
+            fcas_by_region_month = {}
+            for _, row in merged_fcas.iterrows():
+                key = (row["region"], row["month"])
+                fcas_by_region_month[key] = {
+                    k: float(v) for k, v in row.items()
+                    if k not in ("region", "month") and pd.notna(v)
+                }
+            logger.info(f"Saved FCAS cache: {len(fcas_by_region_month)} region×month entries")
+
     # Step 3b: Binding constraint aggregation
     constraint_path = data_dir / "constraint_aggregates.feather"
     all_constraints = pd.DataFrame()
-    if not args.skip_scada and not args.metadata_only:
+    if not args.metadata_only:
         logger.info("=== Step 3b: Binding constraint aggregation ===")
         try:
             gencondata = fetch_gencondata(str(data_dir), rebuild=args.full_refresh)
@@ -236,7 +304,14 @@ def main():
                     config.CONSTRAINTS_HISTORY_MONTHS, args.full_refresh
                 )
                 if not args.full_refresh:
-                    constraint_months = constraint_months[-config.DEFAULT_MONTHS_BACK:]
+                    # If no existing constraint data, backfill the full history window;
+                    # otherwise only reprocess the requested overlap period.
+                    months_back = (
+                        config.CONSTRAINTS_HISTORY_MONTHS
+                        if not constraint_path.exists()
+                        else args.months_back
+                    )
+                    constraint_months = constraint_months[-months_back:]
 
                 constraint_rows = []
                 for year, month in constraint_months:
