@@ -1029,6 +1029,32 @@ function fmtMonth(label) {
     return label;
 }
 
+// Format "2024-10" → "Oct 2024" (full year for period labels)
+function fmtMonthLong(label) {
+    const parts = label.split('-');
+    if (parts.length === 2) {
+        const mi = parseInt(parts[1], 10) - 1;
+        return MONTH_ABBR[mi] + ' ' + parts[0];
+    }
+    return label;
+}
+
+// Return a Plotly annotation array showing the data period (top-right of plot)
+function periodAnnotation(months) {
+    if (!months || months.length === 0) return [];
+    const first = fmtMonthLong(months[0]);
+    const last = fmtMonthLong(months[months.length - 1]);
+    return [{
+        x: 1, y: 1,
+        xref: 'paper', yref: 'paper',
+        text: `${first} – ${last}`,
+        showarrow: false,
+        font: { color: '#8b8fa3', size: 10 },
+        xanchor: 'right',
+        yanchor: 'top',
+    }];
+}
+
 // Compute trailing 12-month simple moving average
 function rolling12(arr) {
     if (!arr || arr.length < 12) return null;
@@ -1407,6 +1433,7 @@ function renderCharts(data) {
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, type: 'category', autorange: true, dtick: 1 },
             margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 80 },
             height: 500,
+            annotations: periodAnnotation(data.monthly && data.monthly.months),
         }, PLOTLY_CONFIG);
     }
 
@@ -1580,6 +1607,7 @@ function renderCharts(data) {
         const tc = data.constraints.top_constraints;
 
         // Horizontal bar chart — top constraints by hours bound
+        const constraintMonths = data.constraints.heatmap && data.constraints.heatmap.months;
         Plotly.newPlot('chartConstraintsBar', [{
             y: tc.map(c => c.id),
             x: tc.map(c => c.total_hours),
@@ -1595,6 +1623,7 @@ function renderCharts(data) {
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, automargin: true, type: 'category' },
             xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: 'Hours Bound' },
             margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 160 },
+            annotations: periodAnnotation(constraintMonths),
         }, PLOTLY_CONFIG);
 
         // Monthly heatmap
