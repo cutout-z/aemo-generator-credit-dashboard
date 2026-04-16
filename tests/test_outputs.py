@@ -206,3 +206,40 @@ class TestJsonOutputs:
                 assert month in json_months, (
                     f"{duid}: month {month} in feather but not in JSON"
                 )
+
+
+# ─── Curtailment FY rollup (consumed by renewable dashboard) ─────────────────
+
+
+class TestCurtailmentByFY:
+    def test_file_exists_and_non_empty(self):
+        path = DOCS_DATA_DIR / "curtailment_by_fy.csv"
+        assert path.exists(), "curtailment_by_fy.csv missing"
+        df = pd.read_csv(path)
+        assert len(df) > 0, "curtailment_by_fy.csv is empty"
+
+    def test_expected_columns(self):
+        df = pd.read_csv(DOCS_DATA_DIR / "curtailment_by_fy.csv")
+        expected = {"duid", "fy_start", "fy_label", "curtailment_pct",
+                    "grid_curtailment_pct", "generation_mwh", "months_covered"}
+        missing = expected - set(df.columns)
+        assert not missing, f"curtailment_by_fy.csv missing columns: {missing}"
+
+    def test_curtailment_in_range(self):
+        df = pd.read_csv(DOCS_DATA_DIR / "curtailment_by_fy.csv")
+        vals = df["curtailment_pct"].dropna()
+        assert (vals >= 0).all() and (vals <= 1).all(), (
+            "curtailment_pct outside [0, 1]"
+        )
+
+    def test_covers_recent_complete_fys(self):
+        """Must publish both of the last 2 complete FYs for >=100 DUIDs each."""
+        import datetime as _dt
+        df = pd.read_csv(DOCS_DATA_DIR / "curtailment_by_fy.csv")
+        now = _dt.datetime.now()
+        current_fy = now.year if now.month >= 7 else now.year - 1
+        for fy_start in (current_fy - 2, current_fy - 1):
+            complete = df[(df["fy_start"] == fy_start) & (df["months_covered"] == 12)]
+            assert len(complete) >= 100, (
+                f"FY{fy_start} has only {len(complete)} complete-12mo DUIDs"
+            )

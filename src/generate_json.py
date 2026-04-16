@@ -185,6 +185,61 @@ def _sanitize(obj):
     return obj
 
 
+def write_curtailment_by_fy(
+    monthly_aggregates: pd.DataFrame,
+    output_dir: str | None = None,
+) -> Path:
+    """Publish consolidated per-DUID per-FY curtailment to docs/data/curtailment_by_fy.csv.
+
+    Consumed by the renewable generator dashboard, which needs FY-aggregated
+    curtailment for its cross-sectional table. Aggregation is generation-weighted
+    across months within each FY so months with more production carry more weight.
+    """
+    out_dir = Path(output_dir or config.DOCS_DATA_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "curtailment_by_fy.csv"
+
+    if monthly_aggregates is None or monthly_aggregates.empty:
+        logger.warning("No monthly aggregates — skipping curtailment_by_fy.csv")
+        return out_path
+
+    df = monthly_aggregates[monthly_aggregates["curtailment_pct"].notna()].copy()
+    if df.empty:
+        logger.warning("No curtailment rows in monthly aggregates")
+        return out_path
+
+    months = df["month"].str.split("-", expand=True).astype(int)
+    df["fy_start"] = months[0].where(months[1] >= 7, months[0] - 1)
+
+    def _weighted(group: pd.DataFrame, col: str) -> float | None:
+        valid = group.dropna(subset=[col])
+        total_gen = valid["generation_mwh"].sum()
+        if valid.empty or total_gen <= 0:
+            return None
+        return float((valid[col] * valid["generation_mwh"]).sum() / total_gen)
+
+    rows = []
+    for (duid, fy_start), group in df.groupby(["duid", "fy_start"]):
+        curt = _weighted(group, "curtailment_pct")
+        if curt is None:
+            continue
+        grid = _weighted(group, "grid_curtailment_pct") if "grid_curtailment_pct" in group.columns else None
+        rows.append({
+            "duid": duid,
+            "fy_start": int(fy_start),
+            "fy_label": f"FY{fy_start % 100:02d}-{(fy_start + 1) % 100:02d}",
+            "curtailment_pct": round(curt, 4),
+            "grid_curtailment_pct": round(grid, 4) if grid is not None else None,
+            "generation_mwh": round(float(group["generation_mwh"].sum()), 0),
+            "months_covered": int(len(group)),
+        })
+
+    result = pd.DataFrame(rows).sort_values(["duid", "fy_start"])
+    result.to_csv(out_path, index=False)
+    logger.info(f"Wrote curtailment_by_fy.csv: {len(result)} DUID×FY rows")
+    return out_path
+
+
 def generate_all(
     generators: pd.DataFrame,
     monthly_aggregates: pd.DataFrame | None = None,
@@ -205,6 +260,10 @@ def generate_all(
 
     # Write index
     generate_index(generators, docs_dir)
+
+    # Publish FY curtailment rollup (consumed by renewable dashboard)
+    if monthly_aggregates is not None and not monthly_aggregates.empty:
+        write_curtailment_by_fy(monthly_aggregates, docs_dir)
 
     # Write per-generator files
     count = 0
