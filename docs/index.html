@@ -559,6 +559,11 @@
         <div class="search-dropdown" id="searchDropdown"></div>
     </div>
     <div class="filters">
+        <select class="filter-select" id="filterMarket">
+            <option value="">All Markets</option>
+            <option value="NEM">NEM</option>
+            <option value="WEM">WEM</option>
+        </select>
         <select class="filter-select" id="filterRegion">
             <option value="">All Regions</option>
         </select>
@@ -576,7 +581,8 @@
     <!-- Welcome state -->
     <div class="welcome" id="welcomeState">
         <h2>Generator Credit Risk Dashboard</h2>
-        <p>Search for any NEM generator by name or DUID to view its credit risk profile: revenue, capacity factor, curtailment, MLF trajectory, and price capture.</p>
+        <p>Search for any NEM or WEM generator by name or DUID to view its credit risk profile: revenue, capacity factor, loss factor trajectory, and price capture.</p>
+        <p style="margin-top:8px;color:var(--text-dim);font-size:13px;">WEM data covers Jul 2012 – Sep 2023 (pre-Reform period). Curtailment and FCAS data are not available for WEM generators.</p>
         <div class="hint">Tip: Use the URL hash to bookmark generators — e.g. #CLRKCWF1</div>
     </div>
 
@@ -814,8 +820,12 @@ async function init() {
 function updateStats() {
     const regions = new Set(generators.map(g => g.region));
     const fuels = new Set(generators.map(g => g.fuel_category));
+    const nemCount = generators.filter(g => (g.market || 'NEM') === 'NEM').length;
+    const wemCount = generators.filter(g => g.market === 'WEM').length;
     document.getElementById('statsBar').innerHTML =
         `<span><strong>${generators.length}</strong> generators</span>` +
+        (nemCount > 0 ? `<span><strong>${nemCount}</strong> NEM</span>` : '') +
+        (wemCount > 0 ? `<span><strong>${wemCount}</strong> WEM</span>` : '') +
         `<span><strong>${regions.size}</strong> regions</span>` +
         `<span><strong>${fuels.size}</strong> fuel types</span>`;
 }
@@ -846,11 +856,13 @@ const searchInput = document.getElementById('searchInput');
 const searchDropdown = document.getElementById('searchDropdown');
 
 function getFilteredGenerators(query) {
+    const marketFilter = document.getElementById('filterMarket').value;
     const regionFilter = document.getElementById('filterRegion').value;
     const fuelFilter = document.getElementById('filterFuel').value;
     const q = query.toLowerCase().trim();
 
     return generators.filter(g => {
+        if (marketFilter && (g.market || 'NEM') !== marketFilter) return false;
         if (regionFilter && g.region !== regionFilter) return false;
         if (fuelFilter && g.fuel_category !== fuelFilter) return false;
         if (!q) return true;
@@ -949,13 +961,11 @@ document.addEventListener('click', (e) => {
 });
 
 // Filter change triggers search refresh
-document.getElementById('filterRegion').addEventListener('change', () => {
-    const results = getFilteredGenerators(searchInput.value);
-    renderDropdown(results);
-});
-document.getElementById('filterFuel').addEventListener('change', () => {
-    const results = getFilteredGenerators(searchInput.value);
-    renderDropdown(results);
+['filterMarket', 'filterRegion', 'filterFuel'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => {
+        const results = getFilteredGenerators(searchInput.value);
+        renderDropdown(results);
+    });
 });
 
 // ─── Generator Selection ───────────────────────────────────────────────
@@ -988,10 +998,34 @@ async function selectGenerator(duid) {
     document.getElementById('genConnection').textContent = gen.connection_point;
     document.getElementById('downloadButtons').style.display = 'flex';
 
-    // Hide curtailment panels for non-solar/wind
+    // Hide curtailment panels for non-solar/wind, and always hide for WEM (no UIGF equivalent)
+    const isWEM = (gen.market || 'NEM') === 'WEM';
     const isSolarWind = gen.fuel_category === 'Solar' || gen.fuel_category === 'Wind';
-    document.getElementById('panelCurtailment').style.display = isSolarWind ? 'block' : 'none';
-    document.getElementById('panelEconCurtailment').style.display = isSolarWind ? 'block' : 'none';
+    document.getElementById('panelCurtailment').style.display = (isSolarWind && !isWEM) ? 'block' : 'none';
+    document.getElementById('panelEconCurtailment').style.display = (isSolarWind && !isWEM) ? 'block' : 'none';
+
+    // Hide binding constraints panel for WEM (no facility-level constraint data)
+    document.getElementById('panelConstraints').style.display = isWEM ? 'none' : '';
+
+    // Rename MLF → TLF panel for WEM generators
+    const mlfPanel = document.getElementById('chartMLF').closest('.chart-panel');
+    const mlfTitle = mlfPanel ? mlfPanel.querySelector('h3') : null;
+    if (mlfTitle) mlfTitle.textContent = isWEM ? 'TLF Trajectory (Annual)' : 'MLF Trajectory (Annual)';
+    const mlfFormula = mlfPanel ? mlfPanel.querySelector('.tooltip-formula') : null;
+    if (mlfFormula) mlfFormula.textContent = isWEM
+        ? 'TLF from AEMO annual loss factor reports per financial year'
+        : 'MLF from AEMO DUDETAILSUMMARY per financial year';
+
+    // Show WEM data-era note
+    const existingNote = document.getElementById('wemDataNote');
+    if (existingNote) existingNote.remove();
+    if (isWEM) {
+        const note = document.createElement('div');
+        note.id = 'wemDataNote';
+        note.style.cssText = 'background:#1a2633;border:1px solid #2d4a6b;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#7ab8e8;';
+        note.textContent = 'WEM pre-Reform data (Jul 2012 – Sep 2023). Curtailment and FCAS data not available for WEM generators.';
+        document.getElementById('identityCard').insertAdjacentElement('afterend', note);
+    }
 
     // Load detailed data
     try {
@@ -1111,6 +1145,7 @@ function renderCharts(data) {
     const monthly = sliceMonthly(data);
     const fmtMonths = monthly && monthly.months ? monthly.months.map(fmtMonth) : [];
     const catXaxis = { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' };
+    const isWEM = (data.market || 'NEM') === 'WEM';
 
     // Revenue chart
     if (monthly && monthly.revenue_aud) {
@@ -1375,7 +1410,7 @@ function renderCharts(data) {
         Plotly.newPlot('chartMLF', mlfTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'MLF' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: isWEM ? 'TLF' : 'MLF' },
             showlegend: mlfTraces.length > 1,
             legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
             shapes: [{
@@ -1387,15 +1422,17 @@ function renderCharts(data) {
 
     // Price capture
     if (monthly && monthly.captured_price) {
+        const avgPriceLabel = isWEM ? 'System Avg Balancing Price' : 'Regional Avg RRP';
+        const avgPriceHover = isWEM ? 'Avg Balancing' : 'Avg RRP';
         Plotly.newPlot('chartPriceCapture', [
             {
                 x: fmtMonths,
                 y: monthly.avg_rrp,
                 type: 'scatter',
                 mode: 'lines',
-                name: 'Regional Avg RRP',
+                name: avgPriceLabel,
                 line: { color: '#64748b', width: 1.5 },
-                hovertemplate: '%{x}<br>$%{y:.2f}/MWh<extra>Avg RRP</extra>',
+                hovertemplate: `%{x}<br>$%{y:.2f}/MWh<extra>${avgPriceHover}</extra>`,
             },
             {
                 x: fmtMonths,

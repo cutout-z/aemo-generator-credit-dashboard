@@ -19,16 +19,22 @@ def _safe_filename(duid: str) -> str:
     return duid.replace("/", "_").replace("#", "_").replace("\\", "_")
 
 
-def generate_index(generators: pd.DataFrame, output_dir: str | None = None) -> Path:
+def generate_index(
+    generators: pd.DataFrame,
+    output_dir: str | None = None,
+    market: str = "NEM",
+) -> Path:
     """Write index.json with searchable generator list.
 
     Each entry contains metadata for the search/autocomplete UI.
+    Merges additively with existing entries from other markets — running
+    the NEM pipeline never erases WEM entries, and vice versa.
     """
     out_dir = Path(output_dir or config.DOCS_DATA_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
     index_path = out_dir / "index.json"
 
-    entries = []
+    new_entries = []
     for _, row in generators.iterrows():
         duid = str(row.get("DUID", ""))
         entry = {
@@ -40,14 +46,27 @@ def generate_index(generators: pd.DataFrame, output_dir: str | None = None) -> P
             "capacity_mw": round(float(row["CAPACITY_MW"]), 1) if pd.notna(row.get("CAPACITY_MW")) else None,
             "technology": str(row.get("TECHNOLOGY", "")),
             "connection_point": str(row.get("CONNECTION_POINT", "")),
+            "market": str(row.get("MARKET", market)),
         }
-        entries.append(entry)
+        new_entries.append(entry)
 
-    # Sort by station name for consistent output
-    entries.sort(key=lambda e: (e["station_name"], e["duid"]))
+    # Additive merge: load existing, remove this market's individual entries
+    # (station entries are handled separately in _generate_station_files)
+    if index_path.exists():
+        existing = json.loads(index_path.read_text())
+        preserved = [
+            e for e in existing
+            if e.get("market", "NEM") != market or e.get("type") == "station"
+        ]
+    else:
+        preserved = []
 
-    index_path.write_text(json.dumps(_sanitize(entries), indent=None, separators=(",", ":")))
-    logger.info(f"Wrote index.json with {len(entries)} generators ({index_path.stat().st_size / 1024:.1f} KB)")
+    all_entries = preserved + new_entries
+    all_entries.sort(key=lambda e: (e.get("station_name", ""), e.get("duid", "")))
+
+    index_path.write_text(json.dumps(_sanitize(all_entries), indent=None, separators=(",", ":")))
+    logger.info(f"Wrote index.json: {len(new_entries)} {market} generators "
+                f"+ {len(preserved)} preserved ({index_path.stat().st_size / 1024:.1f} KB)")
     return index_path
 
 
@@ -85,6 +104,7 @@ def generate_generator_json(
         "capacity_mw": metadata.get("capacity_mw"),
         "technology": metadata.get("technology", ""),
         "connection_point": metadata.get("connection_point", ""),
+        "market": metadata.get("market", "NEM"),
         "lgc_eligible": metadata.get("fuel_category", "") in config.LGC_ELIGIBLE_FUEL_TYPES,
     }
 
@@ -203,6 +223,9 @@ def write_curtailment_by_fy(
         logger.warning("No monthly aggregates — skipping curtailment_by_fy.csv")
         return out_path
 
+    if "curtailment_pct" not in monthly_aggregates.columns:
+        logger.debug("No curtailment_pct column — skipping curtailment_by_fy.csv (WEM data?)")
+        return out_path
     df = monthly_aggregates[monthly_aggregates["curtailment_pct"].notna()].copy()
     if df.empty:
         logger.warning("No curtailment rows in monthly aggregates")
@@ -250,6 +273,7 @@ def generate_all(
     fcas_data: dict | None = None,
     daily_aggregates: pd.DataFrame | None = None,
     constraint_data: pd.DataFrame | None = None,
+    market: str = "NEM",
 ) -> int:
     """Generate all per-generator JSON files and the index.
 
@@ -258,8 +282,8 @@ def generate_all(
     gen_dir = output_dir or config.GENERATORS_JSON_DIR
     docs_dir = str(Path(gen_dir).parent)
 
-    # Write index
-    generate_index(generators, docs_dir)
+    # Write index (additive — preserves other markets)
+    generate_index(generators, docs_dir, market=market)
 
     # Publish FY curtailment rollup (consumed by renewable dashboard)
     if monthly_aggregates is not None and not monthly_aggregates.empty:
@@ -276,6 +300,7 @@ def generate_all(
             "capacity_mw": round(float(row["CAPACITY_MW"]), 1) if pd.notna(row.get("CAPACITY_MW")) else None,
             "technology": str(row.get("TECHNOLOGY", "")),
             "connection_point": str(row.get("CONNECTION_POINT", "")),
+            "market": str(row.get("MARKET", market)),
         }
 
         # Extract this generator's monthly data if available
@@ -360,6 +385,7 @@ def generate_all(
         generators, monthly_aggregates, mlf_history,
         draft_mlfs, draft_fy_label, fcas_data, gen_dir, docs_dir,
         daily_aggregates=daily_aggregates,
+        market=market,
     )
     logger.info(f"Wrote {station_count} station aggregate files")
 
@@ -384,6 +410,7 @@ def _generate_station_files(
     gen_dir: str,
     docs_dir: str,
     daily_aggregates: pd.DataFrame | None = None,
+    market: str = "NEM",
 ) -> int:
     """Generate station-level aggregation files for multi-DUID stations."""
     # Group generators by station name
@@ -498,18 +525,22 @@ def _generate_station_files(
             "connection_point": ", ".join(cp for cp in connection_points if cp),
             "type": "station",
             "duid_count": len(duids),
+            "market": market,
         })
 
-    # Append station entries to index.json
+    # Append station entries to index.json (additive — only replace same-market stations)
     if station_entries:
         index_path = Path(docs_dir) / "index.json"
         existing = json.loads(index_path.read_text())
-        # Remove old station entries before adding new ones
-        existing = [e for e in existing if e.get("type") != "station"]
+        # Remove old station entries for this market only
+        existing = [
+            e for e in existing
+            if not (e.get("type") == "station" and e.get("market", "NEM") == market)
+        ]
         existing.extend(station_entries)
-        existing.sort(key=lambda e: (e["station_name"], e.get("duid", "")))
+        existing.sort(key=lambda e: (e.get("station_name", ""), e.get("duid", "")))
         index_path.write_text(json.dumps(_sanitize(existing), indent=None, separators=(",", ":")))
-        logger.info(f"Added {len(station_entries)} station entries to index.json")
+        logger.info(f"Added {len(station_entries)} {market} station entries to index.json")
 
     return count
 
