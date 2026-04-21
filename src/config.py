@@ -22,9 +22,14 @@ FY_START = 2015  # Earliest FY for MLF history (FY15-16)
 
 
 def current_fy_start() -> int:
-    """Return the start calendar year of the current financial year."""
+    """Return the start year of the latest FY with published final MLFs.
+
+    AEMO publishes final MLFs each April for the upcoming FY (e.g. April 2026
+    covers FY26-27). From April onwards the upcoming FY's finals are available
+    in DUDETAILSUMMARY; prior months fall back to the previous FY.
+    """
     now = datetime.now()
-    return now.year if now.month >= 7 else now.year - 1
+    return now.year if now.month >= 4 else now.year - 1
 
 
 def fy_label(start_year: int) -> str:
