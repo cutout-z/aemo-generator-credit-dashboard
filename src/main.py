@@ -77,7 +77,13 @@ def main():
 
     # Step 1: Generator metadata
     logger.info("=== Step 1: Generator metadata ===")
-    generators = fetch_generators(str(data_dir), force=args.full_refresh)
+    # Use the same date heuristic as SCADA processing: go back ~20 days to ensure data is published
+    _now = datetime.now()
+    _latest = _now - timedelta(days=20)
+    generators = fetch_generators(
+        str(data_dir), force=args.full_refresh,
+        mmsdm_year=_latest.year, mmsdm_month=_latest.month,
+    )
     logger.info(f"Loaded {len(generators)} generators")
 
     if args.metadata_only:
