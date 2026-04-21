@@ -19,11 +19,10 @@ from .download_constraints import (
     fetch_spdconnectionpointconstraint,
 )
 from .download_dispatch import fetch_dispatch_price_month
-from .download_draft_mlf import fetch_draft_mlfs, get_draft_fy
 from .download_intermittent import fetch_intermittent_month
 from .download_metadata import fetch_generators
-from .download_mlf import fetch_connection_points, fetch_mlf_history
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
+from .fetch_mlf import fetch_mlf_data
 from .generate_json import generate_all
 
 logging.basicConfig(
@@ -87,13 +86,17 @@ def main():
         logger.info(f"Done. Wrote index + {count} generator files.")
         return
 
-    # Step 2: MLF history + connection points
-    logger.info("=== Step 2: MLF history ===")
-    mlf_history = fetch_mlf_history(str(data_dir), force=args.full_refresh)
+    # Step 2: MLF history + draft MLFs + connection points (all from MLF Tracker CSV)
+    logger.info("=== Step 2: MLF data from MLF Tracker ===")
+    mlf_history, draft_mlfs, draft_fy_label, cp_map = fetch_mlf_data(
+        str(data_dir), force=args.full_refresh
+    )
     logger.info(f"Loaded {len(mlf_history)} DUID×FY MLF records")
+    if draft_mlfs:
+        logger.info(f"Loaded {len(draft_mlfs)} draft MLFs for {draft_fy_label}")
+    else:
+        logger.info("No draft MLFs available")
 
-    # Enrich generators with connection points from DUDETAILSUMMARY
-    cp_map = fetch_connection_points(str(data_dir), force=args.full_refresh)
     generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
     logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
 
@@ -352,19 +355,8 @@ def main():
     elif constraint_path.exists():
         all_constraints = pd.read_feather(constraint_path)
 
-    # Step 4: Draft/indicative MLFs for upcoming FY
-    logger.info("=== Step 4: Draft MLFs ===")
-    draft_mlfs = fetch_draft_mlfs(str(data_dir), force=args.full_refresh)
-    draft_fy_label = None
-    if draft_mlfs:
-        fy_start, fy_label, _ = get_draft_fy()
-        draft_fy_label = config.fy_label(fy_start)
-        logger.info(f"Loaded {len(draft_mlfs)} draft MLFs for {draft_fy_label}")
-    else:
-        logger.info("No draft MLFs available")
-
-    # Step 5: Generate JSON output
-    logger.info("=== Step 5: Generating JSON output ===")
+    # Step 4: Generate JSON output
+    logger.info("=== Step 4: Generating JSON output ===")
     monthly_agg = all_monthly if not all_monthly.empty else None
     daily_agg = all_daily if not all_daily.empty else None
     constraint_agg = all_constraints if not all_constraints.empty else None
