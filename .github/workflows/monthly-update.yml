@@ -75,6 +75,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update generator credit data $(date +%Y-%m)"
+            git pull --rebase origin main
             git push
           fi
 
