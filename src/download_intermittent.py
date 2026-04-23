@@ -13,8 +13,10 @@ falls back to NEMOSIS/Current for months not yet in the archive.
 
 from __future__ import annotations
 
+import csv
 import io
 import logging
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -83,71 +85,88 @@ def fetch_intermittent_month(
 
 
 def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
-    """Download from MMSDM monthly archive zip."""
+    """Download from MMSDM monthly archive zip.
+
+    Streams the zip to a temp file and parses the CSV line-by-line to keep
+    memory usage low (these files can be 100 MB+ compressed).
+    """
     url = _ARCHIVE_URL.format(year=year, month=month)
     logger.info(f"Fetching INTERMITTENT_GEN_SCADA from MMSDM archive for {year}-{month:02d}...")
 
     for attempt in range(config.MAX_RETRIES):
         try:
-            resp = requests.get(
-                url, timeout=config.REQUEST_TIMEOUT,
+            # Stream download to a temp file instead of loading into memory
+            with requests.get(
+                url, timeout=config.REQUEST_TIMEOUT, stream=True,
                 headers={"User-Agent": config.USER_AGENT},
-            )
-            if resp.status_code == 404:
-                logger.info(f"INTERMITTENT_GEN_SCADA not in archive for {year}-{month:02d}")
-                return pd.DataFrame()
-            resp.raise_for_status()
-
-            # Extract CSV from zip
-            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-                csv_names = [n for n in zf.namelist() if n.endswith(".CSV") or n.endswith(".csv")]
-                if not csv_names:
-                    logger.warning(f"No CSV found in archive zip for {year}-{month:02d}")
+            ) as resp:
+                if resp.status_code == 404:
+                    logger.info(f"INTERMITTENT_GEN_SCADA not in archive for {year}-{month:02d}")
                     return pd.DataFrame()
+                resp.raise_for_status()
 
-                with zf.open(csv_names[0]) as csvfile:
-                    # MMSDM CSVs have header rows: skip rows starting with C,I
-                    # Data rows start with D
-                    lines = csvfile.read().decode("utf-8", errors="replace").splitlines()
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                    tmp_path = tmp.name
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        tmp.write(chunk)
 
-                # Find header row (starts with "I") and data rows (start with "D")
-                header_line = None
-                data_lines = []
-                for line in lines:
-                    if line.startswith("I,"):
-                        header_line = line
-                    elif line.startswith("D,"):
-                        data_lines.append(line)
+            # Extract and parse from the temp file on disk
+            try:
+                with zipfile.ZipFile(tmp_path) as zf:
+                    csv_names = [n for n in zf.namelist() if n.endswith(".CSV") or n.endswith(".csv")]
+                    if not csv_names:
+                        logger.warning(f"No CSV found in archive zip for {year}-{month:02d}")
+                        return pd.DataFrame()
 
-                if not header_line or not data_lines:
-                    logger.warning(f"No data rows in archive for {year}-{month:02d}")
-                    return pd.DataFrame()
+                    # Read line-by-line to find header, then parse data rows
+                    with zf.open(csv_names[0]) as csvfile:
+                        text_stream = io.TextIOWrapper(csvfile, encoding="utf-8", errors="replace")
 
-                # Parse header to find column indices
-                headers = header_line.split(",")
-                col_indices = {}
-                for col in _COLUMNS:
-                    for i, h in enumerate(headers):
-                        if h.strip().upper() == col:
-                            col_indices[col] = i
-                            break
+                        # Scan for header row (starts with "I,")
+                        header_line = None
+                        for line in text_stream:
+                            if line.startswith("I,"):
+                                header_line = line.rstrip("\n\r")
+                                break
 
-                if len(col_indices) < len(_COLUMNS):
-                    missing = set(_COLUMNS) - set(col_indices.keys())
-                    logger.warning(f"Missing columns in archive: {missing}")
-                    return pd.DataFrame()
+                        if not header_line:
+                            logger.warning(f"No header row in archive for {year}-{month:02d}")
+                            return pd.DataFrame()
 
-                # Extract data
-                rows = []
-                for line in data_lines:
-                    parts = line.split(",")
-                    row = {}
-                    for col, idx in col_indices.items():
-                        if idx < len(parts):
-                            row[col] = parts[idx].strip().strip('"')
-                    rows.append(row)
+                        # Parse header to find column indices
+                        headers = header_line.split(",")
+                        col_indices = {}
+                        for col in _COLUMNS:
+                            for i, h in enumerate(headers):
+                                if h.strip().upper() == col:
+                                    col_indices[col] = i
+                                    break
 
-                df = pd.DataFrame(rows)
+                        if len(col_indices) < len(_COLUMNS):
+                            missing = set(_COLUMNS) - set(col_indices.keys())
+                            logger.warning(f"Missing columns in archive: {missing}")
+                            return pd.DataFrame()
+
+                        # Parse data rows line-by-line into column lists (much
+                        # more memory-efficient than list-of-dicts)
+                        col_data = {col: [] for col in _COLUMNS}
+                        for line in text_stream:
+                            if not line.startswith("D,"):
+                                continue
+                            parts = line.split(",")
+                            for col, idx in col_indices.items():
+                                if idx < len(parts):
+                                    col_data[col].append(parts[idx].strip().strip('"'))
+                                else:
+                                    col_data[col].append(None)
+
+                        if not col_data[_COLUMNS[0]]:
+                            logger.warning(f"No data rows in archive for {year}-{month:02d}")
+                            return pd.DataFrame()
+
+                        df = pd.DataFrame(col_data)
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
 
             df = _clean_dataframe(df, year, month, "archive")
             return df
