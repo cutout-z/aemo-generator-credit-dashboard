@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -223,7 +224,11 @@ def main():
 
             except Exception as e:
                 logger.error(f"Failed to process {month_label}: {e}")
-                continue
+            finally:
+                # Free large DataFrames between months to stay within
+                # GitHub Actions runner memory limits (~7 GB).
+                scada = prices = dispatchload = intermittent = None
+                gc.collect()
 
         # Merge new with existing
         if new_rows:
