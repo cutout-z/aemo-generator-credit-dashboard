@@ -97,8 +97,13 @@ def aggregate_month(
         group_valid = group.dropna(subset=["RRP"])
         revenue = (group_valid["SCADAVALUE"].clip(lower=0) / 12.0 * group_valid["RRP"] * mlf).sum()
 
-        # Capacity factor
+        # Capacity factor — not capped; values > 1.0 indicate stale registration or headwater physics
         cap_factor = mwh / (capacity * hours_in_month) if capacity and capacity > 0 else None
+        if cap_factor is not None and cap_factor > 1.1:
+            logger.warning(
+                f"{duid} {month_label}: monthly CF {cap_factor:.4f} — possible registration mismatch "
+                f"(SCADA {mwh:.1f} MWh > nameplate {capacity * hours_in_month:.1f} MWh)"
+            )
 
         # Curtailment (solar/wind only)
         curtailment = None
@@ -233,6 +238,8 @@ def aggregate_month_daily(
         capacity = duid_capacity.get(duid)
         mwh = group["SCADAVALUE"].clip(lower=0).sum() / 12.0
         cf = mwh / (capacity * 24) if capacity and capacity > 0 else None
+        if cf is not None and cf > 1.1:
+            logger.warning(f"{duid} {date_str}: daily CF {cf:.4f} — possible registration mismatch")
         rows.append({
             "duid": duid,
             "date": date_str,

@@ -195,6 +195,17 @@ def fetch_generators(cache_dir: str, force: bool = False,
         except Exception as e:
             logger.warning(f"MMSDM enrichment failed, proceeding with Registration List only: {e}")
 
+    # Apply known capacity corrections (stale or unit-level registrations)
+    if config.CAPACITY_OVERRIDES:
+        for duid, corrected_mw in config.CAPACITY_OVERRIDES.items():
+            mask = df["DUID"] == duid
+            if mask.any():
+                original = df.loc[mask, "CAPACITY_MW"].values[0]
+                df.loc[mask, "CAPACITY_MW"] = corrected_mw
+                logger.info(
+                    f"Capacity override applied: {duid} {original} MW → {corrected_mw} MW"
+                )
+
     logger.info(f"Total generator metadata: {len(df)} DUIDs")
 
     # Cache (includes Tier 2 enrichment)

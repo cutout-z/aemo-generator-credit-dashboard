@@ -38,7 +38,7 @@ def fetch_wem_scada_month(
     """
     # Guard: only pre-Reform data is available
     start_y, start_m = config.WEM_DATA_START
-    end_y, end_m = config.WEM_DATA_END
+    end_y, end_m = config.WEM_PRE_REFORM_END
     if (year, month) < (start_y, start_m) or (year, month) > (end_y, end_m):
         logger.debug(f"SCADA {year}-{month:02d} outside pre-Reform range — skipping")
         return pd.DataFrame()

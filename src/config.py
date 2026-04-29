@@ -116,6 +116,17 @@ PRICE_BIN_LABELS = (
     + ["> 100"]
 )
 
+# ─── Known Registration Corrections ────────────────────────────────────────
+# AEMO's Registration List sometimes has stale or unit-level (not station-level)
+# capacity figures. These overrides correct known errors identified via sustained
+# CF > 1.0 in SCADA data.
+#
+# HUMENSW: registered at 29 MW (one unit) but both units dispatch under this DUID;
+#          station total is 2 × 29 MW = 58 MW. HUMEV (VIC side) is a separate DUID.
+CAPACITY_OVERRIDES: dict[str, float] = {
+    "HUMENSW": 58.0,
+}
+
 # ─── Network ────────────────────────────────────────────────────────────────
 
 MAX_RETRIES = 3

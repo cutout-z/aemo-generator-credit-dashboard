@@ -3,11 +3,16 @@
 Produces data/wem/monthly_aggregates.feather AND writes WEM generator JSON files
 to docs/data/generators/ (merged additively with NEM generator files).
 
+Two data sources:
+  Pre-Reform  (Jul 2012 – Sep 2023): AEMO CSV archive (30-min intervals)
+  Post-Reform (Oct 2023 – present):  Open Electricity API (5-min intervals)
+
 Usage:
-  python -m src.wem.main                  # incremental (last 2 months)
-  python -m src.wem.main --full-refresh   # all data Jul 2012 – Sep 2023
-  python -m src.wem.main --metadata-only  # facilities + TLF only, no SCADA
-  python -m src.wem.main --months-back 6  # reprocess last 6 months
+  python -m src.wem.main                     # incremental (last 2 months, both eras)
+  python -m src.wem.main --full-refresh      # all data Jul 2012 – present
+  python -m src.wem.main --post-reform-only  # only post-Reform months
+  python -m src.wem.main --metadata-only     # facilities + TLF only, no SCADA
+  python -m src.wem.main --months-back 6     # reprocess last 6 months
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from . import config
 from .aggregate import aggregate_wem_month, aggregate_wem_month_daily, aggregate_wem_system_price
 from .download_dispatch import fetch_wem_price_month
 from .download_metadata import fetch_wem_generators
+from .download_openelectricity import fetch_post_reform_daily, fetch_post_reform_monthly
 from .download_scada import fetch_wem_scada_month
 from .download_tlf import build_facility_tlf_lookup, fetch_tlf_history
 from ..generate_json import generate_all as generate_json_all
@@ -35,43 +41,70 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
-    """Determine which (year, month) pairs to process within WEM data range."""
-    start_y, start_m = config.WEM_DATA_START
-    end_y, end_m = config.WEM_DATA_END
-
-    if full_refresh:
-        iter_start = (start_y, start_m)
-    else:
-        now = datetime.now()
-        # Go back from the end of the WEM archive (Sep 2023)
-        ys = end_y
-        ms = end_m - months_back
-        while ms <= 0:
-            ms += 12
-            ys -= 1
-        iter_start = max((ys, ms), (start_y, start_m))
-
+def _months_in_range(
+    start: tuple[int, int], end: tuple[int, int],
+) -> list[tuple[int, int]]:
+    """Generate (year, month) pairs from start to end inclusive."""
     months = []
-    y, m = iter_start
-    while (y, m) <= (end_y, end_m):
+    y, m = start
+    while (y, m) <= end:
         months.append((y, m))
         m += 1
         if m > 12:
             m = 1
             y += 1
-
     return months
+
+
+def _pre_reform_months(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
+    """Pre-Reform months (Jul 2012 – Sep 2023) from AEMO CSV archive."""
+    start = config.WEM_DATA_START
+    end = config.WEM_PRE_REFORM_END
+
+    if full_refresh:
+        return _months_in_range(start, end)
+
+    ys, ms = end[0], end[1] - months_back
+    while ms <= 0:
+        ms += 12
+        ys -= 1
+    return _months_in_range(max((ys, ms), start), end)
+
+
+def _post_reform_months(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
+    """Post-Reform months (Oct 2023 – last complete month) from Open Electricity API."""
+    start = config.WEM_POST_REFORM_START
+    now = datetime.now()
+    # End at previous month (current month may be incomplete)
+    end_y, end_m = now.year, now.month - 1
+    if end_m == 0:
+        end_m = 12
+        end_y -= 1
+    end = (end_y, end_m)
+
+    if end < start:
+        return []
+
+    if full_refresh:
+        return _months_in_range(start, end)
+
+    ys, ms = end[0], end[1] - months_back
+    while ms <= 0:
+        ms += 12
+        ys -= 1
+    return _months_in_range(max((ys, ms), start), end)
 
 
 def main():
     parser = argparse.ArgumentParser(description="WEM Generator Credit Dashboard pipeline")
     parser.add_argument("--full-refresh", action="store_true",
-                        help="Re-download and reprocess all data (Jul 2012 – Sep 2023)")
+                        help="Re-download and reprocess all data (Jul 2012 – present)")
     parser.add_argument("--months-back", type=int, default=2,
                         help="Number of months to reprocess (default: 2)")
     parser.add_argument("--metadata-only", action="store_true",
                         help="Only download facility metadata and TLF — skip SCADA")
+    parser.add_argument("--post-reform-only", action="store_true",
+                        help="Only process post-Reform months (Oct 2023+) via Open Electricity API")
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent.parent.parent
@@ -96,14 +129,6 @@ def main():
         logger.info("=== Metadata-only mode — done ===")
         return
 
-    # Step 3: Monthly SCADA + price aggregation
-    logger.info("=== Step 3: Monthly SCADA + price aggregation ===")
-    months = _months_to_process(args.months_back, args.full_refresh)
-    logger.info(
-        f"Processing {len(months)} months: "
-        f"{months[0][0]}-{months[0][1]:02d} to {months[-1][0]}-{months[-1][1]:02d}"
-    )
-
     aggregates_path = project_root / config.WEM_MONTHLY_AGGREGATES_CACHE
     daily_path = wem_dir / "daily_aggregates.feather"
     system_price_path = wem_dir / "system_prices.feather"
@@ -119,42 +144,65 @@ def main():
     new_daily_rows: list[pd.DataFrame] = []
     system_price_rows: list[dict] = []
 
-    for year, month in months:
-        month_label = f"{year}-{month:02d}"
-        logger.info(f"--- WEM {month_label} ---")
+    # ── Step 3a: Pre-Reform (Jul 2012 – Sep 2023) from AEMO CSVs ──
+    if not args.post_reform_only:
+        pre_months = _pre_reform_months(args.months_back, args.full_refresh)
+        if pre_months:
+            logger.info(
+                f"=== Step 3a: Pre-Reform SCADA ({len(pre_months)} months: "
+                f"{pre_months[0][0]}-{pre_months[0][1]:02d} to "
+                f"{pre_months[-1][0]}-{pre_months[-1][1]:02d}) ==="
+            )
+            for year, month in pre_months:
+                month_label = f"{year}-{month:02d}"
+                logger.info(f"--- WEM {month_label} (pre-Reform) ---")
+                try:
+                    scada = fetch_wem_scada_month(year, month, str(scada_dir), rebuild=args.full_refresh)
+                    if scada.empty:
+                        logger.warning(f"No SCADA data for {month_label}")
+                        continue
+                    prices = fetch_wem_price_month(year, month, str(price_dir), rebuild=args.full_refresh)
+                    if prices.empty:
+                        logger.warning(f"No price data for {month_label}")
+                        continue
+                    fy_start = year if month >= 7 else year - 1
+                    tlf_lookup = build_facility_tlf_lookup(generators, tlf_history, fy_start)
+                    monthly = aggregate_wem_month(scada, prices, generators, tlf_lookup, year, month)
+                    if not monthly.empty:
+                        new_rows.append(monthly)
+                    daily = aggregate_wem_month_daily(scada, generators, year, month)
+                    if not daily.empty:
+                        new_daily_rows.append(daily)
+                    sys_price = aggregate_wem_system_price(prices, year, month)
+                    if sys_price:
+                        system_price_rows.append({"month": month_label, **sys_price})
+                except Exception as e:
+                    logger.error(f"Failed to process WEM {month_label}: {e}")
+                    continue
 
-        try:
-            scada = fetch_wem_scada_month(year, month, str(scada_dir), rebuild=args.full_refresh)
-            if scada.empty:
-                logger.warning(f"No SCADA data for {month_label}")
+    # ── Step 3b: Post-Reform (Oct 2023+) from Open Electricity API ──
+    post_months = _post_reform_months(args.months_back, args.full_refresh)
+    if post_months:
+        logger.info(
+            f"=== Step 3b: Post-Reform via Open Electricity API ({len(post_months)} months: "
+            f"{post_months[0][0]}-{post_months[0][1]:02d} to "
+            f"{post_months[-1][0]}-{post_months[-1][1]:02d}) ==="
+        )
+        for year, month in post_months:
+            month_label = f"{year}-{month:02d}"
+            logger.info(f"--- WEM {month_label} (post-Reform) ---")
+            try:
+                monthly = fetch_post_reform_monthly(year, month, generators)
+                if not monthly.empty:
+                    new_rows.append(monthly)
+                daily = fetch_post_reform_daily(year, month, generators)
+                if not daily.empty:
+                    new_daily_rows.append(daily)
+            except Exception as e:
+                logger.error(f"Failed to process post-Reform WEM {month_label}: {e}")
                 continue
 
-            prices = fetch_wem_price_month(year, month, str(price_dir), rebuild=args.full_refresh)
-            if prices.empty:
-                logger.warning(f"No price data for {month_label}")
-                continue
-
-            # Build TLF lookup for this month's FY
-            fy_start = year if month >= 7 else year - 1
-            tlf_lookup = build_facility_tlf_lookup(generators, tlf_history, fy_start)
-
-            monthly = aggregate_wem_month(scada, prices, generators, tlf_lookup, year, month)
-            if not monthly.empty:
-                new_rows.append(monthly)
-
-            daily = aggregate_wem_month_daily(scada, generators, year, month)
-            if not daily.empty:
-                new_daily_rows.append(daily)
-
-            sys_price = aggregate_wem_system_price(prices, year, month)
-            if sys_price:
-                system_price_rows.append({"month": month_label, **sys_price})
-
-        except Exception as e:
-            logger.error(f"Failed to process WEM {month_label}: {e}")
-            continue
-
-    # Merge and save monthly aggregates
+    # ── Merge and save ──
     if new_rows:
         new_df = pd.concat(new_rows, ignore_index=True)
         if not existing.empty:

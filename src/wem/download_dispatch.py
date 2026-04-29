@@ -37,7 +37,7 @@ def fetch_wem_price_month(
     Returns empty DataFrame if outside available range or on error.
     """
     start_y, start_m = config.WEM_DATA_START
-    end_y, end_m = config.WEM_DATA_END
+    end_y, end_m = config.WEM_PRE_REFORM_END
     if (year, month) < (start_y, start_m) or (year, month) > (end_y, end_m):
         return pd.DataFrame()
 

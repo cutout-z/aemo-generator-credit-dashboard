@@ -83,8 +83,12 @@ def aggregate_wem_month(
             (valid["Energy Generated (MWh)"].clip(lower=0) * valid["Final Price ($/MWh)"] * tlf).sum()
         )
 
-        # Capacity factor
+        # Capacity factor — not capped; values > 1.0 indicate stale registration or headwater physics
         cap_factor = mwh / (capacity * hours_in_month) if capacity and capacity > 0 else None
+        if cap_factor is not None and cap_factor > 1.1:
+            logger.warning(
+                f"{facility_code} {month_label}: monthly CF {cap_factor:.4f} — possible registration mismatch"
+            )
 
         # Captured price: generation-weighted average price
         captured = None
@@ -193,6 +197,8 @@ def aggregate_wem_month_daily(
         capacity = duid_capacity.get(facility_code)
         mwh = group["Energy Generated (MWh)"].clip(lower=0).sum()
         cf = mwh / (capacity * 24) if capacity and capacity > 0 else None
+        if cf is not None and cf > 1.1:
+            logger.warning(f"{facility_code} {date_str}: daily CF {cf:.4f} — possible registration mismatch")
         rows.append({
             "duid": facility_code,
             "date": date_str,

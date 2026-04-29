@@ -23,7 +23,10 @@ INTERVAL_DURATION_H = 0.5       # hours per interval
 # Both SCADA and balancing price available from this point forward
 WEM_DATA_START = (2012, 7)      # (year, month) — FY2012-13 start
 # Last full pre-Reform month (Reform took effect Oct 2023)
-WEM_DATA_END = (2023, 9)        # (year, month)
+WEM_PRE_REFORM_END = (2023, 9)  # (year, month) — CSV archive cutoff
+
+# Post-Reform starts Oct 2023 — sourced from Open Electricity API (not AEMO CSVs)
+WEM_POST_REFORM_START = (2023, 10)  # (year, month)
 
 # ─── TLF ─────────────────────────────────────────────────────────────────────
 
