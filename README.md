@@ -1,6 +1,6 @@
 # AEMO Generator Credit Dashboard
 
-A credit risk analysis tool for Australian NEM (National Electricity Market) generators. Aggregates 5 years of operational data from AEMO to compute monthly generation, revenue, capacity factor, curtailment, MLF trajectories, price capture, FCAS context, and LGC eligibility for all 559 registered generators.
+A credit risk analysis tool for Australian NEM (National Electricity Market) generators. Aggregates 5 years of operational data from AEMO to compute monthly generation, revenue, capacity factor, curtailment, MLF trajectories, price capture, FCAS context, and LGC eligibility for registered generators.
 
 **Dashboard**: [cutout-z.github.io/aemo-generator-credit-dashboard](https://cutout-z.github.io/aemo-generator-credit-dashboard/)
 
@@ -174,6 +174,20 @@ Hosted on **GitHub Pages** from the `docs/` directory. The GitHub Actions workfl
 │   └── monthly-update.yml      # Monthly CI/CD pipeline
 └── requirements.txt
 ```
+
+---
+
+## Why no WEM (Western Australia)?
+
+This dashboard covers only the NEM (National Electricity Market — NSW, QLD, VIC, SA, TAS). The WA Wholesale Electricity Market (WEM) is excluded because AEMO stopped publishing public facility-level generation data after the WEM Reform went live on 1 October 2023.
+
+**What happened**: Before the reform, AEMO published monthly facility SCADA CSVs at `data.wa.aemo.com.au/datafiles/facility-scada/`. The last file covers 1 October 2023 only (513 KB vs the typical ~7 MB for a full month). No replacement public dataset was created. The `operational-measurements`, `balancing-summary`, and `load-summary` directories all stopped at the same date.
+
+**What still exists**: AEMO continues to publish system-level aggregate generation (`tt30gen`) and some STEM/bidding data, but nothing with per-facility generation. The WEM Data Dashboard on aemo.com.au is a view-only Power BI embed with no downloadable data. The AEMO API portal (`dev.aemo.com.au`) has WEM APIs for bids, dispatch instructions, and settlement — but these are participant-only (require AEMO registration and accreditation) and don't include metered SCADA.
+
+**Open Electricity** (`api.openelectricity.org.au`) may carry post-reform WEM facility data, but requires an API key and its upstream source for post-reform data is unverified.
+
+This dashboard previously included pre-reform WEM data (Jul 2012 – Sep 2023) but it was removed because frozen historical data without ongoing updates provides limited credit risk value.
 
 ---
 

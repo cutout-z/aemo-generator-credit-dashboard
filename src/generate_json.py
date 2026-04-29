@@ -27,8 +27,8 @@ def generate_index(
     """Write index.json with searchable generator list.
 
     Each entry contains metadata for the search/autocomplete UI.
-    Merges additively with existing entries from other markets — running
-    the NEM pipeline never erases WEM entries, and vice versa.
+    Merges additively with existing entries — running the pipeline
+    preserves any manually added entries from other sources.
     """
     out_dir = Path(output_dir or config.DOCS_DATA_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -224,7 +224,7 @@ def write_curtailment_by_fy(
         return out_path
 
     if "curtailment_pct" not in monthly_aggregates.columns:
-        logger.debug("No curtailment_pct column — skipping curtailment_by_fy.csv (WEM data?)")
+        logger.debug("No curtailment_pct column — skipping curtailment_by_fy.csv")
         return out_path
     df = monthly_aggregates[monthly_aggregates["curtailment_pct"].notna()].copy()
     if df.empty:
