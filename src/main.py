@@ -24,6 +24,7 @@ from .download_intermittent import fetch_intermittent_month
 from .download_metadata import fetch_generators
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .fetch_mlf import fetch_mlf_data
+from .audit_cf import audit_capacity_factors, log_audit_results
 from .generate_json import generate_all
 
 logging.basicConfig(
@@ -365,6 +366,12 @@ def main():
             logger.error(f"Constraint aggregation failed: {e}")
     elif constraint_path.exists():
         all_constraints = pd.read_feather(constraint_path)
+
+    # Step 3c: Capacity factor audit
+    if not all_monthly.empty:
+        logger.info("=== Step 3c: Capacity factor audit ===")
+        cf_candidates = audit_capacity_factors(all_monthly, generators)
+        log_audit_results(cf_candidates)
 
     # Step 4: Generate JSON output
     logger.info("=== Step 4: Generating JSON output ===")

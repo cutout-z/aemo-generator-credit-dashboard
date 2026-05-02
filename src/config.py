@@ -125,6 +125,10 @@ PRICE_BIN_LABELS = (
 #          station total is 2 × 29 MW = 58 MW. HUMEV (VIC side) is a separate DUID.
 CAPACITY_OVERRIDES: dict[str, float] = {
     "HUMENSW": 58.0,
+    # Loy Yang B units uprated from 500 MW; AEMO constraint #LOYYB1_E1 caps at 580 MW,
+    # peak SCADA ~585 MW. Registration List still shows 500 MW.
+    "LOYYB1": 580.0,
+    "LOYYB2": 580.0,
 }
 
 # ─── Network ────────────────────────────────────────────────────────────────

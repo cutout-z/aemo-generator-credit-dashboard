@@ -161,6 +161,7 @@ Hosted on **GitHub Pages** from the `docs/` directory. The GitHub Actions workfl
 │   ├── download_scada.py       # NEMOSIS SCADA + dispatch load
 │   ├── download_dispatch.py    # NEMOSIS dispatch prices + FCAS
 │   ├── aggregate.py            # Monthly metric calculations + FCAS aggregation
+│   ├── audit_cf.py             # Capacity factor audit — flags stale registrations
 │   └── generate_json.py        # JSON output + station aggregation
 ├── docs/
 │   ├── index.html              # Dashboard SPA
@@ -188,6 +189,41 @@ This dashboard covers only the NEM (National Electricity Market — NSW, QLD, VI
 **Open Electricity** (`api.openelectricity.org.au`) may carry post-reform WEM facility data, but requires an API key and its upstream source for post-reform data is unverified.
 
 This dashboard previously included pre-reform WEM data (Jul 2012 – Sep 2023) but it was removed because frozen historical data without ongoing updates provides limited credit risk value.
+
+---
+
+## Capacity Factor > 1.0 and Registration Overrides
+
+Some generators report monthly capacity factors exceeding 1.0, meaning their actual SCADA output exceeds the nameplate capacity recorded in AEMO's NEM Registration List. These fall into two categories:
+
+### Stale registrations (corrected via overrides)
+
+Generators that have been physically uprated but whose registration data was never updated. These are corrected in `config.py` via `CAPACITY_OVERRIDES`:
+
+| DUID | Registered MW | Override MW | Reason |
+|------|--------------|-------------|--------|
+| HUMENSW | 29 | 58 | Both Hume NSW units dispatch under one DUID; registered at single-unit capacity |
+| LOYYB1 | 500 | 580 | Loy Yang B Unit 1 uprated; AEMO constraint `#LOYYB1_E1` caps at 580 MW |
+| LOYYB2 | 500 | 580 | Loy Yang B Unit 2 uprated; peak SCADA consistently ~585 MW |
+
+The pipeline runs an automated audit (`src/audit_cf.py`) after each aggregation that flags DUIDs with CF > 1.0 in three or more months, reporting whether they are already overridden or need investigation.
+
+### Hydro headwater effect (not corrected — real physics)
+
+Hydro generators can physically exceed their nameplate capacity when reservoir head (water level) is high. Higher head increases the pressure drop across the turbine, producing more power from the same flow rate. This is normal operating behaviour, not a data error.
+
+The following hydro DUIDs regularly show CF > 1.0 and are **intentionally not overridden**:
+
+| DUID | Registered MW | Typical Overrun | Months > 1.0 | Location |
+|------|--------------|-----------------|---------------|----------|
+| KAREEYA1–4 | 21 each | ~2–5% | 7–10/61 | Tully Falls, QLD |
+| BARRON-1/2 | 30 each | ~5–10% | 5/61 | Barron Gorge, QLD |
+| POAT110 | 100 | ~5–10% | 4/61 | Poatina, TAS |
+| FISHER | 43 | ~5% | 3/61 | Fisher, TAS |
+| LEM_WIL | 82 | ~5% | 2/61 | Lemonthyme/Wilmot, TAS |
+| REPULSE | 28 | ~15% | 2/61 | Repulse, TAS |
+
+Remaining single-month CF > 1.0 instances on fossil and other hydro generators (BW01, LYA1/3/4, YWPS2/3, etc.) are transient events — brief SCADA overshoots or unusual dispatch conditions — and do not warrant overrides.
 
 ---
 
