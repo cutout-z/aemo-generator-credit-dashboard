@@ -1,6 +1,7 @@
 # Raw data cache (too large for git)
 /data/
 !/data/.gitkeep
+logs/
 
 # Python
 __pycache__/
