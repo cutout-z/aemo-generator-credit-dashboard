@@ -9,7 +9,7 @@
     "mlf_tracker_summary.csv",
     "intermittent_quality_2026_02.feather"
   ],
-  "generated_at": "2026-05-11T01:42:59.284773+00:00",
+  "generated_at": "2026-05-11T01:57:28.641943+00:00",
   "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
   "schema_version": 1
 }

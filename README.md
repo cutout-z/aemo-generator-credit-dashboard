@@ -38,9 +38,9 @@ A credit risk analysis tool for Australian NEM (National Electricity Market) gen
 
 The target production model is frequency-driven VPS automation. Daily market-data runs reprocess the recent overlap window, weekly reference-data runs refresh generator metadata, and an annual MLF lane forces lightweight loss-factor publication checks. The validated processed history is published as a compact `docs/data/processed-cache` snapshot so cold runners can restore settled monthly facts without rebuilding the full raw AEMO history. NEMOSIS still handles its own large raw-data cache on persistent VPS storage for backfills and recent source refreshes.
 
-**Incremental mode** (default): reprocesses the last 2 months and merges with existing aggregates, deduplicating overlapping months.
+**Incremental mode** (default): restores the settled processed-cache snapshot, reprocesses only the recent mutable overlap window, verifies that older settled months are unchanged, then republishes the compact snapshot.
 
-**Full refresh** (`--full-refresh`): re-downloads all metadata and reprocesses the full 5-year history.
+**Full refresh** (`--full-refresh`): exceptional audit/remediation mode only. Routine automation should not use it; historical data is treated as settled unless a deliberate audited methodology change requires rewriting it.
 
 ---
 
@@ -118,7 +118,7 @@ A single-page static site built with vanilla HTML/CSS/JS and [Plotly.js](https:/
 # Incremental update (last 2 months)
 python -m src.main
 
-# Full rebuild (all 5 years)
+# Exceptional audited rebuild only (not for routine automation)
 python -m src.main --full-refresh
 
 # Custom lookback

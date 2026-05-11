@@ -36,6 +36,47 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _assert_protected_months_unchanged(
+    before: pd.DataFrame,
+    after: pd.DataFrame,
+    mutable_months: set[str],
+    *,
+    month_col: str,
+    label: str,
+) -> None:
+    """Abort normal updates if settled historical months changed unexpectedly."""
+    if before.empty or after.empty or month_col not in before.columns or month_col not in after.columns:
+        return
+
+    protected_months = sorted(set(before[month_col].dropna()) - mutable_months)
+    if not protected_months:
+        return
+
+    before_protected = before[before[month_col].isin(protected_months)]
+    after_protected = after[after[month_col].isin(protected_months)]
+    columns = sorted(set(before_protected.columns) & set(after_protected.columns))
+
+    before_fp = _dataframe_fingerprint(before_protected[columns])
+    after_fp = _dataframe_fingerprint(after_protected[columns])
+    if before_fp != after_fp:
+        raise RuntimeError(
+            f"{label} attempted to change settled months outside the mutable window. "
+            "Use --full-refresh only for deliberate audited historical rewrites."
+        )
+
+    logger.info(
+        "%s settled-history guard: %d protected months unchanged",
+        label, len(protected_months),
+    )
+
+
+def _dataframe_fingerprint(df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    stable = df.copy().sort_values(list(df.columns)).reset_index(drop=True)
+    return int(pd.util.hash_pandas_object(stable, index=False).sum())
+
+
 def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
     """Determine which (year, month) pairs to process."""
     now = datetime.now()
@@ -176,12 +217,15 @@ def main():
         months = _months_to_process(args.months_back, args.full_refresh)
         logger.info(f"Processing {len(months)} months: {months[0]} to {months[-1]}")
 
-        # Load existing aggregates if incremental
+        # Load existing aggregates if incremental. These are the settled project
+        # history; normal runs may only replace the recent mutable overlap window.
         if aggregates_path.exists() and not args.full_refresh:
             existing = pd.read_feather(aggregates_path)
+            existing_before_update = existing.copy()
             logger.info(f"Loaded {len(existing)} existing aggregate rows")
         else:
             existing = pd.DataFrame()
+            existing_before_update = pd.DataFrame()
 
         new_rows = []
         new_daily_rows = []
@@ -261,6 +305,15 @@ def main():
 
         # Sort and save
         if not all_monthly.empty:
+            if not args.full_refresh:
+                mutable_months = {f"{year}-{month:02d}" for year, month in months}
+                _assert_protected_months_unchanged(
+                    existing_before_update,
+                    all_monthly,
+                    mutable_months,
+                    month_col="month",
+                    label="Monthly aggregates",
+                )
             all_monthly = all_monthly.sort_values(["duid", "month"]).reset_index(drop=True)
             all_monthly.to_feather(aggregates_path)
             logger.info(f"Saved {len(all_monthly)} aggregate rows to {aggregates_path}")
@@ -301,9 +354,17 @@ def main():
             new_fcas = pd.DataFrame(new_fcas_rows)
             if fcas_cache_path.exists() and not args.full_refresh:
                 old_fcas = pd.read_feather(fcas_cache_path)
+                old_fcas_before_update = old_fcas.copy()
                 reprocessed_months = set(new_fcas["month"].unique())
                 old_fcas = old_fcas[~old_fcas["month"].isin(reprocessed_months)]
                 merged_fcas = pd.concat([old_fcas, new_fcas], ignore_index=True)
+                _assert_protected_months_unchanged(
+                    old_fcas_before_update,
+                    merged_fcas,
+                    reprocessed_months,
+                    month_col="month",
+                    label="FCAS aggregates",
+                )
             else:
                 merged_fcas = new_fcas
             merged_fcas.to_feather(fcas_cache_path)
@@ -367,12 +428,20 @@ def main():
                     new_constraints = pd.concat(constraint_rows, ignore_index=True)
                     if constraint_path.exists() and not args.full_refresh:
                         existing_constraints = pd.read_feather(constraint_path)
+                        existing_constraints_before_update = existing_constraints.copy()
                         reprocessed = set(new_constraints["month"].unique())
                         existing_constraints = existing_constraints[
                             ~existing_constraints["month"].isin(reprocessed)
                         ]
                         all_constraints = pd.concat(
                             [existing_constraints, new_constraints], ignore_index=True
+                        )
+                        _assert_protected_months_unchanged(
+                            existing_constraints_before_update,
+                            all_constraints,
+                            reprocessed,
+                            month_col="month",
+                            label="Constraint aggregates",
                         )
                     else:
                         all_constraints = new_constraints

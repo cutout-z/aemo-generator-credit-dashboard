@@ -2,7 +2,7 @@
 
 The intended production model is:
 
-- Hetzner VPS owns the warm AEMO/NEMOSIS cache and runs the data pipeline.
+- Hetzner VPS runs the frequency-driven data pipeline and keeps only the raw cache needed for recent updates.
 - GitHub stores code, publishable `docs/data` outputs, and the compact `docs/data/processed-cache` settled-history snapshot.
 - GitHub Pages deploys after the VPS pushes updated `docs/data`.
 - GitHub Actions remains useful for manual verification, but should not be the primary heavy data runner.
@@ -17,17 +17,17 @@ The intended production model is:
 
 ## VPS Setup Notes
 
-The processed-cache snapshot lets cold runners restore settled history, but the current VPS root disk is still too small for the existing raw cache footprint needed for robust backfills and recent source refreshes. The local raw NEMOSIS cache has been seen above 100 GB, so attach persistent storage before installing this as production. A 160-200 GB mounted volume gives enough room for warm raw cache, processed cache, logs, and growth.
+The processed-cache snapshot is the durable source of settled history. Routine VPS runs should not need a full raw-history cache: they restore the compact snapshot, reprocess the recent mutable overlap window, verify older months are unchanged, and publish a new snapshot. The current VPS disk is therefore acceptable for normal automation if raw cache is kept bounded. Add a larger volume only if you want the VPS to perform full historical rebuilds or deep raw-source audits locally.
 
 Recommended layout:
 
 ```text
 /opt/aemo-generator-credit-dashboard      git checkout + virtualenv
-/srv/aemo-generator-credit/data           persistent cache volume
+/srv/aemo-generator-credit/data           optional bounded raw/recent cache
 /etc/aemo-generator-credit/*.env          per-lane service settings
 ```
 
-The repo's `data/` directory is gitignored. On the VPS it should either live on the attached volume or be symlinked to it:
+The repo's `data/` directory is gitignored. On the VPS it can live on the root disk for normal automation, or be symlinked to a larger volume if you later want local full-history rebuilds:
 
 ```bash
 ln -sfn /srv/aemo-generator-credit/data /opt/aemo-generator-credit-dashboard/data
