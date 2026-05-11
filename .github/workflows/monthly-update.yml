@@ -1,9 +1,6 @@
-name: Monthly Generator Credit Update
+name: Manual Generator Credit Update
 
 on:
-  schedule:
-    # 18th of each month at midnight UTC (~10am AEST)
-    - cron: '0 0 18 * *'
   workflow_dispatch:
     inputs:
       full_refresh:
