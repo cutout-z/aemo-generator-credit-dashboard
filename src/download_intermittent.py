@@ -1,4 +1,4 @@
-"""Download INTERMITTENT_GEN_SCADA data.
+"""Download INTERMITTENT_GEN_SCADA quality summaries.
 
 This table provides quality flags for intermittent generators (solar/wind)
 that allow separating grid curtailment from mechanical downtime.
@@ -9,18 +9,20 @@ Two data sources:
 
 The downloader tries the archive first (faster, one file per month), then
 falls back to NEMOSIS/Current for months not yet in the archive.
+
+The dashboard only needs, per DUID/month, the count of ELAV intervals and how
+many were quality="Good". Cache that small summary instead of full monthly
+INTERMITTENT_GEN_SCADA extracts, which can be hundreds of MB per month.
 """
 
 from __future__ import annotations
 
-import csv
 import io
 import logging
 import tempfile
 import time
 import zipfile
 from pathlib import Path
-from urllib.parse import quote
 
 import pandas as pd
 import requests
@@ -40,10 +42,10 @@ _ARCHIVE_URL = (
     "{year:04d}{month:02d}010000.zip"
 )
 
-# Archive availability start — data before this isn't in the MMSDM archive
+# Archive availability start - data before this is not in the MMSDM archive.
 _ARCHIVE_START = (2024, 12)
 
-_COLUMNS = ["RUN_DATETIME", "DUID", "SCADA_TYPE", "SCADA_VALUE", "SCADA_QUALITY"]
+_COLUMNS = ["DUID", "SCADA_TYPE", "SCADA_QUALITY"]
 
 
 def fetch_intermittent_month(
@@ -52,50 +54,49 @@ def fetch_intermittent_month(
     cache_dir: str,
     rebuild: bool = False,
 ) -> pd.DataFrame:
-    """Download INTERMITTENT_GEN_SCADA for a single month.
+    """Download INTERMITTENT_GEN_SCADA quality summary for a single month.
 
     Tries MMSDM archive first (Dec 2024+), then NEMOSIS/Current as fallback.
-    Returns DataFrame with columns: SETTLEMENTDATE, DUID, SCADA_TYPE,
-    SCADA_VALUE, SCADA_QUALITY.
+    Returns DataFrame with columns: DUID, total_intervals, good_intervals.
     """
     if (year, month) < config.INTERMITTENT_SCADA_START:
         return pd.DataFrame()
 
-    # Check for cached monthly feather first
-    cache_path = Path(cache_dir) / f"intermittent_{year}_{month:02d}.feather"
+    cache_path = Path(cache_dir) / f"intermittent_quality_{year}_{month:02d}.feather"
     if cache_path.exists() and not rebuild:
-        logger.info(f"Loading cached INTERMITTENT_GEN_SCADA for {year}-{month:02d}")
+        logger.info(f"Loading cached INTERMITTENT_GEN_SCADA quality summary for {year}-{month:02d}")
         return pd.read_feather(cache_path)
 
-    # Try MMSDM archive first (Dec 2024+)
+    # One-time migration path for older full-table caches.
+    legacy_cache = Path(cache_dir) / f"intermittent_{year}_{month:02d}.feather"
+    if legacy_cache.exists() and not rebuild:
+        logger.info(f"Summarising legacy INTERMITTENT_GEN_SCADA cache for {year}-{month:02d}")
+        summary = _summarise_quality(pd.read_feather(legacy_cache), year, month, "legacy-cache")
+        if not summary.empty:
+            summary.to_feather(cache_path)
+        return summary
+
     df = pd.DataFrame()
     if (year, month) >= _ARCHIVE_START:
-        df = _fetch_from_archive(year, month, cache_dir)
+        df = _fetch_from_archive(year, month)
 
-    # Fall back to NEMOSIS/Current for recent data or pre-archive months
     if df.empty:
         df = _fetch_from_nemosis(year, month, cache_dir, rebuild)
 
     if df.empty:
         return df
 
-    # Cache as feather for future runs
     df.to_feather(cache_path)
     return df
 
 
-def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
-    """Download from MMSDM monthly archive zip.
-
-    Streams the zip to a temp file and parses the CSV line-by-line to keep
-    memory usage low (these files can be 100 MB+ compressed).
-    """
+def _fetch_from_archive(year: int, month: int) -> pd.DataFrame:
+    """Download from MMSDM archive and count ELAV quality by DUID."""
     url = _ARCHIVE_URL.format(year=year, month=month)
     logger.info(f"Fetching INTERMITTENT_GEN_SCADA from MMSDM archive for {year}-{month:02d}...")
 
     for attempt in range(config.MAX_RETRIES):
         try:
-            # Stream download to a temp file instead of loading into memory
             with requests.get(
                 url, timeout=config.REQUEST_TIMEOUT, stream=True,
                 headers={"User-Agent": config.USER_AGENT},
@@ -119,7 +120,6 @@ def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
                             )
                             next_log_at += 50 * 1024 * 1024
 
-            # Extract and parse from the temp file on disk
             try:
                 with zipfile.ZipFile(tmp_path) as zf:
                     csv_names = [n for n in zf.namelist() if n.endswith(".CSV") or n.endswith(".csv")]
@@ -127,11 +127,9 @@ def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
                         logger.warning(f"No CSV found in archive zip for {year}-{month:02d}")
                         return pd.DataFrame()
 
-                    # Read line-by-line to find header, then parse data rows
                     with zf.open(csv_names[0]) as csvfile:
                         text_stream = io.TextIOWrapper(csvfile, encoding="utf-8", errors="replace")
 
-                        # Scan for header row (starts with "I,")
                         header_line = None
                         for line in text_stream:
                             if line.startswith("I,"):
@@ -142,7 +140,6 @@ def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
                             logger.warning(f"No header row in archive for {year}-{month:02d}")
                             return pd.DataFrame()
 
-                        # Parse header to find column indices
                         headers = header_line.split(",")
                         col_indices = {}
                         for col in _COLUMNS:
@@ -156,35 +153,50 @@ def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
                             logger.warning(f"Missing columns in archive: {missing}")
                             return pd.DataFrame()
 
-                        # Parse data rows line-by-line into column lists (much
-                        # more memory-efficient than list-of-dicts)
-                        col_data = {col: [] for col in _COLUMNS}
+                        total_by_duid: dict[str, int] = {}
+                        good_by_duid: dict[str, int] = {}
                         rows_read = 0
                         for line in text_stream:
                             if not line.startswith("D,"):
                                 continue
                             parts = line.split(",")
-                            for col, idx in col_indices.items():
-                                if idx < len(parts):
-                                    col_data[col].append(parts[idx].strip().strip('"'))
-                                else:
-                                    col_data[col].append(None)
+                            if any(idx >= len(parts) for idx in col_indices.values()):
+                                continue
+
+                            scada_type = parts[col_indices["SCADA_TYPE"]].strip().strip('"')
+                            if scada_type != "ELAV":
+                                continue
+
+                            duid = parts[col_indices["DUID"]].strip().strip('"')
+                            quality = parts[col_indices["SCADA_QUALITY"]].strip().strip('"')
+                            total_by_duid[duid] = total_by_duid.get(duid, 0) + 1
+                            if quality == "Good":
+                                good_by_duid[duid] = good_by_duid.get(duid, 0) + 1
+
                             rows_read += 1
                             if rows_read % 1_000_000 == 0:
                                 logger.info(
-                                    "Parsed %s INTERMITTENT_GEN_SCADA rows for %s-%02d...",
+                                    "Parsed %s INTERMITTENT_GEN_SCADA ELAV rows for %s-%02d...",
                                     f"{rows_read:,}", year, month,
                                 )
 
-                        if not col_data[_COLUMNS[0]]:
-                            logger.warning(f"No data rows in archive for {year}-{month:02d}")
+                        if not total_by_duid:
+                            logger.warning(f"No ELAV data rows in archive for {year}-{month:02d}")
                             return pd.DataFrame()
 
-                        df = pd.DataFrame(col_data)
+                        df = pd.DataFrame(
+                            {
+                                "DUID": list(total_by_duid.keys()),
+                                "total_intervals": list(total_by_duid.values()),
+                                "good_intervals": [
+                                    good_by_duid.get(duid, 0) for duid in total_by_duid
+                                ],
+                            }
+                        )
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
-            df = _clean_dataframe(df, year, month, "archive")
+            _log_summary(df, year, month, "archive")
             return df
 
         except requests.RequestException as e:
@@ -230,17 +242,36 @@ def _fetch_from_nemosis(
     if df is None or df.empty:
         return pd.DataFrame()
 
-    return _clean_dataframe(df, year, month, "nemosis")
+    return _summarise_quality(df, year, month, "nemosis")
 
 
-def _clean_dataframe(df: pd.DataFrame, year: int, month: int, source: str) -> pd.DataFrame:
-    """Normalize column types and rename RUN_DATETIME → SETTLEMENTDATE."""
-    df["RUN_DATETIME"] = pd.to_datetime(df["RUN_DATETIME"])
-    df["SCADA_VALUE"] = pd.to_numeric(df["SCADA_VALUE"], errors="coerce")
-    df = df.rename(columns={"RUN_DATETIME": "SETTLEMENTDATE"})
+def _summarise_quality(df: pd.DataFrame, year: int, month: int, source: str) -> pd.DataFrame:
+    """Reduce INTERMITTENT_GEN_SCADA rows to ELAV quality counts by DUID."""
+    required = {"DUID", "SCADA_TYPE", "SCADA_QUALITY"}
+    if not required.issubset(df.columns):
+        missing = required - set(df.columns)
+        logger.warning(f"Cannot summarise INTERMITTENT_GEN_SCADA; missing columns: {missing}")
+        return pd.DataFrame()
 
-    logger.info(
-        f"INTERMITTENT_GEN_SCADA {year}-{month:02d} ({source}): {len(df):,} rows, "
-        f"{df['DUID'].nunique()} DUIDs"
+    elav = df[df["SCADA_TYPE"] == "ELAV"]
+    if elav.empty:
+        return pd.DataFrame()
+
+    summary = (
+        elav.assign(is_good=elav["SCADA_QUALITY"] == "Good")
+        .groupby("DUID", as_index=False)
+        .agg(
+            total_intervals=("SCADA_QUALITY", "size"),
+            good_intervals=("is_good", "sum"),
+        )
     )
-    return df
+    summary["good_intervals"] = summary["good_intervals"].astype(int)
+    _log_summary(summary, year, month, source)
+    return summary
+
+
+def _log_summary(df: pd.DataFrame, year: int, month: int, source: str) -> None:
+    logger.info(
+        f"INTERMITTENT_GEN_SCADA quality {year}-{month:02d} ({source}): "
+        f"{len(df):,} DUIDs, {int(df['total_intervals'].sum()):,} ELAV intervals"
+    )

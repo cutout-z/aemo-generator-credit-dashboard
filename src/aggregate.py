@@ -119,22 +119,25 @@ def aggregate_month(
                     curtailment = max(0.0, 1.0 - total_actual / total_avail)
 
             # Split curtailment using INTERMITTENT_GEN_SCADA quality flags.
-            # We apportion the total curtailment (from DISPATCHLOAD) into grid
-            # vs mechanical based on the quality flag ratio from INTERMITTENT_GEN_SCADA.
+            # The downloader now provides a compact DUID-level quality summary,
+            # but this also accepts older raw table-shaped data during migration.
             if curtailment is not None and curtailment > 0 and intermittent_scada is not None and not intermittent_scada.empty:
                 duid_int = intermittent_scada[intermittent_scada["DUID"] == duid]
                 if not duid_int.empty:
-                    elav = duid_int[duid_int["SCADA_TYPE"] == "ELAV"]
-                    if not elav.empty:
-                        total_intervals = len(elav)
-                        good_intervals = len(elav[elav["SCADA_QUALITY"] == "Good"])
-                        bad_intervals = total_intervals - good_intervals
-                        if total_intervals > 0:
-                            # Good quality = grid is constraining output
-                            # Bad quality = mechanical/comms issue
-                            good_ratio = good_intervals / total_intervals
-                            grid_curtailment = curtailment * good_ratio
-                            mech_curtailment = curtailment * (1 - good_ratio)
+                    if {"total_intervals", "good_intervals"}.issubset(duid_int.columns):
+                        total_intervals = float(duid_int["total_intervals"].sum())
+                        good_intervals = float(duid_int["good_intervals"].sum())
+                    else:
+                        elav = duid_int[duid_int["SCADA_TYPE"] == "ELAV"]
+                        total_intervals = float(len(elav))
+                        good_intervals = float(len(elav[elav["SCADA_QUALITY"] == "Good"]))
+
+                    if total_intervals > 0:
+                        # Good quality = grid is constraining output
+                        # Bad quality = mechanical/comms issue
+                        good_ratio = good_intervals / total_intervals
+                        grid_curtailment = curtailment * good_ratio
+                        mech_curtailment = curtailment * (1 - good_ratio)
 
             # Economic curtailment: generation forgone during negative price periods
             # Intervals where AVAILABILITY > 0 AND RRP < 0 AND SCADA is low
