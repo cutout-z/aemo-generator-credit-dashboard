@@ -35,6 +35,11 @@ ln -sfn /srv/aemo-generator-credit/data /opt/aemo-generator-credit-dashboard/dat
 
 Create `/etc/aemo-generator-credit/daily.env`, `reference.env`, and `mlf.env` from the example files in this directory. The service user needs a repo-scoped deploy key that can push to `cutout-z/aemo-generator-credit-dashboard`.
 
+## Raw Cache Retention
+
+Routine runs prune raw NEMOSIS files and legacy full intermittent feather caches older than `RAW_CACHE_RETENTION_DAYS` after validation. The default is 120 days, which is deliberately wider than the normal 2-month mutable window. The compact `docs/data/processed-cache` snapshot is never pruned by this script.
+
+
 ## Install Timers
 
 ```bash

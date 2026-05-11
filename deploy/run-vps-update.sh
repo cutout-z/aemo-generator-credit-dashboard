@@ -6,6 +6,7 @@ PYTHON="${PYTHON:-${APP_DIR}/.venv/bin/python}"
 PIPELINE_ARGS="${PIPELINE_ARGS:---months-back 2 --refresh-mlf}"
 RUN_TESTS="${RUN_TESTS:-1}"
 PUSH_CHANGES="${PUSH_CHANGES:-1}"
+RUN_RAW_CACHE_PRUNE="${RUN_RAW_CACHE_PRUNE:-1}"
 COMMIT_MESSAGE_PREFIX="${COMMIT_MESSAGE_PREFIX:-Update AEMO generator credit data}"
 
 cd "${APP_DIR}"
@@ -18,6 +19,10 @@ git pull --ff-only origin main
 
 if [[ "${RUN_TESTS}" == "1" ]]; then
   "${PYTHON}" -m pytest tests/test_outputs.py -v
+fi
+
+if [[ "${RUN_RAW_CACHE_PRUNE}" == "1" ]]; then
+  "${APP_DIR}/deploy/prune-raw-cache.sh"
 fi
 
 git add docs/data/
