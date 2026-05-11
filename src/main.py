@@ -66,8 +66,14 @@ def main():
                         help="Number of months to reprocess (default: 2)")
     parser.add_argument("--metadata-only", action="store_true",
                         help="Only download metadata and generate index")
+    parser.add_argument("--refresh-metadata", action="store_true",
+                        help="Refresh generator metadata without forcing a full data rebuild")
+    parser.add_argument("--refresh-mlf", action="store_true",
+                        help="Refresh MLF tracker data without forcing a full data rebuild")
     parser.add_argument("--skip-scada", action="store_true",
                         help="Skip SCADA download (use cached aggregates only)")
+    parser.add_argument("--skip-constraints", action="store_true",
+                        help="Skip constraint downloads (use cached constraint aggregates only)")
     parser.add_argument("--fcas-rebuild", action="store_true",
                         help="Rebuild FCAS history from cached DISPATCHPRICE files (implies --skip-scada)")
     args = parser.parse_args()
@@ -83,7 +89,7 @@ def main():
     _now = datetime.now()
     _latest = _now - timedelta(days=20)
     generators = fetch_generators(
-        str(data_dir), force=args.full_refresh,
+        str(data_dir), force=(args.full_refresh or args.refresh_metadata),
         mmsdm_year=_latest.year, mmsdm_month=_latest.month,
     )
     logger.info(f"Loaded {len(generators)} generators")
@@ -97,7 +103,7 @@ def main():
     # Step 2: MLF history + draft MLFs + connection points (all from MLF Tracker CSV)
     logger.info("=== Step 2: MLF data from MLF Tracker ===")
     mlf_history, draft_mlfs, draft_fy_label, cp_map = fetch_mlf_data(
-        str(data_dir), force=args.full_refresh
+        str(data_dir), force=(args.full_refresh or args.refresh_mlf)
     )
     logger.info(f"Loaded {len(mlf_history)} DUID×FY MLF records")
     if draft_mlfs:
@@ -307,7 +313,14 @@ def main():
     # Step 3b: Binding constraint aggregation
     constraint_path = data_dir / "constraint_aggregates.feather"
     all_constraints = pd.DataFrame()
-    if not args.metadata_only:
+    if args.skip_constraints:
+        logger.info("=== Step 3b: Loading cached constraints (--skip-constraints) ===")
+        if constraint_path.exists():
+            all_constraints = pd.read_feather(constraint_path)
+            logger.info(f"Loaded {len(all_constraints)} cached constraint aggregate rows")
+        else:
+            logger.warning("No cached constraint aggregates available")
+    elif not args.metadata_only:
         logger.info("=== Step 3b: Binding constraint aggregation ===")
         try:
             gencondata = fetch_gencondata(str(data_dir), rebuild=args.full_refresh)

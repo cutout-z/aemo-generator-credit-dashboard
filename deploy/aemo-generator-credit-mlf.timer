@@ -1,0 +1,14 @@
+[Unit]
+Description=Run annual AEMO generator credit MLF publication refresh
+Documentation=https://github.com/cutout-z/aemo-generator-credit-dashboard
+
+[Timer]
+# Final MLFs are normally published around April; this lane forces a lightweight
+# tracker refresh without rebuilding SCADA.
+OnCalendar=*-04-15 23:15:00
+RandomizedDelaySec=2h
+Persistent=true
+Unit=aemo-generator-credit@mlf.service
+
+[Install]
+WantedBy=timers.target

@@ -11,7 +11,7 @@ A credit risk analysis tool for Australian NEM (National Electricity Market) gen
 ### 1. AEMO NEM Registration & Exemption List
 - **What**: Generator metadata — DUID, station name, fuel type, capacity, technology, region, connection point
 - **Source**: [AEMO Registration List (.xls)](https://www.aemo.com.au/-/media/Files/Electricity/NEM/Participant_Information/NEM-Registration-and-Exemption-List.xls)
-- **Update**: Re-downloaded on full refresh
+- **Update**: Refreshed by the weekly reference-data lane, or on full refresh
 
 ### 2. AEMO MMSDM DUDETAILSUMMARY
 - **What**: Transmission Loss Factors (MLFs) per generator per financial year, plus connection point IDs
@@ -23,7 +23,7 @@ A credit risk analysis tool for Australian NEM (National Electricity Market) gen
 - **What**: Indicative/draft MLFs for the upcoming financial year
 - **Source**: AEMO Loss Factors publications (Excel workbook with per-region sheets)
 - **Coverage**: Next FY only (published ~March each year)
-- **Update**: Downloaded on pipeline run; shown as distinct "Draft" marker on MLF chart
+- **Update**: Checked by the daily market-data lane and forced by the annual MLF lane; shown as distinct "Draft" marker on MLF chart
 
 ### 4. NEMOSIS Dynamic Data
 - **What**: 5-minute interval operational data via [NEMOSIS](https://github.com/UNSW-CEEM/NEMOSIS) (AEMO's public data API wrapper)
@@ -32,11 +32,11 @@ A credit risk analysis tool for Australian NEM (National Electricity Market) gen
   - `DISPATCHPRICE` — regional spot price (RRP) and FCAS prices (8 markets), AUD/MWh
   - `DISPATCHLOAD` — unconstrained availability (UIGF) for curtailment calculation
 - **Coverage**: Rolling 5 years of history
-- **Update**: Monthly incremental (last 2 months reprocessed to capture late-arriving data)
+- **Update**: Daily incremental on the VPS (last 2 months reprocessed to capture late-arriving data)
 
 ### Data Capture
 
-The pipeline runs monthly via GitHub Actions (18th of each month, 00:00 UTC). It can also be triggered manually. Data is cached locally in Apache Arrow Feather format to avoid redundant downloads. NEMOSIS handles its own Parquet/CSV caching for raw AEMO data.
+The target production model is frequency-driven VPS automation. Daily market-data runs reprocess the recent overlap window, weekly reference-data runs refresh generator metadata, and an annual MLF lane forces lightweight loss-factor publication checks. Data is cached on persistent VPS storage in Apache Arrow Feather format to avoid redundant downloads. NEMOSIS handles its own Parquet/CSV caching for raw AEMO data.
 
 **Incremental mode** (default): reprocesses the last 2 months and merges with existing aggregates, deduplicating overlapping months.
 
@@ -127,6 +127,12 @@ python -m src.main --months-back 6
 # Metadata only (regenerate JSON from cached aggregates)
 python -m src.main --metadata-only
 
+# Refresh generator metadata without a full historical rebuild
+python -m src.main --months-back 2 --refresh-metadata
+
+# Refresh MLF tracker data without a full historical rebuild
+python -m src.main --skip-scada --skip-constraints --refresh-mlf
+
 # Skip SCADA download (use cached data)
 python -m src.main --skip-scada
 ```
@@ -140,12 +146,15 @@ open docs/index.html
 
 ## Deployment
 
-Hosted on **GitHub Pages** from the `docs/` directory. The GitHub Actions workflow (`monthly-update.yml`) runs the pipeline, commits updated JSON files, and deploys automatically.
+Hosted on **GitHub Pages** from the `docs/` directory. The preferred production path is for the Hetzner VPS to run data updates and push changed `docs/data` files to `main`; the lightweight `deploy-pages.yml` workflow then publishes the site.
 
 ### Automated schedule
-- **When**: 18th of each month, 00:00 UTC (~10am AEST)
-- **What**: Incremental update (last 2 months), commit, deploy
-- **Manual trigger**: Available via `workflow_dispatch` with optional `full_refresh` and `months_back` parameters
+- **Daily market data**: VPS systemd timer reprocesses the recent overlap window for generation, prices, dispatch load, constraints, FCAS, and small MLF tracker changes.
+- **Weekly reference data**: VPS systemd timer refreshes generator registration metadata plus MLF tracker data without forcing a full historical rebuild.
+- **Annual MLF lane**: VPS systemd timer forces a lightweight MLF refresh around final MLF publication season without touching SCADA or constraints.
+- **Manual trigger**: GitHub Actions remains available via `workflow_dispatch` for verification/fallback, but should not be the primary heavy data runner once the VPS cache volume is installed.
+
+See `deploy/README.md` for VPS setup details.
 
 ---
 
@@ -171,8 +180,10 @@ Hosted on **GitHub Pages** from the `docs/` directory. The GitHub Actions workfl
 ├── data/                       # Local cache (gitignored)
 │   ├── *.feather               # Processed data cache
 │   └── nemosis_cache/          # Raw AEMO data cache
+├── deploy/                     # VPS systemd timers and runner script
 ├── .github/workflows/
-│   └── monthly-update.yml      # Monthly CI/CD pipeline
+│   ├── deploy-pages.yml        # GitHub Pages deployment
+│   └── monthly-update.yml      # Manual/fallback CI data runner
 └── requirements.txt
 ```
 

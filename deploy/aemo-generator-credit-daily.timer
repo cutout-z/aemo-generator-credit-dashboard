@@ -1,0 +1,13 @@
+[Unit]
+Description=Run daily AEMO generator credit market-data refresh
+Documentation=https://github.com/cutout-z/aemo-generator-credit-dashboard
+
+[Timer]
+# 22:45 UTC = 06:45 Australia/Perth.
+OnCalendar=*-*-* 22:45:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=aemo-generator-credit@daily.service
+
+[Install]
+WantedBy=timers.target

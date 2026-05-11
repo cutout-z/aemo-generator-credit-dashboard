@@ -1,0 +1,20 @@
+[Unit]
+Description=AEMO Generator Credit Dashboard %i update
+Documentation=https://github.com/cutout-z/aemo-generator-credit-dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aemo
+Group=aemo
+WorkingDirectory=/opt/aemo-generator-credit-dashboard
+EnvironmentFile=-/etc/aemo-generator-credit/%i.env
+ExecStart=/opt/aemo-generator-credit-dashboard/deploy/run-vps-update.sh
+TimeoutStartSec=8h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,13 @@
+[Unit]
+Description=Run weekly AEMO generator credit reference-data refresh
+Documentation=https://github.com/cutout-z/aemo-generator-credit-dashboard
+
+[Timer]
+# Refresh generator metadata weekly; MLF tracker is also refreshed.
+OnCalendar=Sun *-*-* 23:30:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=aemo-generator-credit@reference.service
+
+[Install]
+WantedBy=timers.target
