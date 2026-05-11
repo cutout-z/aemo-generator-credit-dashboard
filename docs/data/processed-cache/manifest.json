@@ -1,0 +1,15 @@
+{
+  "files": [
+    "monthly_aggregates.feather",
+    "daily_aggregates.feather",
+    "fcas_aggregates.feather",
+    "constraint_aggregates.feather",
+    "generators.feather",
+    "mlf_history.feather",
+    "mlf_tracker_summary.csv",
+    "intermittent_quality_2026_02.feather"
+  ],
+  "generated_at": "2026-05-11T01:42:59.284773+00:00",
+  "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
+  "schema_version": 1
+}

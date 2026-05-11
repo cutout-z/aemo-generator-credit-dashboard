@@ -36,7 +36,7 @@ A credit risk analysis tool for Australian NEM (National Electricity Market) gen
 
 ### Data Capture
 
-The target production model is frequency-driven VPS automation. Daily market-data runs reprocess the recent overlap window, weekly reference-data runs refresh generator metadata, and an annual MLF lane forces lightweight loss-factor publication checks. Data is cached on persistent VPS storage in Apache Arrow Feather format to avoid redundant downloads. NEMOSIS handles its own Parquet/CSV caching for raw AEMO data.
+The target production model is frequency-driven VPS automation. Daily market-data runs reprocess the recent overlap window, weekly reference-data runs refresh generator metadata, and an annual MLF lane forces lightweight loss-factor publication checks. The validated processed history is published as a compact `docs/data/processed-cache` snapshot so cold runners can restore settled monthly facts without rebuilding the full raw AEMO history. NEMOSIS still handles its own large raw-data cache on persistent VPS storage for backfills and recent source refreshes.
 
 **Incremental mode** (default): reprocesses the last 2 months and merges with existing aggregates, deduplicating overlapping months.
 
@@ -176,9 +176,10 @@ See `deploy/README.md` for VPS setup details.
 │   ├── index.html              # Dashboard SPA
 │   └── data/
 │       ├── index.json          # Generator + station search index
-│       └── generators/         # Per-generator and per-station JSON files
+│       ├── generators/         # Per-generator and per-station JSON files
+│       └── processed-cache/    # Compact settled-history cache snapshot
 ├── data/                       # Local cache (gitignored)
-│   ├── *.feather               # Processed data cache
+│   ├── *.feather               # Working processed data cache
 │   └── nemosis_cache/          # Raw AEMO data cache
 ├── deploy/                     # VPS systemd timers and runner script
 ├── .github/workflows/

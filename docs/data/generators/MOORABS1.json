@@ -1,1 +1,1 @@
-{"duid":"MOORABS1","station_name":"Moorabool Wind Farm ","region":"VIC1","fuel_category":"Battery","capacity_mw":2.0,"technology":"Storage","connection_point":"","market":"NEM","lgc_eligible":false}
+{"duid":"MOORABS1","station_name":"Moorabool Wind Farm ","region":"VIC1","fuel_category":"Battery","capacity_mw":2.0,"technology":"Storage","connection_point":"VELT3M","market":"NEM","lgc_eligible":false,"mlf":{"years":["FY25-26","FY26-27"],"values":[0.9569,0.9556]}}

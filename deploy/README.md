@@ -3,7 +3,7 @@
 The intended production model is:
 
 - Hetzner VPS owns the warm AEMO/NEMOSIS cache and runs the data pipeline.
-- GitHub stores only code plus publishable `docs/data` outputs.
+- GitHub stores code, publishable `docs/data` outputs, and the compact `docs/data/processed-cache` settled-history snapshot.
 - GitHub Pages deploys after the VPS pushes updated `docs/data`.
 - GitHub Actions remains useful for manual verification, but should not be the primary heavy data runner.
 
@@ -17,7 +17,7 @@ The intended production model is:
 
 ## VPS Setup Notes
 
-The current VPS root disk is too small for the existing raw cache footprint. The local raw NEMOSIS cache has been seen above 100 GB, so attach persistent storage before installing this as production. A 160-200 GB mounted volume gives enough room for warm raw cache, processed cache, logs, and growth.
+The processed-cache snapshot lets cold runners restore settled history, but the current VPS root disk is still too small for the existing raw cache footprint needed for robust backfills and recent source refreshes. The local raw NEMOSIS cache has been seen above 100 GB, so attach persistent storage before installing this as production. A 160-200 GB mounted volume gives enough room for warm raw cache, processed cache, logs, and growth.
 
 Recommended layout:
 

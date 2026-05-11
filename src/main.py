@@ -26,6 +26,7 @@ from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .fetch_mlf import fetch_mlf_data
 from .audit_cf import audit_capacity_factors, log_audit_results
 from .generate_json import generate_all
+from .processed_cache import publish_processed_cache, restore_processed_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,12 +77,18 @@ def main():
                         help="Skip constraint downloads (use cached constraint aggregates only)")
     parser.add_argument("--fcas-rebuild", action="store_true",
                         help="Rebuild FCAS history from cached DISPATCHPRICE files (implies --skip-scada)")
+    parser.add_argument("--no-processed-cache-snapshot", action="store_true",
+                        help="Do not restore/publish compact processed cache snapshots")
     args = parser.parse_args()
     if args.fcas_rebuild:
         args.skip_scada = True
 
     project_root = Path(__file__).resolve().parent.parent
     data_dir = project_root / config.DATA_DIR
+    docs_data_dir = project_root / config.DOCS_DATA_DIR
+
+    if not args.full_refresh and not args.no_processed_cache_snapshot:
+        restore_processed_cache(data_dir, docs_data_dir)
 
     # Step 1: Generator metadata
     logger.info("=== Step 1: Generator metadata ===")
@@ -396,6 +403,8 @@ def main():
                          fcas_data=fcas_by_region_month if fcas_by_region_month else None,
                          daily_aggregates=daily_agg,
                          constraint_data=constraint_agg)
+    if not args.no_processed_cache_snapshot:
+        publish_processed_cache(data_dir, docs_data_dir)
     logger.info(f"Done. Wrote index + {count} generator files.")
 
 
