@@ -107,8 +107,17 @@ def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
 
                 with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
                     tmp_path = tmp.name
+                    bytes_read = 0
+                    next_log_at = 50 * 1024 * 1024
                     for chunk in resp.iter_content(chunk_size=8192):
                         tmp.write(chunk)
+                        bytes_read += len(chunk)
+                        if bytes_read >= next_log_at:
+                            logger.info(
+                                "Downloaded %.0f MB of INTERMITTENT_GEN_SCADA archive for %s-%02d...",
+                                bytes_read / 1_048_576, year, month,
+                            )
+                            next_log_at += 50 * 1024 * 1024
 
             # Extract and parse from the temp file on disk
             try:
@@ -150,6 +159,7 @@ def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
                         # Parse data rows line-by-line into column lists (much
                         # more memory-efficient than list-of-dicts)
                         col_data = {col: [] for col in _COLUMNS}
+                        rows_read = 0
                         for line in text_stream:
                             if not line.startswith("D,"):
                                 continue
@@ -159,6 +169,12 @@ def _fetch_from_archive(year: int, month: int, cache_dir: str) -> pd.DataFrame:
                                     col_data[col].append(parts[idx].strip().strip('"'))
                                 else:
                                     col_data[col].append(None)
+                            rows_read += 1
+                            if rows_read % 1_000_000 == 0:
+                                logger.info(
+                                    "Parsed %s INTERMITTENT_GEN_SCADA rows for %s-%02d...",
+                                    f"{rows_read:,}", year, month,
+                                )
 
                         if not col_data[_COLUMNS[0]]:
                             logger.warning(f"No data rows in archive for {year}-{month:02d}")
