@@ -8,10 +8,10 @@ settled history before reprocessing only the recent overlap window.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -76,21 +76,25 @@ def publish_processed_cache(data_dir: Path, docs_data_dir: Path) -> list[str]:
     target_dir.mkdir(parents=True, exist_ok=True)
 
     published: list[str] = []
+    manifest_files: list[dict[str, object]] = []
     for name in SNAPSHOT_FILES:
         src = data_dir / name
         if src.exists():
-            shutil.copy2(src, target_dir / name)
+            dest = target_dir / name
+            shutil.copy2(src, dest)
             published.append(name)
+            manifest_files.append(_manifest_entry(dest))
 
     for pattern in SNAPSHOT_GLOBS:
         for src in sorted(data_dir.glob(pattern)):
-            shutil.copy2(src, target_dir / src.name)
+            dest = target_dir / src.name
+            shutil.copy2(src, dest)
             published.append(src.name)
+            manifest_files.append(_manifest_entry(dest))
 
     manifest = {
         "schema_version": 1,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "files": published,
+        "files": sorted(manifest_files, key=lambda item: str(item["name"])),
         "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
     }
     (target_dir / MANIFEST_NAME).write_text(
@@ -100,3 +104,20 @@ def publish_processed_cache(data_dir: Path, docs_data_dir: Path) -> list[str]:
 
     logger.info("Published %d processed cache files to %s", len(published), target_dir)
     return published
+
+
+
+def _manifest_entry(path: Path) -> dict[str, object]:
+    return {
+        "name": path.name,
+        "size_bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
