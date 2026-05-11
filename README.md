@@ -152,7 +152,7 @@ Hosted on **GitHub Pages** from the `docs/` directory. The preferred production 
 - **Daily market data**: VPS systemd timer reprocesses the recent overlap window for generation, prices, dispatch load, constraints, FCAS, and small MLF tracker changes.
 - **Weekly reference data**: VPS systemd timer refreshes generator registration metadata plus MLF tracker data without forcing a full historical rebuild.
 - **Annual MLF lane**: VPS systemd timer forces a lightweight MLF refresh around final MLF publication season without touching SCADA or constraints.
-- **Manual trigger**: GitHub Actions remains available via `workflow_dispatch` for verification/fallback, but should not be the primary heavy data runner once the VPS cache volume is installed.
+- **Manual trigger**: GitHub Actions remains available via `workflow_dispatch` for verification/fallback, but the VPS is the primary scheduled data runner for normal bounded-cache automation.
 
 See `deploy/README.md` for VPS setup details.
 
