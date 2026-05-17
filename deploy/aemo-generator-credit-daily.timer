@@ -3,8 +3,8 @@ Description=Run daily AEMO generator credit market-data refresh
 Documentation=https://github.com/cutout-z/aemo-generator-credit-dashboard
 
 [Timer]
-# 22:45 UTC = 06:45 Australia/Perth.
-OnCalendar=*-*-* 22:45:00
+# 23:05 UTC = 07:05 Australia/Perth; randomized delay keeps alerts after 7am.
+OnCalendar=*-*-* 23:05:00
 RandomizedDelaySec=20m
 Persistent=true
 Unit=aemo-generator-credit@daily.service
