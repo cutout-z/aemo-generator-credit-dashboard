@@ -87,7 +87,7 @@ A single-page static site built with vanilla HTML/CSS/JS and [Plotly.js](https:/
 
 ### Features
 - **Search**: Real-time autocomplete by station name or DUID, with region and fuel type filters
-- **Station aggregation**: Multi-DUID stations (e.g. Clarke Creek Wind Farm) appear as a single aggregated entry with summed generation/revenue and per-DUID MLF traces
+- **Station aggregation**: Multi-DUID stations (e.g. Clarke Creek Wind Farm) appear as a single aggregated entry with summed generation/revenue, station-level curtailment/constraint charts, and per-DUID MLF traces
 - **Generator card**: DUID, station, region, fuel type, technology, capacity, connection point
 - **Time selector**: 3M / 6M / 12M / 3Y / 5Y / All (does not affect MLF chart)
 - **Methodology tooltips**: Hover over any chart title for formula, methodology, and caveats
