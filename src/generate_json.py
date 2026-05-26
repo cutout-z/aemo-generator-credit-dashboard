@@ -155,7 +155,14 @@ def generate_generator_json(
             "generation_mwh": daily_data["daily_generation_mwh"].tolist(),
         }
 
-    # Binding constraint data
+    _add_constraints_doc(doc, constraint_data)
+
+    json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
+    return json_path
+
+
+def _add_constraints_doc(doc: dict, constraint_data: pd.DataFrame | None) -> None:
+    """Attach top binding-constraint summary to a generator/station document."""
     if constraint_data is not None and not constraint_data.empty:
         top = (
             constraint_data.groupby(["constraint_id", "description"])["hours_bound"]
@@ -189,9 +196,6 @@ def generate_generator_json(
                 ],
                 "heatmap": {"months": months, "constraints": heatmap},
             }
-
-    json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
-    return json_path
 
 
 def _sanitize(obj):
@@ -385,6 +389,7 @@ def generate_all(
         generators, monthly_aggregates, mlf_history,
         draft_mlfs, draft_fy_label, fcas_data, gen_dir, docs_dir,
         daily_aggregates=daily_aggregates,
+        constraint_data=constraint_data,
         market=market,
     )
     logger.info(f"Wrote {station_count} station aggregate files")
@@ -410,6 +415,7 @@ def _generate_station_files(
     gen_dir: str,
     docs_dir: str,
     daily_aggregates: pd.DataFrame | None = None,
+    constraint_data: pd.DataFrame | None = None,
     market: str = "NEM",
 ) -> int:
     """Generate station-level aggregation files for multi-DUID stations."""
@@ -431,6 +437,7 @@ def _generate_station_files(
         fuel = group["FUEL_CATEGORY"].iloc[0]
         technology = group["TECHNOLOGY"].iloc[0]
         connection_points = group.get("CONNECTION_POINT", pd.Series()).tolist()
+        capacity_by_duid = group.set_index("DUID")["CAPACITY_MW"].to_dict()
 
         file_key = _safe_station_filename(station_name)
 
@@ -451,7 +458,7 @@ def _generate_station_files(
             station_monthly = monthly_aggregates[monthly_aggregates["duid"].isin(duids)]
             if not station_monthly.empty:
                 doc["monthly"] = _aggregate_station_monthly(
-                    station_monthly, total_capacity, fuel,
+                    station_monthly, total_capacity, fuel, capacity_by_duid,
                 )
 
         # Per-DUID MLFs
@@ -509,6 +516,20 @@ def _generate_station_files(
                     "generation_mwh": grouped_daily["daily_generation_mwh"].round(1).tolist(),
                 }
 
+        # Binding constraints: union the DUID-level rows for the station.
+        # A single binding constraint can map to multiple station DUIDs; keep
+        # one station-hour observation per month/constraint rather than
+        # double-counting the same binding interval as DUID-hours.
+        if constraint_data is not None and not constraint_data.empty:
+            station_constraints = constraint_data[constraint_data["duid"].isin(duids)].copy()
+            if not station_constraints.empty:
+                station_constraints = (
+                    station_constraints
+                    .groupby(["month", "constraint_id", "description"], as_index=False)
+                    .agg(hours_bound=("hours_bound", "max"))
+                )
+                _add_constraints_doc(doc, station_constraints)
+
         json_path = out_dir / f"{file_key}.json"
         json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
         count += 1
@@ -549,11 +570,18 @@ def _aggregate_station_monthly(
     station_monthly: pd.DataFrame,
     total_capacity: float,
     fuel: str,
+    capacity_by_duid: dict[str, float] | None = None,
 ) -> dict:
     """Aggregate monthly metrics across multiple DUIDs for a station."""
     from calendar import monthrange
 
-    # Group by month and sum/average
+    if capacity_by_duid:
+        station_monthly = station_monthly.copy()
+        station_monthly["_capacity_weight"] = station_monthly["duid"].map(capacity_by_duid)
+    else:
+        station_monthly = station_monthly.copy()
+        station_monthly["_capacity_weight"] = None
+
     grouped = station_monthly.groupby("month")
 
     months = sorted(station_monthly["month"].unique())
@@ -561,14 +589,31 @@ def _aggregate_station_monthly(
     revenue = []
     cap_factor = []
     curtailment = []
+    grid_curtailment = []
+    mech_curtailment = []
     econ_curtailment = []
     captured_price = []
     avg_rrp = []
     pcr = []
 
     has_curtailment = "curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
+    has_grid_curt = "grid_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
+    has_mech_curt = "mechanical_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
     has_econ_curt = "econ_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
     has_price = "captured_price" in station_monthly.columns
+
+    def weighted_pct(month_data: pd.DataFrame, col: str) -> float | None:
+        valid = month_data.dropna(subset=[col])
+        if valid.empty:
+            return None
+
+        valid_weighted = valid.dropna(subset=["_capacity_weight"])
+        weight_sum = valid_weighted["_capacity_weight"].sum()
+        if not valid_weighted.empty and weight_sum > 0:
+            value = (valid_weighted[col] * valid_weighted["_capacity_weight"]).sum() / weight_sum
+        else:
+            value = valid[col].mean()
+        return round(float(value), 4)
 
     for m in months:
         month_data = grouped.get_group(m)
@@ -584,20 +629,17 @@ def _aggregate_station_monthly(
         else:
             cap_factor.append(None)
 
-        # Curtailment: capacity-weighted average
         if has_curtailment:
-            valid = month_data.dropna(subset=["curtailment_pct"])
-            if not valid.empty:
-                curtailment.append(round(float(valid["curtailment_pct"].mean()), 4))
-            else:
-                curtailment.append(None)
+            curtailment.append(weighted_pct(month_data, "curtailment_pct"))
+
+        if has_grid_curt:
+            grid_curtailment.append(weighted_pct(month_data, "grid_curtailment_pct"))
+
+        if has_mech_curt:
+            mech_curtailment.append(weighted_pct(month_data, "mechanical_curtailment_pct"))
 
         if has_econ_curt:
-            valid = month_data.dropna(subset=["econ_curtailment_pct"])
-            if not valid.empty:
-                econ_curtailment.append(round(float(valid["econ_curtailment_pct"].mean()), 4))
-            else:
-                econ_curtailment.append(None)
+            econ_curtailment.append(weighted_pct(month_data, "econ_curtailment_pct"))
 
         # Price capture: generation-weighted
         if has_price:
@@ -624,6 +666,10 @@ def _aggregate_station_monthly(
     }
     if has_curtailment:
         result["curtailment_pct"] = curtailment
+    if has_grid_curt:
+        result["grid_curtailment_pct"] = grid_curtailment
+    if has_mech_curt:
+        result["mechanical_curtailment_pct"] = mech_curtailment
     if has_econ_curt:
         result["econ_curtailment_pct"] = econ_curtailment
     if has_price:
