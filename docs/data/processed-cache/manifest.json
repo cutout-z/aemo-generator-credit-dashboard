@@ -2,23 +2,23 @@
   "files": [
     {
       "name": "constraint_aggregates.feather",
-      "sha256": "aec3fb16a3575a989fbdd88336de0eb79c4982313e9fe2588c8f523208fdced5",
-      "size_bytes": 3731954
+      "sha256": "198f3127984fca19ce5f5ddb08393eaa587c5fb42a8f2dae1c6a1fc63e141cde",
+      "size_bytes": 3634154
     },
     {
       "name": "daily_aggregates.feather",
-      "sha256": "0e8f83efc20d681775a3aaa66beb60aaa80fd5a8c2b0c0c81da701a449aff4bd",
-      "size_bytes": 2482714
+      "sha256": "78b90860be8b86f5feb02c0fb047a0903fb4a691a3c5f94e9d55eb7da92b2745",
+      "size_bytes": 2411466
     },
     {
       "name": "fcas_aggregates.feather",
-      "sha256": "ca00f9801b9b2e0f2da0142a0b33ec4e66e6679fafbab4fd3a3a1cb34ab1ead0",
-      "size_bytes": 17698
+      "sha256": "740f58b3dbc4617feda167b73ae45e0ef8f0c24d24db2577638ff9e56ea0b98c",
+      "size_bytes": 18898
     },
     {
       "name": "generators.feather",
-      "sha256": "75f6a7e9a383515a0f5cab06176b23f8c2229497ff02d77f427b123780599081",
-      "size_bytes": 38410
+      "sha256": "9762df68e3b3e8e5a97076bbd362c1b3b4f82d06fce38f51acffeffd9cdfb711",
+      "size_bytes": 36674
     },
     {
       "name": "intermittent_quality_2026_02.feather",
@@ -32,8 +32,8 @@
     },
     {
       "name": "intermittent_quality_2026_04.feather",
-      "sha256": "472e8158aaed34f0346cf57fea58b25149463bd8942bea1c7a3773e3d26a57d1",
-      "size_bytes": 4754
+      "sha256": "6ecafa6be79bee7b572b77221ad27f472e349f0ace350fdd237a98b4b77ef8b3",
+      "size_bytes": 6210
     },
     {
       "name": "mlf_history.feather",
@@ -42,13 +42,13 @@
     },
     {
       "name": "mlf_tracker_summary.csv",
-      "sha256": "93cc3b1dd3faabb889692241a9bc027d5a78b25ab3171745753c6028b08b9a74",
-      "size_bytes": 149911
+      "sha256": "b4d123d0b2aa59f2f9f943f6751f46c53148b850586bfb334ac9ca6a864f0215",
+      "size_bytes": 149952
     },
     {
       "name": "monthly_aggregates.feather",
-      "sha256": "b58488292541a96700d18de3b149dd2eafa96b0d59863749a2f91106db57d3c2",
-      "size_bytes": 2422210
+      "sha256": "6917c90f86eab66213ed09140281c9a033d3e8180014e42ee8ee6921876c7fbd",
+      "size_bytes": 2423514
     }
   ],
   "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
