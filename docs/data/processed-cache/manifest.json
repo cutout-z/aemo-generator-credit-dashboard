@@ -7,8 +7,8 @@
     },
     {
       "name": "daily_aggregates.feather",
-      "sha256": "c338aa418d10711683ea3648aa4f3209f7da33ee521e96784b0248e03409fd29",
-      "size_bytes": 2304954
+      "sha256": "f37afa98b6e8b1499f28cf23b6f29cdf9e7022f256e2478df565b1698851558a",
+      "size_bytes": 2297554
     },
     {
       "name": "fcas_aggregates.feather",
