@@ -7,13 +7,13 @@
     },
     {
       "name": "daily_aggregates.feather",
-      "sha256": "2fa8bef3d5a3f6353282d739b792288a0a5837d61489437375bc1bfb137a98eb",
-      "size_bytes": 2491002
+      "sha256": "fb7ae4cad6c2becc0bea004167be40cd5e2091db806d3138ddb2375660be90a7",
+      "size_bytes": 2484610
     },
     {
       "name": "fcas_aggregates.feather",
-      "sha256": "fa1998ce6f5e024f565e820b4782c28d7ac5d77280a90ff94cd1af3a8c290d49",
-      "size_bytes": 19154
+      "sha256": "b84501b4221a0e9cfddc59533e1dcce3c4f1aad281ba658f4f0f6678183ac3a7",
+      "size_bytes": 19090
     },
     {
       "name": "generators.feather",
