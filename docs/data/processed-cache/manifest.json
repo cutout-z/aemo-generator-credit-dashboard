@@ -17,8 +17,8 @@
     },
     {
       "name": "generators.feather",
-      "sha256": "763b35cb67582a725609f1a5d9ce26f25f0c0a54a8280679612bcd830e86611f",
-      "size_bytes": 48930
+      "sha256": "2264b4c25b5d56fe081c1dee6c9e352201983c05d5761454088e410adc4c7a9a",
+      "size_bytes": 48954
     },
     {
       "name": "intermittent_quality_2026_02.feather",
@@ -62,8 +62,8 @@
     },
     {
       "name": "monthly_aggregates.feather",
-      "sha256": "c7d3847de4200a51205b8d15d72f54f05c3a44ebe0dd43a0d1d3fdb30397d7a7",
-      "size_bytes": 2552674
+      "sha256": "11a1cdb38fe143da5a2ccacc8478faaecc71f5f040e5437251d6547c0eab635c",
+      "size_bytes": 2552570
     }
   ],
   "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
