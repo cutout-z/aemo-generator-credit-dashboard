@@ -64,6 +64,18 @@ def fetch_fcas_bids_month(
         logger.warning(f"No BIDPEROFFER_D data for {year}-{month:02d}")
         return pd.DataFrame()
 
+    # Months whose archive is not yet published come back schemaless
+    # (nemosis loads only the columns it finds). Fail soft — the factor step
+    # simply skips this month — instead of KeyError-ing the whole run.
+    required = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "MAXAVAIL", "VERSIONNO"}
+    missing = required - set(bids.columns)
+    if missing:
+        logger.warning(
+            f"BIDPEROFFER_D {year}-{month:02d}: missing columns {sorted(missing)} "
+            "(archive not yet published?) — skipping month"
+        )
+        return pd.DataFrame()
+
     bids = bids[bids["BIDTYPE"].isin(FCAS_BID_TYPES)].copy()
     if bids.empty:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no FCAS bid rows")

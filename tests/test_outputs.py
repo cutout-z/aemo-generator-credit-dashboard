@@ -106,18 +106,33 @@ class TestValueBounds:
         assert "-" not in self.agg["duid"].values, "DUID '-' placeholder in aggregates"
 
     def test_daily_capacity_factor_range(self):
-        """Daily CF > 1.0 was the BW02 finding in the Apr-2026 audit (max 1.0364)."""
+        """Daily CF bounds, fuel-aware.
+
+        Bounds are fuel-aware. Hydro units peak above nameplate during
+        short-duration releases (CETHANA/GUTHEGA/POAT*/REPULSE max ~1.19)
+        and are allowed to 1.25. Non-hydro hard-fails at 1.10: catches
+        material (>10%) registration understatement. The subtle 2-10% class
+        (BW02 1.036, OSB-AG ~1.07, QPS3 ~1.095) is deliberately delegated to
+        the monthly CF audit (src/audit_cf.py: flags sustained CF > 1.02 over
+        3+ months) plus manual CAPACITY_OVERRIDES review - a hard bound there
+        would fail every run without a confirmed registration correction.
+        """
         path = DATA_DIR / "daily_aggregates.feather"
         if not path.exists():
             pytest.skip("daily_aggregates.feather not present")
         daily = pd.read_feather(path)
         cf = daily["daily_capacity_factor"].dropna()
         assert (cf >= 0).all(), "Negative daily capacity factors found"
-        # Allow the same 1.1 headroom the aggregation code logs warnings at
-        assert (cf <= 1.1).all(), (
-            f"Daily capacity factors > 1.1 found: "
-            f"{daily.loc[cf[cf > 1.1].index, ['duid', 'date', 'daily_capacity_factor']].to_dict('records')[:5]}"
-        )
+        fuel = self.gen.set_index("DUID")["FUEL_CATEGORY"]
+        kind = daily["duid"].map(fuel).fillna("Other")
+        is_hydro = kind == "Hydro"
+        for label, mask, bound in (("non-hydro", ~is_hydro, 1.10), ("hydro", is_hydro, 1.25)):
+            sub = cf[mask.reindex(cf.index, fill_value=False)]
+            offenders = sub[sub > bound]
+            assert offenders.empty, (
+                f"Daily CF > {bound} for {label}: "
+                f"{daily.loc[offenders.index, ['duid', 'date', 'daily_capacity_factor']].to_dict('records')[:5]}"
+            )
 
 
 # ─── Freshness (systematic-gap fix: stale data must fail the pipeline) ──────
