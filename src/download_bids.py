@@ -67,7 +67,7 @@ def fetch_fcas_bids_month(
     # Months whose archive is not yet published come back schemaless
     # (nemosis loads only the columns it finds). Fail soft — the factor step
     # simply skips this month — instead of KeyError-ing the whole run.
-    required = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "MAXAVAIL", "VERSIONNO"}
+    required = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "MAXAVAIL"}
     missing = required - set(bids.columns)
     if missing:
         logger.warning(
@@ -82,11 +82,19 @@ def fetch_fcas_bids_month(
         return pd.DataFrame()
 
     # Rebids create multiple versions per (unit, service, interval):
-    # the latest VERSIONNO is the operative offer.
-    bids["VERSIONNO"] = pd.to_numeric(bids["VERSIONNO"], errors="coerce")
-    bids = bids.sort_values("VERSIONNO").drop_duplicates(
-        subset=["INTERVAL_DATETIME", "DUID", "BIDTYPE"], keep="last"
-    )
+    # the latest VERSIONNO is the operative offer. VERSIONNO is optional —
+    # parquets cached before it was ever requested lack the column; then we
+    # skip dedupe (slight offer-minute overstatement possible, logged).
+    if "VERSIONNO" in bids.columns:
+        bids["VERSIONNO"] = pd.to_numeric(bids["VERSIONNO"], errors="coerce")
+        bids = bids.sort_values("VERSIONNO").drop_duplicates(
+            subset=["INTERVAL_DATETIME", "DUID", "BIDTYPE"], keep="last"
+        )
+    else:
+        logger.warning(
+            f"BIDPEROFFER_D {year}-{month:02d}: VERSIONNO absent from cache — "
+            "skipping rebid dedupe (delete the cached parquet to rebuild)"
+        )
 
     bids["MAXAVAIL"] = pd.to_numeric(bids["MAXAVAIL"], errors="coerce")
     bids = bids.dropna(subset=["MAXAVAIL"])
