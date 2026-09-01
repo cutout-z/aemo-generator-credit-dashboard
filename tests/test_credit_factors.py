@@ -176,6 +176,68 @@ class TestRegionalFcasSemanticsRegression:
 # ─── Freshness guards ────────────────────────────────────────────────────────
 
 
+class TestDurationSpreads:
+    """Duration-parameterized capture windows (1h/2h/4h/8h)."""
+
+    def _mk(self):
+        prices = pd.DataFrame({
+            "SETTLEMENTDATE": pd.to_datetime(["2026-01-15 00:00:00"] * 100),
+            "REGIONID": ["NSW1"] * 100,
+            "RRP": list(range(1, 101)),  # 1..100 -> k=5: high 96..100, low 1..5
+        })
+        return compute_daily_spreads(prices).iloc[0]
+
+    def test_exact_window_means(self):
+        row = self._mk()
+        assert abs(row["vwap_high_1h"] - 98.5) < 0.01   # k=round(100/24)=4: mean(97..100)
+        assert abs(row["vwap_low_1h"] - 2.5) < 0.01     # mean(1..4)
+        assert abs(row["spread_1h"] - 96.0) < 0.01
+        assert abs(row["spread_4h"] - 83.0) < 0.01      # k=17
+        assert abs(row["spread_8h"] - 67.0) < 0.01      # k=33
+
+    def test_partial_days_skipped(self):
+        prices = pd.DataFrame({
+            "SETTLEMENTDATE": pd.to_datetime(["2026-08-01 00:00:00"]),
+            "REGIONID": ["NSW1"],
+            "RRP": [60.0],
+        })
+        out = compute_daily_spreads(prices)
+        assert out.empty  # 1-interval phantom day must not publish spread 0
+
+    def test_monotone_in_duration(self):
+        row = self._mk()
+        assert row["spread_1h"] >= row["spread_2h"] >= row["spread_4h"] >= row["spread_8h"]
+
+    def test_decile_is_the_2p4h_proxy(self):
+        row = self._mk()
+        assert abs(row["spread_decile"] - 90.0) < 0.01  # k=n//10=10
+
+    def test_json_includes_by_duration(self, tmp_path):
+        df = pd.DataFrame([
+            {"region": "NSW1", "date": "2026-01-15", "vwap_high": 98.0, "vwap_low": 3.0,
+             "spread_decile": 95.0, "spread_max": 99.0, "neg_price_share": 0.0,
+             "price_std": 29.0, "intervals": 100,
+             "vwap_high_1h": 98.0, "vwap_low_1h": 3.0, "spread_1h": 95.0,
+             "vwap_high_2h": 96.5, "vwap_low_2h": 4.5, "spread_2h": 92.0,
+             "vwap_high_4h": 94.0, "vwap_low_4h": 7.0, "spread_4h": 87.0,
+             "vwap_high_8h": 90.0, "vwap_low_8h": 13.0, "spread_8h": 77.0},
+        ])
+        import json as _json
+        from src.generate_market_json import publish_market_json
+        from src.market_factors import build_quarterly_summary
+        publish_market_json(
+            df.reset_index(drop=True), build_quarterly_summary(df), str(tmp_path),
+            qed_benchmarks={"2026Q1": 121.0},
+        )
+        payload = _json.loads((tmp_path / "market_daily.json").read_text())
+        q = payload["quarterly"][0]
+        assert q["qed_reference"] == 121.0
+        bd = payload["regions"]["NSW1"]["by_duration"]
+        assert set(bd.keys()) == {"1h", "2h", "4h", "8h"}
+        assert bd["4h"]["spread"] == [87.0]
+        assert payload["regions"]["NSW1"]["spread_decile"] == [95.0]
+
+
 class TestFreshness:
     def test_recent_month_passes(self):
         agg = pd.DataFrame({"duid": ["X"], "month": ["2026-07"]})

@@ -774,9 +774,12 @@
                 <h3>Regional Price Spreads (BESS Arbitrage)</h3>
                 <div class="chart-tooltip">
                     <div class="tooltip-title">Methodology</div>
-                    Daily top-decile vs bottom-decile VWAP of 5-minute regional prices — the realisable discharge-value and charge-cost windows. The gap between them (decile spread) is the arbitrage margin a 1–2h battery can target. Market-level data: applies to every unit in the region.
+                    Daily top/bottom capture-window VWAPs of 5-minute regional prices — the realisable discharge-value and charge-cost windows. The 1h/2h/4h/8h selector takes the top and bottom (duration × 12) five-minute intervals of each day, matching the cycling window of that battery duration; wider windows blend in mid-priced hours, so the realisable spread falls as duration grows. 'Decile' (fixed top/bottom 10% ≈ 2.4h) is the legacy 1–2h-battery proxy, kept for continuity with the AEMO QED benchmark. Market-level data: applies to every unit in the region.
                     <div class="tooltip-caveat">Derived from AEMO DISPATCHPRICE 5-minute data. Quarterly context: AEMO QED reported NEM fleet charge/discharge spreads of $121/MWh in Q1 2026 and $51/MWh in Q2 2026.</div>
                 </div>
+            </div>
+            <div id="spreadDuration" style="display:flex;gap:6px;margin:0 0 8px 0;flex-wrap:wrap;">
+                <button data-dur="1h" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">1h</button><button data-dur="2h" style="background:#232838;border:1px solid #4a9eff;color:#ffffff;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">2h</button><button data-dur="4h" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">4h</button><button data-dur="8h" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">8h</button><button data-dur="decile" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">Decile (~2.4h)</button>
             </div>
             <div id="chartMarketSpread"><div class="placeholder">No data yet</div></div>
         </div>
@@ -1530,29 +1533,7 @@ function renderCharts(data) {
 
     // Regional price spreads (market factors) — market-level chart
     const spreadPanel = document.getElementById('panelMarketSpread');
-    if (spreadPanel && marketDaily && marketDaily.regions && marketDaily.regions[data.region]) {
-        const rd = marketDaily.regions[data.region];
-        spreadPanel.style.display = 'block';
-        const nDates = rd.dates.length;
-        const sCut = nDates > 365 ? nDates - 365 : 0;
-        const xs = rd.dates.slice(sCut);
-        const spreadTraces = [
-            { x: xs, y: rd.vwap_high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Top-decile VWAP (discharge value)', line: { color: '#22c55e', width: 1.5 } },
-            { x: xs, y: rd.vwap_low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Bottom-decile VWAP (charge cost)', line: { color: '#ef4444', width: 1.5 } },
-            { x: xs, y: rd.spread_decile.slice(sCut), type: 'scatter', mode: 'lines', name: 'Decile spread', yaxis: 'y2', line: { color: '#3b82f6', width: 1.2, dash: 'dot' } },
-        ];
-        Plotly.newPlot('chartMarketSpread', spreadTraces, {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'date' },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'VWAP $/MWh' },
-            yaxis2: { title: 'Spread $/MWh', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', zerolinecolor: '#2d3140', tickfont: { size: 11 }, automargin: true },
-            showlegend: true,
-            legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40, r: 78 },
-        }, PLOTLY_CONFIG);
-    } else if (spreadPanel) {
-        spreadPanel.style.display = 'none';
-    }
+    renderSpreadChart(data.region);
 
     // Generation (Last 12 Months) — two stacked subplots: daily MWh bars (top) + CF line (bottom)
     const dailyCFPanel = document.getElementById('panelDailyCF');
@@ -2067,6 +2048,62 @@ function downloadCSV() {
     link.click();
     URL.revokeObjectURL(link.href);
 }
+
+
+// ─── Market spread chart: duration-aware rendering ─────────────────────
+let marketSpreadDuration = '2h';
+let marketSpreadRegion = null;
+
+function renderSpreadChart(region) {
+    const spreadPanel = document.getElementById('panelMarketSpread');
+    if (!spreadPanel) return;
+    marketSpreadRegion = region;
+    const rd = (marketDaily && marketDaily.regions) ? marketDaily.regions[region] : null;
+    if (!rd || !rd.dates || rd.dates.length === 0) {
+        spreadPanel.style.display = 'none';
+        return;
+    }
+    spreadPanel.style.display = 'block';
+    const nDates = rd.dates.length;
+    const sCut = nDates > 365 ? nDates - 365 : 0;
+    const xs = rd.dates.slice(sCut);
+    const dur = marketSpreadDuration;
+    let high, low, spread, label;
+    if (dur === 'decile' || !rd.by_duration || !rd.by_duration[dur]) {
+        high = rd.vwap_high; low = rd.vwap_low; spread = rd.spread_decile;
+        label = 'Decile ~2.4h';
+    } else {
+        const b = rd.by_duration[dur];
+        high = b.vwap_high; low = b.vwap_low; spread = b.spread;
+        label = dur + ' window';
+    }
+    const spreadTraces = [
+        { x: xs, y: high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Discharge-window VWAP (' + label + ')', line: { color: '#22c55e', width: 1.5 } },
+        { x: xs, y: low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Charge-window VWAP (' + label + ')', line: { color: '#ef4444', width: 1.5 } },
+        { x: xs, y: spread.slice(sCut), type: 'scatter', mode: 'lines', name: 'Spread (' + label + ')', yaxis: 'y2', line: { color: '#3b82f6', width: 1.2, dash: 'dot' } },
+    ];
+    Plotly.newPlot('chartMarketSpread', spreadTraces, {
+        ...PLOTLY_LAYOUT_BASE,
+        xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'date' },
+        yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'VWAP $/MWh' },
+        yaxis2: { title: 'Spread $/MWh', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', zerolinecolor: '#2d3140', tickfont: { size: 11 }, automargin: true },
+        showlegend: true,
+        legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
+        margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40, r: 78 },
+    }, PLOTLY_CONFIG);
+}
+
+document.querySelectorAll('#spreadDuration button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        marketSpreadDuration = btn.dataset.dur;
+        document.querySelectorAll('#spreadDuration button').forEach(b => {
+            const on = b === btn;
+            b.style.borderColor = on ? '#4a9eff' : '#2d3140';
+            b.style.color = on ? '#ffffff' : '#9ca3af';
+        });
+        renderSpreadChart(marketSpreadRegion);
+    });
+});
 
 function downloadXLSX() {
     if (!currentData || typeof XLSX === 'undefined') return;

@@ -65,26 +65,35 @@ def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
     for (region, date_str), g in df.groupby(["REGIONID", "date"]):
         rrp = g["RRP"].to_numpy(dtype=float)
         n = len(rrp)
-        if n == 0:
+        # Skip partial days (e.g. month files that include the next month's
+        # first interval) — a 1-interval "day" would publish spread 0.
+        if n < 72:
             continue
-        # Decile VWAPs: mean of top 10% and bottom 10% of intervals by price.
-        # ~288 intervals/day -> ~29 intervals per decile (≈2.4h of charging or
-        # discharging), a realistic operating window for a 1-2h BESS.
-        k = max(1, n // 10)
-        part = np.partition(rrp, (n - k, k - 1))
-        vwap_high = float(part[n - k:].mean())
-        vwap_low = float(part[:k].mean())
-        out.append({
+        # Capture-window VWAPs. The decile (~2.4h at 288 intervals) is the
+        # legacy 1-2h-battery proxy; the duration series parameterizes the
+        # window so spreads match the battery being assessed. Window means
+        # are monotone in window size: spread_1h >= spread_2h >= 4h >= 8h.
+        sorted_desc = np.sort(rrp)[::-1]
+        row = {
             "date": date_str,
             "region": region,
-            "vwap_high": round(vwap_high, 2),
-            "vwap_low": round(vwap_low, 2),
-            "spread_decile": round(vwap_high - vwap_low, 2),
-            "spread_max": round(float(rrp.max() - rrp.min()), 2),
             "neg_price_share": round(float((rrp < 0).mean()), 4),
             "price_std": round(float(rrp.std()), 2),
             "intervals": int(n),
-        })
+        }
+        for dur, hours in (("1h", 24), ("2h", 12), ("4h", 6), ("8h", 3)):
+            k_d = max(1, round(n / hours))
+            hi = float(sorted_desc[:k_d].mean())
+            lo = float(sorted_desc[-k_d:].mean())
+            row[f"vwap_high_{dur}"] = round(hi, 2)
+            row[f"vwap_low_{dur}"] = round(lo, 2)
+            row[f"spread_{dur}"] = round(hi - lo, 2)
+        k = max(1, n // 10)
+        row["vwap_high"] = round(float(sorted_desc[:k].mean()), 2)
+        row["vwap_low"] = round(float(sorted_desc[-k:].mean()), 2)
+        row["spread_decile"] = round(row["vwap_high"] - row["vwap_low"], 2)
+        row["spread_max"] = round(float(rrp.max() - rrp.min()), 2)
+        out.append(row)
 
     return pd.DataFrame(out)
 
@@ -107,9 +116,14 @@ def build_market_factors(data_dir: str, months: list[tuple[int, int]]) -> pd.Dat
     new_frames = []
     for year, month in months:
         month_label = f"{year}-{month:02d}"
-        # Skip months already computed (settled market data never changes)
-        if not existing.empty and (existing["date"].str.startswith(month_label)).any():
+        # Skip months already computed (settled market data never changes),
+        # unless they predate the duration columns — recompute those from the
+        # raw price cache so by_duration backfills wherever prices survive.
+        already = not existing.empty and (existing["date"].str.startswith(month_label)).any()
+        if already and "spread_8h" in existing.columns:
             continue
+        # else fall through: fetch_dispatch_price_month(rebuild=False) uses the
+        # raw cache only and raises if pruned — months keep decile-only history.
         try:
             prices = fetch_dispatch_price_month(year, month, data_dir, rebuild=False)
         except Exception as e:

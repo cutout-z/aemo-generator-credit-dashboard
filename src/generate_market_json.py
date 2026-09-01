@@ -1,4 +1,12 @@
-"""Publish market-level credit-risk factors as dashboard JSON."""
+"""Publish market-level credit-risk factors as dashboard JSON.
+
+Schema (per region):
+    dates, vwap_high/vwap_low/spread_decile/spread_max/neg_price_share/price_std
+        — legacy decile (~2.4h window) series, kept for continuity + QED check
+    by_duration: {"1h"|"2h"|"4h"|"8h": {vwap_high[], vwap_low[], spread[]}}
+        — duration-parameterized capture windows (4.2%/8.3%/16.7%/33.3% of
+          the day's intervals), so spreads match the battery being assessed.
+"""
 
 from __future__ import annotations
 
@@ -8,75 +16,111 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pandas as pd
+from .market_factors import (
+    MARKET_FACTORS_CACHE,
+    QED_NEM_SPREAD_AUD_MWH,
+    quarter_label,
+    build_quarterly_summary as quarterly_spreads,
+)
 
 logger = logging.getLogger(__name__)
 
-MARKET_DAILY_JSON = "market_daily.json"
-MARKET_QUARTERLY_JSON = "market_quarterly.json"
+DURATIONS = ["1h", "2h", "4h", "8h"]
 
 
-def _sanitize(obj):
-    """Replace NaN/Inf floats with None for valid JSON."""
-    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+def _clean(value) -> float | None:
+    """None out NaN/inf so json.dump emits null, not NaN (invalid JSON)."""
+    if value is None:
         return None
-    if isinstance(obj, dict):
-        return {k: _sanitize(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize(v) for v in obj]
-    return obj
+    value = float(value)
+    return value if math.isfinite(value) else None
 
 
 def publish_market_json(
-    daily_factors: pd.DataFrame,
-    quarterly: pd.DataFrame,
-    docs_data_dir: str,
-    qed_benchmarks: dict[str, float] | None = None,
+    market_factors,
+    market_quarterly,
+    out_dir: str,
+    qed_benchmarks: dict | None = None,
 ) -> None:
-    """Write market_daily.json and market_quarterly.json under docs/data."""
-    if daily_factors is None or daily_factors.empty:
-        logger.warning("No market factors computed — skipping market JSON publish")
+    """Write market_daily.json from in-memory factor DataFrames.
+
+    Args:
+        market_factors: daily region factors (incl. duration columns) as built
+            by build_market_factors.
+        market_quarterly: region x quarter summary as built by
+            build_quarterly_summary.
+        out_dir: directory to write market_daily.json into (docs/data).
+        qed_benchmarks: optional {quarter: AUD/MWh} override of the built-in
+            QED reference table.
+    """
+    if market_factors is None or len(market_factors) == 0:
+        logger.warning("publish_market_json: no market factors to publish")
         return
+    df = market_factors.copy()
 
-    out_dir = Path(docs_data_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    regions = {}
-    for region, g in daily_factors.groupby("region"):
+    regions: dict[str, dict] = {}
+    for region, g in df.groupby("region"):
         g = g.sort_values("date")
-        regions[region] = {
+        entry = {
             "dates": g["date"].tolist(),
-            "vwap_high": g["vwap_high"].tolist(),
-            "vwap_low": g["vwap_low"].tolist(),
-            "spread_decile": g["spread_decile"].tolist(),
-            "spread_max": g["spread_max"].tolist(),
-            "neg_price_share": g["neg_price_share"].tolist(),
-            "price_std": g["price_std"].tolist(),
+            "vwap_high": [_clean(v) for v in g["vwap_high"]],
+            "vwap_low": [_clean(v) for v in g["vwap_low"]],
+            "spread_decile": [_clean(v) for v in g["spread_decile"]],
+            "spread_max": [_clean(v) for v in g["spread_max"]],
+            "neg_price_share": [_clean(v) for v in g["neg_price_share"]],
+            "price_std": [_clean(v) for v in g["price_std"]],
         }
+        by_duration = {}
+        for dur in DURATIONS:
+            hi, lo, sp = f"vwap_high_{dur}", f"vwap_low_{dur}", f"spread_{dur}"
+            if hi in g.columns:
+                by_duration[dur] = {
+                    "vwap_high": [_clean(v) for v in g[hi]],
+                    "vwap_low": [_clean(v) for v in g[lo]],
+                    "spread": [_clean(v) for v in g[sp]],
+                }
+        entry["by_duration"] = by_duration
+        regions[region] = entry
 
-    daily_doc = {
-        "updated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+    quarterly = (
+        market_quarterly.to_dict("records")
+        if market_quarterly is not None and len(market_quarterly) > 0
+        else quarterly_spreads(df).to_dict("records")
+    )
+    # Per-duration quarterly averages (dashboard can toggle duration later)
+    dq = df.copy()
+    dq["quarter"] = dq["date"].map(quarter_label)
+    dur_avg = (
+        dq.groupby(["region", "quarter"])[["spread_2h", "spread_4h", "spread_8h"]]
+        .mean()
+        .round(2)
+    )
+    for row in quarterly:
+        key = (row["region"], row["quarter"])
+        if key in dur_avg.index:
+            for c in ("spread_2h", "spread_4h", "spread_8h"):
+                row[c] = float(dur_avg.loc[key, c])
+        ref = (qed_benchmarks or QED_NEM_SPREAD_AUD_MWH).get(row["quarter"])
+        row["qed_reference"] = ref
+        row["qed_divergence_ratio"] = (
+            round(row["avg_spread_decile"] / ref, 2) if ref else None
+        )
+
+    payload = {
+        "updated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "description": (
-            "Daily market credit-risk factors per region: top/bottom-decile VWAP "
-            "(discharge value / charge cost), decile spread (realizable BESS "
-            "arbitrage proxy), max-min spread, negative-price interval share, "
-            "price volatility. Derived from AEMO DISPATCHPRICE 5-minute data."
+            "Regional daily price-spread factors from AEMO 5-minute DISPATCHPRICE "
+            "data. spread_decile uses a fixed top/bottom-10% window (~2.4h, a "
+            "1-2h battery proxy); by_duration provides 1h/2h/4h/8h capture "
+            "windows for duration-matched BESS analysis. Market-level: applies "
+            "to every unit in the region."
         ),
         "regions": regions,
+        "quarterly": quarterly,
     }
-    (out_dir / MARKET_DAILY_JSON).write_text(
-        json.dumps(_sanitize(daily_doc), separators=(",", ":"))
-    )
-    logger.info(f"Wrote {MARKET_DAILY_JSON}: {len(regions)} regions, "
-                f"{daily_factors['date'].nunique()} days")
 
-    if quarterly is not None and not quarterly.empty:
-        quarterly_doc = {
-            "updated_utc": daily_doc["updated_utc"],
-            "rows": quarterly.to_dict(orient="records"),
-            "qed_benchmark_nem_spread_aud_mwh": qed_benchmarks or {},
-        }
-        (out_dir / MARKET_QUARTERLY_JSON).write_text(
-            json.dumps(_sanitize(quarterly_doc), separators=(",", ":"))
-        )
-        logger.info(f"Wrote {MARKET_QUARTERLY_JSON}: {len(quarterly)} region-quarter rows")
+    out = Path(out_dir) / "market_daily.json"
+    out.write_text(json.dumps(payload, separators=(",", ":")))
+    logger.info("Wrote %s (%d regions, %d quarters)", out, len(regions), len(quarterly))
+
+
