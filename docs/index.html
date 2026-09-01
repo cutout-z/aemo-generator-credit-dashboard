@@ -1545,10 +1545,10 @@ function renderCharts(data) {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'date' },
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'VWAP $/MWh' },
-            yaxis2: { title: 'Spread $/MWh', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', zerolinecolor: '#2d3140', tickfont: { size: 11 } },
+            yaxis2: { title: 'Spread $/MWh', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', zerolinecolor: '#2d3140', tickfont: { size: 11 }, automargin: true },
             showlegend: true,
             legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40 },
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40, r: 78 },
         }, PLOTLY_CONFIG);
     } else if (spreadPanel) {
         spreadPanel.style.display = 'none';
