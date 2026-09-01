@@ -81,6 +81,7 @@ def generate_generator_json(
     fcas_monthly: dict | None = None,
     daily_data: pd.DataFrame | None = None,
     constraint_data: pd.DataFrame | None = None,
+    fcas_factor_rows: pd.DataFrame | None = None,
     output_dir: str | None = None,
 ) -> Path:
     """Write a single generator's JSON file with all dashboard data.
@@ -143,9 +144,25 @@ def generate_generator_json(
     if price_distribution:
         doc["price_distribution"] = price_distribution
 
-    # FCAS regional price context
+    # FCAS regional price context. IMPORTANT: these are REGIONAL market
+    # averages (DISPATCHPRICE) — every generator in the same region carries
+    # identical values by construction. They describe the market the unit
+    # sells into, NOT that unit's FCAS revenue. (The Apr-2026 audit's
+    # "WANDSF1/EMERASF1 100% duplication" P1 was this design, unlabelled.)
+    # Generator-specific FCAS behaviour lives in doc["fcas_participation"].
     if fcas_monthly:
-        doc["fcas"] = fcas_monthly
+        doc["fcas"] = {
+            "scope": "regional_average",
+            "note": (
+                "Regional FCAS market price averages — identical for all "
+                "generators in this region. Not unit-level revenue."
+            ),
+            **fcas_monthly,
+        }
+
+    # Per-DUID FCAS participation factors (BIDPEROFFER_D offers)
+    from .fcas_factor import attach_fcas_factor_doc
+    attach_fcas_factor_doc(doc, fcas_factor_rows)
 
     # Daily capacity factor (last 12 months)
     if daily_data is not None and not daily_data.empty:
@@ -277,6 +294,7 @@ def generate_all(
     fcas_data: dict | None = None,
     daily_aggregates: pd.DataFrame | None = None,
     constraint_data: pd.DataFrame | None = None,
+    fcas_factors: pd.DataFrame | None = None,
     market: str = "NEM",
 ) -> int:
     """Generate all per-generator JSON files and the index.
@@ -374,11 +392,19 @@ def generate_all(
             if duid_constraints.empty:
                 duid_constraints = None
 
+        # Per-DUID FCAS participation (offer behaviour), if computed
+        duid_fcas_factors = None
+        if fcas_factors is not None and not fcas_factors.empty:
+            duid_fcas_factors = fcas_factors[fcas_factors["duid"] == duid].copy()
+            if duid_fcas_factors.empty:
+                duid_fcas_factors = None
+
         generate_generator_json(
             duid, metadata, monthly, mlf, price_dist,
             draft_mlf=d_mlf, draft_fy_label=draft_fy_label,
             fcas_monthly=fcas_monthly, daily_data=daily,
-            constraint_data=duid_constraints, output_dir=gen_dir,
+            constraint_data=duid_constraints,
+            fcas_factor_rows=duid_fcas_factors, output_dir=gen_dir,
         )
         count += 1
 

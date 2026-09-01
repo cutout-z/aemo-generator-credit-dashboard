@@ -27,6 +27,14 @@ from .fetch_mlf import fetch_mlf_data
 from .audit_cf import audit_capacity_factors, log_audit_results
 from .generate_json import generate_all
 from .processed_cache import publish_processed_cache, restore_processed_cache
+from .market_factors import (
+    build_market_factors, build_quarterly_summary, check_qed_divergence,
+    QED_NEM_SPREAD_AUD_MWH,
+)
+from .download_bids import fetch_fcas_bids_month
+from .fcas_factor import compute_fcas_factors
+from .freshness import check_monthly_freshness, check_daily_freshness
+from .generate_market_json import publish_market_json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -120,6 +128,8 @@ def main():
                         help="Rebuild FCAS history from cached DISPATCHPRICE files (implies --skip-scada)")
     parser.add_argument("--no-processed-cache-snapshot", action="store_true",
                         help="Do not restore/publish compact processed cache snapshots")
+    parser.add_argument("--skip-fcas-factors", action="store_true",
+                        help="Skip per-DUID FCAS participation factors (BIDPEROFFER_D download)")
     args = parser.parse_args()
     if args.fcas_rebuild:
         args.skip_scada = True
@@ -456,11 +466,106 @@ def main():
     elif constraint_path.exists():
         all_constraints = pd.read_feather(constraint_path)
 
+    # Step 3b-fix: apply capacity overrides retroactively so retained history
+    # (monthly + daily CF) is consistent with corrected registration. This is
+    # idempotent: re-deriving CF from stored generation and the override value
+    # yields identical numbers every run, so settled-history invariants hold.
+    if not all_monthly.empty and config.CAPACITY_OVERRIDES:
+        from calendar import monthrange as _monthrange
+
+        corrected_rows = 0
+        for _duid, _new_cap in config.CAPACITY_OVERRIDES.items():
+            m_mask = all_monthly["duid"] == _duid
+            if m_mask.any():
+                _hours = all_monthly.loc[m_mask, "month"].map(
+                    lambda lbl: _monthrange(int(lbl[:4]), int(lbl[5:]))[1] * 24
+                )
+                all_monthly.loc[m_mask, "capacity_factor"] = (
+                    all_monthly.loc[m_mask, "generation_mwh"] / (_new_cap * _hours)
+                ).round(4)
+                corrected_rows += int(m_mask.sum())
+            if not all_daily.empty:
+                d_mask = all_daily["duid"] == _duid
+                if d_mask.any():
+                    all_daily.loc[d_mask, "daily_capacity_factor"] = (
+                        all_daily.loc[d_mask, "daily_generation_mwh"] / (_new_cap * 24)
+                    ).round(4)
+                    corrected_rows += int(d_mask.sum())
+        if corrected_rows:
+            logger.info(
+                "Capacity overrides applied retroactively to %d aggregate rows",
+                corrected_rows,
+            )
+            # Persist the corrected feathers: this block runs AFTER the Step-3
+            # saves, so without re-saving, the on-disk history (which the
+            # bounds tests and the processed cache read) keeps stale CF values
+            # and the daily-CF bounds test fails on corrected units.
+            all_monthly.to_feather(aggregates_path)
+            if not all_daily.empty:
+                all_daily.to_feather(daily_path)
+
     # Step 3c: Capacity factor audit
     if not all_monthly.empty:
         logger.info("=== Step 3c: Capacity factor audit ===")
         cf_candidates = audit_capacity_factors(all_monthly, generators)
         log_audit_results(cf_candidates)
+
+    # Step 3d: Market-level credit-risk factors (daily spreads per region).
+    # Uses the raw price cache for every month it holds, so history accumulates
+    # even though the raw cache is pruned after 120 days.
+    logger.info("=== Step 3d: Market spread factors ===")
+    market_factors = pd.DataFrame()
+    try:
+        available_price_months = []
+        for mdir in sorted((data_dir / "nemosis_cache").glob(
+                "PUBLIC_ARCHIVE#DISPATCHPRICE#FILE01#*.parquet")):
+            stem = mdir.name.split("#")[-1]
+            available_price_months.append((int(stem[:4]), int(stem[4:6])))
+        market_factors = build_market_factors(str(data_dir), available_price_months)
+        market_quarterly = build_quarterly_summary(market_factors)
+        check_qed_divergence(market_quarterly)
+    except Exception as e:
+        logger.error(f"Market factor computation failed: {e}")
+        market_quarterly = pd.DataFrame()
+
+    # Step 3e: Per-DUID FCAS participation factors (BIDPEROFFER_D offers).
+    # These are generator-specific, unlike the regional FCAS price averages.
+    fcas_factors = pd.DataFrame()
+    if not args.skip_fcas_factors:
+        logger.info("=== Step 3e: FCAS participation factors ===")
+        fcas_factor_frames = []
+        for year, month in _months_to_process(args.months_back, args.full_refresh):
+            month_label = f"{year}-{month:02d}"
+            try:
+                bids = fetch_fcas_bids_month(year, month, str(data_dir), rebuild=args.full_refresh)
+                if not bids.empty:
+                    fcas_factor_frames.append(compute_fcas_factors(bids, year, month))
+            except Exception as e:
+                logger.warning(f"FCAS factor computation failed for {month_label}: {e}")
+        if fcas_factor_frames:
+            fcas_new = pd.concat(fcas_factor_frames, ignore_index=True)
+            ff_path = data_dir / "fcas_factors.feather"
+            if ff_path.exists() and not args.full_refresh:
+                ff_existing = pd.read_feather(ff_path)
+                reprocessed = set(fcas_new["month"].unique())
+                ff_existing = ff_existing[~ff_existing["month"].isin(reprocessed)]
+                fcas_factors = pd.concat([ff_existing, fcas_new], ignore_index=True)
+            else:
+                fcas_factors = fcas_new
+            fcas_factors.to_feather(ff_path)
+            logger.info(f"Saved {len(fcas_factors)} FCAS factor rows to {ff_path}")
+    else:
+        cached_ff = data_dir / "fcas_factors.feather"
+        if cached_ff.exists():
+            fcas_factors = pd.read_feather(cached_ff)
+            logger.info(f"Loaded {len(fcas_factors)} cached FCAS factor rows")
+
+    # Step 3f: Freshness guards — fail BEFORE publishing stale data.
+    # The daily commit is not a freshness signal: the pipeline re-processes the
+    # most recent archive months, so a total download failure still "succeeds".
+    logger.info("=== Step 3f: Freshness guards ===")
+    check_monthly_freshness(all_monthly)
+    check_daily_freshness(all_daily)
 
     # Step 4: Generate JSON output
     logger.info("=== Step 4: Generating JSON output ===")
@@ -471,7 +576,12 @@ def main():
                          draft_mlfs=draft_mlfs, draft_fy_label=draft_fy_label,
                          fcas_data=fcas_by_region_month if fcas_by_region_month else None,
                          daily_aggregates=daily_agg,
-                         constraint_data=constraint_agg)
+                         constraint_data=constraint_agg,
+                         fcas_factors=fcas_factors if not fcas_factors.empty else None)
+    publish_market_json(
+        market_factors, market_quarterly, str(docs_data_dir),
+        qed_benchmarks=QED_NEM_SPREAD_AUD_MWH,
+    )
     if not args.no_processed_cache_snapshot:
         publish_processed_cache(data_dir, docs_data_dir)
     logger.info(f"Done. Wrote index + {count} generator files.")

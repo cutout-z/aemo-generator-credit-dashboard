@@ -18,7 +18,11 @@ git pull --ff-only origin main
 "${PYTHON}" -m src.main ${PIPELINE_ARGS}
 
 if [[ "${RUN_TESTS}" == "1" ]]; then
-  "${PYTHON}" -m pytest tests/test_outputs.py -v
+  # Full suite: test_outputs (post-pipeline validation incl. freshness),
+  # settled-history guard, station aggregation, processed cache, intermittent
+  # quality. Previously only test_outputs.py ran; the other four existed but
+  # were never executed by the daily lane.
+  "${PYTHON}" -m pytest tests/ -v
 fi
 
 if [[ "${RUN_RAW_CACHE_PRUNE}" == "1" ]]; then

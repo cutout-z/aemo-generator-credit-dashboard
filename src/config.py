@@ -129,6 +129,11 @@ CAPACITY_OVERRIDES: dict[str, float] = {
     # peak SCADA ~585 MW. Registration List still shows 500 MW.
     "LOYYB1": 580.0,
     "LOYYB2": 580.0,
+    # BARRON-1/-2: registered 30 MW each, but sustained mean CF > 1.0 across
+    # FY25-26 with daily peaks ~1.10x registered (Apr-2026 audit; same class
+    # as the KAREEYA/BARRON reference in the audit skill). Implied ~33.2 MW.
+    "BARRON-1": 33.2,
+    "BARRON-2": 33.2,
 }
 
 # ─── Network ────────────────────────────────────────────────────────────────

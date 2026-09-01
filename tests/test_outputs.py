@@ -5,10 +5,13 @@ These are fast, deterministic checks — no re-derivation from raw data.
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import pytest
+
+from src.freshness import check_monthly_freshness, check_daily_freshness
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -101,6 +104,37 @@ class TestValueBounds:
     def test_no_placeholder_duids(self):
         assert "-" not in self.gen["DUID"].values, "DUID '-' placeholder still present"
         assert "-" not in self.agg["duid"].values, "DUID '-' placeholder in aggregates"
+
+    def test_daily_capacity_factor_range(self):
+        """Daily CF > 1.0 was the BW02 finding in the Apr-2026 audit (max 1.0364)."""
+        path = DATA_DIR / "daily_aggregates.feather"
+        if not path.exists():
+            pytest.skip("daily_aggregates.feather not present")
+        daily = pd.read_feather(path)
+        cf = daily["daily_capacity_factor"].dropna()
+        assert (cf >= 0).all(), "Negative daily capacity factors found"
+        # Allow the same 1.1 headroom the aggregation code logs warnings at
+        assert (cf <= 1.1).all(), (
+            f"Daily capacity factors > 1.1 found: "
+            f"{daily.loc[cf[cf > 1.1].index, ['duid', 'date', 'daily_capacity_factor']].to_dict('records')[:5]}"
+        )
+
+
+# ─── Freshness (systematic-gap fix: stale data must fail the pipeline) ──────
+
+
+class TestFreshness:
+    def test_monthly_data_is_current(self):
+        agg = pd.read_feather(DATA_DIR / "monthly_aggregates.feather")
+        # Raises RuntimeError when the latest month is too far behind
+        check_monthly_freshness(agg, now=datetime.now())
+
+    def test_daily_data_is_current(self):
+        path = DATA_DIR / "daily_aggregates.feather"
+        if not path.exists():
+            pytest.skip("daily_aggregates.feather not present")
+        daily = pd.read_feather(path)
+        check_daily_freshness(daily, now=datetime.now())
 
 
 # ─── Completeness ─────────────────────────────────────────────────────────────
