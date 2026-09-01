@@ -766,7 +766,19 @@
                     <div class="tooltip-caveat">Regional averages only — actual per-generator FCAS revenue requires participant-only enablement data.</div>
                 </div>
             </div>
+            <div id="fcasParticipationBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
             <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
+        </div>
+        <div class="chart-panel full-width" id="panelMarketSpread" style="display:none;">
+            <div class="chart-title-wrap">
+                <h3>Regional Price Spreads (BESS Arbitrage)</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    Daily top-decile vs bottom-decile VWAP of 5-minute regional prices — the realisable discharge-value and charge-cost windows. The gap between them (decile spread) is the arbitrage margin a 1–2h battery can target. Market-level data: applies to every unit in the region.
+                    <div class="tooltip-caveat">Derived from AEMO DISPATCHPRICE 5-minute data. Quarterly context: AEMO QED reported NEM fleet charge/discharge spreads of $121/MWh in Q1 2026 and $51/MWh in Q2 2026.</div>
+                </div>
+            </div>
+            <div id="chartMarketSpread"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel full-width" id="panelConstraints" style="display:none;">
             <div class="chart-title-wrap">
@@ -789,6 +801,11 @@
 // ─── State ─────────────────────────────────────────────────────────────
 let generators = [];
 let activeIndex = -1;
+let marketDaily = null;
+fetch('data/market_daily.json').then(r => r.ok ? r.json() : null).then(d => {
+    marketDaily = d;
+    if (currentData) renderCharts(currentData);
+}).catch(() => {});
 
 const PLOTLY_LAYOUT_BASE = {
     paper_bgcolor: '#1a1d27',
@@ -1490,6 +1507,50 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     } else if (fcasPanel) {
         fcasPanel.style.display = 'none';
+    }
+
+    // Per-DUID FCAS participation (BIDPEROFFER_D offers) — summary box
+    const fpBox = document.getElementById('fcasParticipationBox');
+    if (fpBox) {
+        if (data.fcas_participation) {
+            const fp = data.fcas_participation;
+            fpBox.style.display = 'block';
+            const pct = fp.participation_pct != null ? (100 * fp.participation_pct).toFixed(2) + '% of intervals' : 'n/a';
+            const avg = fp.avg_max_avail_mw != null ? fp.avg_max_avail_mw + ' MW' : 'n/a';
+            const peak = fp.max_max_avail_mw != null ? fp.max_max_avail_mw + ' MW' : 'n/a';
+            fpBox.innerHTML = '<b>FCAS participation — this unit</b> (' + fp.month + '): ' +
+                fp.services_offered + ' services offered · ' + pct +
+                ' · avg ' + avg + ' offered (peak ' + peak + ')' +
+                '<br><span style="opacity:.7">Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are REGIONAL market averages shared by every generator in ' + (data.region || 'the region') + '.</span>';
+        } else {
+            fpBox.style.display = 'none';
+        }
+    }
+
+    // Regional price spreads (market factors) — market-level chart
+    const spreadPanel = document.getElementById('panelMarketSpread');
+    if (spreadPanel && marketDaily && marketDaily.regions && marketDaily.regions[data.region]) {
+        const rd = marketDaily.regions[data.region];
+        spreadPanel.style.display = 'block';
+        const nDates = rd.dates.length;
+        const sCut = nDates > 365 ? nDates - 365 : 0;
+        const xs = rd.dates.slice(sCut);
+        const spreadTraces = [
+            { x: xs, y: rd.vwap_high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Top-decile VWAP (discharge value)', line: { color: '#22c55e', width: 1.5 } },
+            { x: xs, y: rd.vwap_low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Bottom-decile VWAP (charge cost)', line: { color: '#ef4444', width: 1.5 } },
+            { x: xs, y: rd.spread_decile.slice(sCut), type: 'scatter', mode: 'lines', name: 'Decile spread', yaxis: 'y2', line: { color: '#3b82f6', width: 1.2, dash: 'dot' } },
+        ];
+        Plotly.newPlot('chartMarketSpread', spreadTraces, {
+            ...PLOTLY_LAYOUT_BASE,
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'date' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'VWAP $/MWh' },
+            yaxis2: { title: 'Spread $/MWh', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', zerolinecolor: '#2d3140', tickfont: { size: 11 } },
+            showlegend: true,
+            legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40 },
+        }, PLOTLY_CONFIG);
+    } else if (spreadPanel) {
+        spreadPanel.style.display = 'none';
     }
 
     // Generation (Last 12 Months) — two stacked subplots: daily MWh bars (top) + CF line (bottom)
