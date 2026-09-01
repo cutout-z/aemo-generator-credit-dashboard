@@ -24,7 +24,7 @@ from .download_dispatch import fetch_dispatch_price_month
 
 logger = logging.getLogger(__name__)
 
-MARKET_FACTORS_CACHE = "data/market_factors_daily.feather"
+MARKET_FACTORS_CACHE = "market_factors_daily.feather"
 MARKET_DAILY_JSON = "market_daily.json"
 MARKET_QUARTERLY_JSON = "market_quarterly.json"
 
