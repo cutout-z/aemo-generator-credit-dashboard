@@ -789,6 +789,7 @@
                     <div class="tooltip-caveat">~20% of generators lack connection point data. Constraint mapping is approximate.</div>
                 </div>
             </div>
+            <div id="constraintSummaryBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
             <div id="chartConstraintsBar"><div class="placeholder">No constraint data</div></div>
             <div id="chartConstraintsHeatmap" style="margin-top: 8px;"></div>
         </div>
@@ -1689,16 +1690,61 @@ function renderCharts(data) {
         constraintPanel.style.display = 'block';
         const tc = data.constraints.top_constraints;
 
+        // Readable labels: AEMO constraint IDs use > and >> as taxonomy
+        // (N> / N>> = system-normal trip constraints, C_ = commissioning
+        // hold point, NC_ = non-conformance). Classify rather than display raw.
+        const duid = data.duid || '';
+        const constraintLabel = (c) => {
+            const cls = c.id.indexOf(duid) !== -1 ? 'Own unit'
+                : c.id.startsWith('C_') ? 'Commissioning'
+                : c.id.startsWith('NC') ? 'Non-conformance'
+                : 'System';
+            const d = (c.description || '').replace(/^[A-Za-z]+=\s*/, '');
+            const short = d.length > 42 ? d.slice(0, 40) + '\u2026' : d;
+            return cls + ' \u2014 ' + short;
+        };
+
+        // Credit-relevant summary: own-unit dispatch limits first, then system context
+        const summaryBox = document.getElementById('constraintSummaryBox');
+        if (summaryBox) {
+            const own = tc.filter(c => c.id.indexOf(duid) !== -1);
+            const ownHours = own.reduce((s, c) => s + c.total_hours, 0);
+            let caps = [];
+            own.forEach(c => {
+                if (c.id.startsWith('C_')) {
+                    const m = c.id.match(/_(\d+)(?:_[GL])?$/);
+                    if (m) caps.push(parseInt(m[1], 10));
+                }
+            });
+            const cap = caps.length ? Math.max(...caps) : null;
+            let html = '';
+            if (cap != null && data.capacity_mw && cap < data.capacity_mw) {
+                html = '<b>Commissioning-limited:</b> this unit\u2019s own hold-point constraints cap output near \u00b1' + cap +
+                    ' MW (' + ownHours.toFixed(1) + 'h bound) vs ' + data.capacity_mw + ' MW nameplate. Full-nameplate revenue is not yet reachable \u2014 near-term revenue views should be scaled accordingly.';
+            } else if (ownHours > 0) {
+                html = '<b>Own-unit constraints:</b> ' + own.length + ' constraint' + (own.length > 1 ? 's' : '') +
+                    ' reference this unit directly (' + ownHours.toFixed(1) + 'h bound), including commissioning/non-conformance limits.';
+            } else {
+                const top = tc[0];
+                const desc = (top.description || '').replace(/^[A-Za-z]+=\s*/, '');
+                html = '<b>Most binding system constraint:</b> ' + desc + ' (' + top.total_hours.toFixed(1) +
+                    'h bound) \u2014 network context rather than a unit-specific limit.';
+            }
+            summaryBox.innerHTML = html;
+            summaryBox.style.display = 'block';
+        }
+
         // Horizontal bar chart — top constraints by hours bound
         const constraintMonths = data.constraints.heatmap && data.constraints.heatmap.months;
         Plotly.newPlot('chartConstraintsBar', [{
-            y: tc.map(c => c.id),
+            y: tc.map(constraintLabel),
+            customdata: tc.map(c => c.id),
             x: tc.map(c => c.total_hours),
             type: 'bar',
             orientation: 'h',
             marker: { color: '#4a9eff' },
             text: tc.map(c => c.description ? c.description.substring(0, 60) : ''),
-            hovertemplate: '%{y}<br>%{text}<br>%{x:.1f} hours bound<extra></extra>',
+            hovertemplate: '%{y}<br>ID: %{customdata}<br>%{text}<br>%{x:.1f} hours bound<extra></extra>',
             textposition: 'none',
         }], {
             ...PLOTLY_LAYOUT_BASE,
@@ -1715,7 +1761,10 @@ function renderCharts(data) {
             const constraintIds = Object.keys(hm.constraints);
             Plotly.newPlot('chartConstraintsHeatmap', [{
                 x: hm.months.map(fmtMonth),
-                y: constraintIds,
+                y: constraintIds.map(id => {
+                    const t = tc.find(x => x.id === id);
+                    return t ? constraintLabel(t) : id;
+                }),
                 z: constraintIds.map(id => hm.constraints[id]),
                 type: 'heatmap',
                 colorscale: [[0, '#1a1d27'], [0.5, '#f97316'], [1, '#ef4444']],
