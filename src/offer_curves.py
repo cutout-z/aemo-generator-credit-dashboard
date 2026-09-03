@@ -72,7 +72,7 @@ def _fetch_bid_table(
     if df is None or df.empty:
         logger.warning(f"{table} {year}-{month:02d}: no data (unpublished month?)")
         return pd.DataFrame()
-    missing = {"DUID", "BIDTYPE", "VERSIONNO"} - set(df.columns)
+    missing = {"DUID", "BIDTYPE"} - set(df.columns)
     if missing:
         logger.warning(f"{table} {year}-{month:02d}: missing {sorted(missing)} — skipping")
         return pd.DataFrame()
@@ -80,11 +80,21 @@ def _fetch_bid_table(
     if df.empty:
         logger.warning(f"{table} {year}-{month:02d}: no ENERGY rows")
         return pd.DataFrame()
-    # Latest offer version wins (rebids); OFFERDATE breaks ties.
-    df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
-    sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in df.columns else [])
     key = "INTERVAL_DATETIME" if "INTERVAL_DATETIME" in df.columns else "SETTLEMENTDATE"
-    df = df.sort_values(sort_cols).drop_duplicates(subset=["DUID", key], keep="last")
+    if "VERSIONNO" in df.columns:
+        # Latest offer version wins (rebids); OFFERDATE breaks ties.
+        df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
+        sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in df.columns else [])
+        df = df.sort_values(sort_cols).drop_duplicates(subset=["DUID", key], keep="last")
+    else:
+        # Monthly BIDPEROFFER_D archive CSVs lack VERSIONNO (daily files have
+        # it). Rows appear in version order, so keep the last row per
+        # (DUID, interval) — same no-guarantee caveat as the FCAS lane.
+        logger.warning(
+            f"{table} {year}-{month:02d}: VERSIONNO absent — deduping by file "
+            "order (last row per DUID/interval)"
+        )
+        df = df.drop_duplicates(subset=["DUID", key], keep="last")
     return df
 
 
