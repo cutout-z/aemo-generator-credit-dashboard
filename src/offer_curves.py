@@ -258,18 +258,43 @@ def attach_offer_factors(generators: list[dict], offer_factors: pd.DataFrame | N
 
 
 def attach_offer_factor_doc(doc: dict, rows: pd.DataFrame | None) -> None:
-    """Attach doc['offers'] from this DUID's factor rows (latest month wins)."""
+    """Attach doc['offers'] from this DUID's factor rows.
+
+    The summary takes the latest month, but each field falls back to the most
+    recent month that has it — e.g. the newest month may lack prices because
+    BIDDAYOFFER_D is published ~2 weeks behind the volume table. The month
+    each price field came from is recorded in price_asof_month.
+    """
     if rows is None or rows.empty:
         return
-    r = rows.sort_values("month").iloc[-1]
-    doc["offers"] = {
-        "scope": "offer_based_estimate",
-        "month": r["month"],
-        "avg_offered_mw": float(r["offered_mw_avg"]),
-        "offered_mw_p95": float(r["offered_mw_p95"]),
-        "price_band_min_avg": float(r["price_band_min_avg"]),
-        "price_band_max_avg": float(r["price_band_max_avg"]),
-        "negative_band_day_share": float(r["negative_band_day_share"]),
-        "rebids_per_day": float(r["rebids_per_day"]),
-        "top2_band_volume_share": float(r["top2_band_volume_share"]),
-    }
+    rs = rows.sort_values("month")
+    latest = rs.iloc[-1]
+
+    def _latest_val(col):
+        for _, row in rs.iloc[::-1].iterrows():
+            v = row.get(col)
+            if pd.notna(v):
+                return float(v), row["month"]
+        return None, None
+
+    out = {"scope": "offer_based_estimate", "month": latest["month"]}
+    price_fields = {}
+    for col, key in (
+        ("offered_mw_avg", "avg_offered_mw"),
+        ("offered_mw_p95", "offered_mw_p95"),
+        ("price_band_min_avg", "price_band_min_avg"),
+        ("price_band_max_avg", "price_band_max_avg"),
+        ("negative_band_day_share", "negative_band_day_share"),
+        ("rebids_per_day", "rebids_per_day"),
+        ("top2_band_volume_share", "top2_band_volume_share"),
+    ):
+        v, asof = _latest_val(col)
+        out[key] = v
+        if key.startswith("price_band") or key in (
+            "negative_band_day_share", "rebids_per_day"
+        ):
+            price_fields[key] = asof
+    asof_months = sorted({m for m in price_fields.values() if m})
+    if asof_months and asof_months[-1] != out["month"]:
+        out["price_asof_month"] = asof_months[-1]
+    doc["offers"] = out
