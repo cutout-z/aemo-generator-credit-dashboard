@@ -424,14 +424,17 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
     vr["date"] = pd.to_datetime(vr["INTERVAL_DATETIME"]).dt.strftime("%Y-%m-%d")
     pv = pr.groupby(["DUID", "date"])[BAND_PRICE_COLS].mean()
     vv = vr.groupby(["DUID", "date"])[BAND_AVAIL_COLS].mean().clip(lower=0)
+    # BANDAVAIL tranches are INCREMENTAL (each band = additional MW on top of
+    # the previous), matching compute_offer_features which sums them. Emit the
+    # running sum as cum_mw; skip non-positive tranches.
     rows = []
     for (duid, date) in pv.index.intersection(vv.index):
-        prev = 0.0
+        cum = 0.0
         for i in range(1, 11):
-            cum = float(vv.loc[(duid, date), f"BANDAVAIL{i}"])
-            if cum - prev <= 1e-9:
-                prev = cum
+            inc = float(vv.loc[(duid, date), f"BANDAVAIL{i}"])
+            if inc <= 1e-9:
                 continue
+            cum += inc
             rows.append({
                 "duid": duid,
                 "month": month,
@@ -440,7 +443,6 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
                 "price": float(pv.loc[(duid, date), f"PRICEBAND{i}"]),
                 "cum_mw": round(cum, 3),
             })
-            prev = cum
     return pd.DataFrame(rows)
 
 

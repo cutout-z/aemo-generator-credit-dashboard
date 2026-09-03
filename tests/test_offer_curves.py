@@ -162,7 +162,8 @@ class TestDailyCurves:
         assert d1.iloc[0]["cum_mw"] == pytest.approx(10.0)
         d2 = out[out["date"] == "2026-07-02"]
         assert sorted(d2["band"]) == [1, 2]
-        assert d2.iloc[1]["cum_mw"] == pytest.approx(25.0)  # 20 + 5
+        # band avails are INCREMENTAL: cum = 20 (band1) + 25 (band2)
+        assert d2.iloc[1]["cum_mw"] == pytest.approx(45.0)
 
     def test_write_files(self, tmp_path):
         from src.offer_curves import compute_offer_curves_daily, write_offer_curve_files
