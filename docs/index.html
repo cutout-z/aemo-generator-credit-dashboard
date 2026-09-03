@@ -1565,17 +1565,18 @@ function renderCharts(data) {
     if (ocWrap && ocChart) {
         if (data.offer_curve && data.offer_curve.bands && data.offer_curve.bands.length) {
             const oc = data.offer_curve;
-            // Step: price flat across each band's MW segment; zero-width bands skipped
-            const segX = [], segY = [];
-            let prev = 0;
-            for (const b of oc.bands) {
-                if (b.cum_mw - prev <= 1e-9) { prev = b.cum_mw; continue; }
-                segX.push(prev, b.price, b.price, null);
-                segY.push(prev, prev, b.cum_mw, null);
-                prev = b.cum_mw;
-            }
+            // Proper bid stack: drop zero-width bands (their prices would
+            // stretch the axis for nothing), sort by price, draw one monotone
+            // step: vertical rise at each price, horizontal to the next.
+            const bands = oc.bands;
+            const priced = bands
+                .map((b, i) => ({ price: b.price, cum: b.cum_mw, width: b.cum_mw - (i ? bands[i-1].cum_mw : 0) }))
+                .filter((b) => b.width > 1e-9)
+                .sort((a, b) => a.price - b.price);
+            const px = [priced[0].price], py = [0];
+            for (const b of priced) { px.push(b.price); py.push(b.cum); }
             const traces = [{
-                x: segX, y: segY, mode: 'lines', line: { shape: 'hv', width: 2, color: '#4aa3ff' },
+                x: px, y: py, mode: 'lines', line: { shape: 'hv', width: 2, color: '#4aa3ff' },
                 name: 'Bid stack', hovertemplate: 'Cum MW %{y:.0f} at $%{x:.0f}/MWh<extra></extra>'
             }];
             ocWrap.style.display = 'block';
