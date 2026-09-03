@@ -565,6 +565,7 @@ def main():
     # Step 3e2: Per-DUID energy offer-curve factors (BIDDAYOFFER_D prices +
     # BIDPEROFFER_D ENERGY volumes). Offer-based estimates of bid behaviour.
     offer_factors = pd.DataFrame()
+    offer_curves = None
     if not args.skip_offer_factors:
         logger.info("=== Step 3e2: Energy offer-curve factors ===")
         from .offer_curves import build_offer_factors
@@ -586,11 +587,24 @@ def main():
                 logger.info(f"Saved {len(offer_factors)} offer factor rows to {of_path}")
         except Exception as e:
             logger.warning(f"Offer factor computation failed: {e}")
+        # Step 3e3: per-DUID 10-band offer curves (chart data)
+        try:
+            from .offer_curves import build_offer_curves
+            offer_curves = build_offer_curves(
+                _months_to_process(args.months_back, args.full_refresh),
+                str(data_dir), str(data_dir),
+            ) or None
+        except Exception as e:
+            logger.warning(f"Offer curve computation failed: {e}")
     else:
         cached_of = data_dir / "offer_factors.feather"
         if cached_of.exists():
             offer_factors = pd.read_feather(cached_of)
             logger.info(f"Loaded {len(offer_factors)} cached offer factor rows")
+        cached_oc = data_dir / "offer_curves.feather"
+        if cached_oc.exists():
+            offer_curves = pd.read_feather(cached_oc)
+            logger.info(f"Loaded {len(offer_curves)} cached offer curve rows")
 
     # Step 3f: Freshness guards — fail BEFORE publishing stale data.
     # The daily commit is not a freshness signal: the pipeline re-processes the
@@ -610,7 +624,8 @@ def main():
                          daily_aggregates=daily_agg,
                          constraint_data=constraint_agg,
                          fcas_factors=fcas_factors if not fcas_factors.empty else None,
-                         offer_factors=offer_factors if not offer_factors.empty else None)
+                         offer_factors=offer_factors if not offer_factors.empty else None,
+                         offer_curves=offer_curves if offer_curves is not None and not offer_curves.empty else None)
     publish_market_json(
         market_factors, market_quarterly, str(docs_data_dir),
         qed_benchmarks=QED_NEM_SPREAD_AUD_MWH,

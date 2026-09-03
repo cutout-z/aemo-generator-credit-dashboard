@@ -298,3 +298,83 @@ def attach_offer_factor_doc(doc: dict, rows: pd.DataFrame | None) -> None:
     if asof_months and asof_months[-1] != out["month"]:
         out["price_asof_month"] = asof_months[-1]
     doc["offers"] = out
+
+
+OFFER_CURVES_CACHE = "offer_curves.feather"
+
+
+def compute_offer_curves(prices: pd.DataFrame, volumes: pd.DataFrame, month: str) -> pd.DataFrame:
+    """Per-DUID 10-band bid stack: mean offered price + cumulative mean MW.
+
+    Both inputs must be version-deduped (fetch_energy_* guarantees this).
+    DUIDs need BOTH price and volume rows for the month — an incomplete pair
+    (e.g. price table lags the volume table) yields no curve rows.
+    """
+    if prices.empty or volumes.empty:
+        return pd.DataFrame()
+    missing_p = set(BAND_PRICE_COLS) - set(prices.columns)
+    missing_v = set(BAND_AVAIL_COLS) - set(volumes.columns)
+    if missing_p or missing_v:
+        logger.warning(
+            f"offer curves {month}: missing price cols {sorted(missing_p)} / "
+            f"volume cols {sorted(missing_v)} — skipping"
+        )
+        return pd.DataFrame()
+    pv = prices.groupby("DUID")[BAND_PRICE_COLS].mean()
+    vv = volumes.groupby("DUID")[BAND_AVAIL_COLS].mean().clip(lower=0)
+    duids = pv.index.intersection(vv.index)
+    rows = []
+    for duid in duids:
+        cum = 0.0
+        for i in range(1, 11):
+            cum += float(vv.loc[duid, f"BANDAVAIL{i}"])
+            rows.append({
+                "duid": duid,
+                "month": month,
+                "band": i,
+                "price": float(pv.loc[duid, f"PRICEBAND{i}"]),
+                "cum_mw": round(cum, 3),
+            })
+    return pd.DataFrame(rows)
+
+
+def build_offer_curves(months: list[tuple[int, int]], cache_dir: str, data_dir: str) -> pd.DataFrame:
+    """Fetch + compute per-DUID offer curves for each month; cache-merge like factors."""
+    frames = []
+    for year, month in months:
+        try:
+            prices = fetch_energy_prices(year, month, cache_dir)
+            volumes = fetch_energy_volumes(year, month, cache_dir)
+            curves = compute_offer_curves(prices, volumes, f"{year}-{month:02d}")
+            if not curves.empty:
+                frames.append(curves)
+                n = curves["duid"].nunique()
+                logger.info(f"Offer curves {year}-{month:02d}: {n} DUIDs")
+        except Exception as e:
+            logger.warning(f"Offer curves {year}-{month:02d} failed: {e}")
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    out_path = Path(data_dir) / OFFER_CURVES_CACHE
+    out.to_feather(out_path)
+    logger.info(f"Saved {len(out)} offer curve rows to {out_path}")
+    return out
+
+
+def attach_offer_curve_doc(doc: dict, rows: pd.DataFrame | None) -> None:
+    """Attach doc['offer_curve'] (latest month) for the bid-stack step chart."""
+    if rows is None or rows.empty:
+        return
+    rs = rows.sort_values(["month", "band"])
+    latest_month = rs["month"].iloc[-1]
+    cur = rs[rs["month"] == latest_month]
+    if len(cur) < 10:
+        return
+    doc["offer_curve"] = {
+        "scope": "offer_based_estimate",
+        "month": latest_month,
+        "bands": [
+            {"band": int(r["band"]), "price": float(r["price"]), "cum_mw": float(r["cum_mw"])}
+            for _, r in cur.iterrows()
+        ],
+    }

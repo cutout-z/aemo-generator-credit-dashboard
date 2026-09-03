@@ -86,3 +86,51 @@ class TestAttachOfferFactors:
         doc2 = {}
         attach_offer_factor_doc(doc2, None)
         assert "offers" not in doc2
+
+
+def _full_prices():
+    """All 10 price bands, 2 days, TEST1 only (TEST2 lacks volumes on purpose)."""
+    data = {"DUID": ["TEST1", "TEST1"], "SETTLEMENTDATE": pd.to_datetime(["2026-07-01", "2026-07-02"])}
+    for i in range(1, 11):
+        data[f"PRICEBAND{i}"] = [float(i) * 10, float(i) * -5]
+    return pd.DataFrame(data)
+
+
+def _full_volumes():
+    data = {"DUID": ["TEST1", "TEST1"], "INTERVAL_DATETIME": pd.to_datetime(["2026-07-01 00:05:00", "2026-07-01 00:10:00"])}
+    for i in range(1, 11):
+        data[f"BANDAVAIL{i}"] = [10.0, 20.0] if i == 1 else [0.0, 0.0]
+    return pd.DataFrame(data)
+
+
+class TestOfferCurves:
+    def test_compute_curve_shape(self):
+        from src.offer_curves import compute_offer_curves
+        out = compute_offer_curves(_full_prices(), _full_volumes(), "2026-07")
+        assert set(out["duid"].unique()) == {"TEST1"}  # TEST2 has no volumes -> excluded
+        b1 = out[out["band"] == 1].iloc[0]
+        assert b1["price"] == pytest.approx((10.0 + -5.0) / 2)  # mean across days
+        assert b1["cum_mw"] == pytest.approx(15.0)  # (10+20)/2 in band 1
+        b10 = out[out["band"] == 10].iloc[0]
+        assert b10["cum_mw"] == pytest.approx(15.0)  # bands 2-10 empty
+        assert b10["price"] == pytest.approx((100.0 + -50.0) / 2)
+
+    def test_compute_curve_requires_both_sides(self):
+        from src.offer_curves import compute_offer_curves
+        assert compute_offer_curves(_full_prices(), pd.DataFrame(), "2026-07").empty
+        assert compute_offer_curves(pd.DataFrame(), _full_volumes(), "2026-07").empty
+
+    def test_attach_curve_doc(self):
+        from src.offer_curves import compute_offer_curves, attach_offer_curve_doc
+        curves = compute_offer_curves(_full_prices(), _full_volumes(), "2026-07")
+        doc = {}
+        attach_offer_curve_doc(doc, curves)
+        oc = doc["offer_curve"]
+        assert oc["month"] == "2026-07"
+        assert oc["scope"] == "offer_based_estimate"
+        assert [b["band"] for b in oc["bands"]] == list(range(1, 11))
+        assert oc["bands"][0]["cum_mw"] == pytest.approx(15.0)
+        # partial curves (fewer than 10 bands) are rejected
+        doc2 = {}
+        attach_offer_curve_doc(doc2, curves[curves["band"] <= 3])
+        assert "offer_curve" not in doc2
