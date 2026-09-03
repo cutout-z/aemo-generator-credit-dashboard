@@ -19,6 +19,7 @@ persists and both lanes share one download per month.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -358,6 +359,23 @@ def build_offer_curves(months: list[tuple[int, int]], cache_dir: str, data_dir: 
     out_path = Path(data_dir) / OFFER_CURVES_CACHE
     out.to_feather(out_path)
     logger.info(f"Saved {len(out)} offer curve rows to {out_path}")
+
+    # Daily stacks: reuse the same fetched frames, no extra downloads
+    daily_frames = []
+    for year, month in months:
+        try:
+            prices = fetch_energy_prices(year, month, cache_dir)
+            volumes = fetch_energy_volumes(year, month, cache_dir)
+            d = compute_offer_curves_daily(prices, volumes, f"{year}-{month:02d}")
+            if not d.empty:
+                daily_frames.append(d)
+        except Exception as e:
+            logger.warning(f"Daily offer curves {year}-{month:02d} failed: {e}")
+    if daily_frames:
+        daily = pd.concat(daily_frames, ignore_index=True)
+        daily.to_feather(Path(data_dir) / OFFER_CURVES_DAILY_CACHE)
+        logger.info(f"Saved {len(daily)} daily offer-curve rows")
+        write_offer_curve_files(daily, str(Path(data_dir).parent / "docs" / "data"))
     return out
 
 
@@ -378,3 +396,73 @@ def attach_offer_curve_doc(doc: dict, rows: pd.DataFrame | None) -> None:
             for _, r in cur.iterrows()
         ],
     }
+
+
+OFFER_CURVES_DAILY_CACHE = "offer_curves_daily.feather"
+
+
+def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, month: str) -> pd.DataFrame:
+    """Per-DUID PER-DAY 10-band bid stacks (mean of the day's intervals).
+
+    BIDDAYOFFER_D carries one row per DUID/day (version-deduped upstream), so
+    the day's prices are that row's bands; volumes are averaged across the
+    day's intervals. Zero-width bands are dropped HERE (cum == previous cum),
+    so downstream files stay compact and axes stay sane.
+    """
+    if prices.empty or volumes.empty:
+        return pd.DataFrame()
+    missing_p = set(BAND_PRICE_COLS) - set(prices.columns)
+    missing_v = set(BAND_AVAIL_COLS) - set(volumes.columns)
+    if missing_p or missing_v:
+        logger.warning(
+            f"daily offer curves {month}: missing cols {sorted(missing_p)}/{sorted(missing_v)} — skipping"
+        )
+        return pd.DataFrame()
+    pr = prices.copy()
+    vr = volumes.copy()
+    pr["date"] = pd.to_datetime(pr["SETTLEMENTDATE"]).dt.strftime("%Y-%m-%d")
+    vr["date"] = pd.to_datetime(vr["INTERVAL_DATETIME"]).dt.strftime("%Y-%m-%d")
+    pv = pr.groupby(["DUID", "date"])[BAND_PRICE_COLS].mean()
+    vv = vr.groupby(["DUID", "date"])[BAND_AVAIL_COLS].mean().clip(lower=0)
+    rows = []
+    for (duid, date) in pv.index.intersection(vv.index):
+        prev = 0.0
+        for i in range(1, 11):
+            cum = float(vv.loc[(duid, date), f"BANDAVAIL{i}"])
+            if cum - prev <= 1e-9:
+                prev = cum
+                continue
+            rows.append({
+                "duid": duid,
+                "month": month,
+                "date": date,
+                "band": i,
+                "price": float(pv.loc[(duid, date), f"PRICEBAND{i}"]),
+                "cum_mw": round(cum, 3),
+            })
+            prev = cum
+    return pd.DataFrame(rows)
+
+
+def write_offer_curve_files(curves: pd.DataFrame, docs_data_dir: str) -> int:
+    """Write compact per-DUID day-stack JSONs: docs/data/offer_curves/{DUID}.json."""
+    if curves is None or curves.empty:
+        return 0
+    out_dir = Path(docs_data_dir) / "offer_curves"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for duid, grp in curves.sort_values(["date", "price"]).groupby("duid"):
+        days = []
+        for date, dgrp in grp.groupby("date"):
+            days.append({
+                "date": date,
+                "stack": [[float(r["price"]), float(r["cum_mw"])] for _, r in dgrp.iterrows()],
+            })
+        (out_dir / f"{duid}.json").write_text(json.dumps({
+            "scope": "offer_based_estimate",
+            "updated": pd.Timestamp.utcnow().strftime("%Y-%m-%d"),
+            "days": days,
+        }, separators=(",", ":")))
+        n += 1
+    logger.info(f"Wrote {n} per-DUID offer-curve files to {out_dir}")
+    return n

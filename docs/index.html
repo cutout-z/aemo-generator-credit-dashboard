@@ -769,8 +769,11 @@
             <div id="fcasParticipationBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
             <div id="offersBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
             <div id="offerCurveWrap" style="display:none;margin-bottom:6px;">
-                <div style="font-size:13px;font-weight:600;margin:4px 0 2px;">Offer curve — 10-band bid stack <span style="font-weight:400;opacity:.7">(latest month with both prices &amp; volumes)</span></div>
-                <div id="offerCurveChart"><div class="placeholder">No data yet</div></div>
+                <div style="font-size:13px;font-weight:600;margin:4px 0 2px;">Offer curve — daily bid stack
+                    <select id="offerCurveDay" style="margin-left:8px;background:#1a1d27;color:var(--text,#e8e8e8);border:1px solid #2d3140;border-radius:6px;padding:2px 6px;font-size:12px;"></select>
+                    <span id="offerCurveNote" style="font-weight:400;opacity:.7"></span>
+                </div>
+                <div id="offerCurveChart" style="height:360px;"><div class="placeholder">No data yet</div></div>
             </div>
             <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
         </div>
@@ -1559,35 +1562,47 @@ function renderCharts(data) {
         }
     }
 
-    // Per-DUID 10-band offer curve (bid stack) — step chart
+    // Per-DUID daily bid stack (docs/data/offer_curves/{DUID}.json) — day selector
     const ocWrap = document.getElementById('offerCurveWrap');
     const ocChart = document.getElementById('offerCurveChart');
-    if (ocWrap && ocChart) {
-        if (data.offer_curve && data.offer_curve.bands && data.offer_curve.bands.length) {
-            const oc = data.offer_curve;
-            // Proper bid stack: drop zero-width bands (their prices would
-            // stretch the axis for nothing), sort by price, draw one monotone
-            // step: vertical rise at each price, horizontal to the next.
-            const bands = oc.bands;
-            const priced = bands
-                .map((b, i) => ({ price: b.price, cum: b.cum_mw, width: b.cum_mw - (i ? bands[i-1].cum_mw : 0) }))
-                .filter((b) => b.width > 1e-9)
-                .sort((a, b) => a.price - b.price);
-            const px = [priced[0].price], py = [0];
-            for (const b of priced) { px.push(b.price); py.push(b.cum); }
-            const traces = [{
-                x: px, y: py, mode: 'lines', line: { shape: 'hv', width: 2, color: '#4aa3ff' },
-                name: 'Bid stack', hovertemplate: 'Cum MW %{y:.0f} at $%{x:.0f}/MWh<extra></extra>'
-            }];
-            ocWrap.style.display = 'block';
-            Plotly.newPlot('offerCurveChart', traces, {
-                ...PLOTLY_LAYOUT_BASE,
-                height: 360,
-                xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: { text: 'Offered price ($/MWh)' }, rangemode: 'tozero' },
-                yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: { text: 'Cumulative offered MW' }, rangemode: 'tozero' },
-                showlegend: false,
-                margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 16 }
-            }, PLOTLY_CONFIG);
+    const ocDay = document.getElementById('offerCurveDay');
+    const ocNote = document.getElementById('offerCurveNote');
+    function drawBidStack(stack, label) {
+        if (!stack || !stack.length) return;
+        const px = [stack[0][0]], py = [0];
+        for (const [price, cum] of stack) { px.push(price); py.push(cum); }
+        Plotly.newPlot('offerCurveChart', [{
+            x: px, y: py, mode: 'lines', line: { shape: 'hv', width: 2, color: '#4aa3ff' },
+            hovertemplate: 'Cum MW %{y:.0f} at $%{x:,.0f}/MWh<extra></extra>'
+        }], {
+            ...PLOTLY_LAYOUT_BASE,
+            height: 360,
+            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: { text: 'Offered price ($/MWh)' }, rangemode: 'tozero', autorange: true },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: { text: 'Cumulative offered MW' }, rangemode: 'tozero' },
+            showlegend: false,
+            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 16 }
+        }, PLOTLY_CONFIG);
+        if (ocNote) ocNote.textContent = label || '';
+    }
+    if (ocWrap && ocChart && ocDay) {
+        const duid = (data.duid || '').trim();
+        if (duid) {
+            fetch('data/offer_curves/' + encodeURIComponent(duid) + '.json')
+                .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+                .then((doc) => {
+                    const days = (doc.days || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+                    if (!days.length) { ocWrap.style.display = 'none'; return; }
+                    ocWrap.style.display = 'block';
+                    ocDay.innerHTML = days.map((d) => '<option value="' + d.date + '">' + d.date + '</option>').join('');
+                    ocDay.value = days[0].date;
+                    const draw = () => {
+                        const sel = days.find((d) => d.date === ocDay.value) || days[0];
+                        drawBidStack(sel.stack, '(day offers, latest rebid version)');
+                    };
+                    ocDay.onchange = draw;
+                    draw();
+                })
+                .catch(() => { ocWrap.style.display = 'none'; });
         } else {
             ocWrap.style.display = 'none';
         }

@@ -134,3 +134,49 @@ class TestOfferCurves:
         doc2 = {}
         attach_offer_curve_doc(doc2, curves[curves["band"] <= 3])
         assert "offer_curve" not in doc2
+import json
+
+
+class TestDailyCurves:
+    def test_daily_curves_shape_and_zero_width_drop(self):
+        from src.offer_curves import compute_offer_curves_daily
+        prices = pd.DataFrame({
+            "DUID": ["T1", "T1"],
+            "SETTLEMENTDATE": pd.to_datetime(["2026-07-01", "2026-07-02"]),
+            **{f"PRICEBAND{i}": [10.0 * i, -5.0 * i] for i in range(1, 11)},
+        })
+        # day 1: volume only in band 1; day 2: bands 1 and 2
+        vols = {
+            "DUID": ["T1"] * 3,
+            "INTERVAL_DATETIME": pd.to_datetime([
+                "2026-07-01 00:05", "2026-07-02 00:05", "2026-07-02 00:10",
+            ]),
+        }
+        for i in range(1, 11):
+            vols[f"BANDAVAIL{i}"] = (
+                [10.0, 20.0, 20.0] if i == 1 else ([0.0, 25.0, 25.0] if i == 2 else [0.0] * 3)
+            )
+        out = compute_offer_curves_daily(prices, pd.DataFrame(vols), "2026-07")
+        d1 = out[out["date"] == "2026-07-01"]
+        assert len(d1) == 1 and d1.iloc[0]["band"] == 1  # zero-width bands dropped
+        assert d1.iloc[0]["cum_mw"] == pytest.approx(10.0)
+        d2 = out[out["date"] == "2026-07-02"]
+        assert sorted(d2["band"]) == [1, 2]
+        assert d2.iloc[1]["cum_mw"] == pytest.approx(25.0)  # 20 + 5
+
+    def test_write_files(self, tmp_path):
+        from src.offer_curves import compute_offer_curves_daily, write_offer_curve_files
+        prices = pd.DataFrame({
+            "DUID": ["T1"], "SETTLEMENTDATE": pd.to_datetime(["2026-07-01"]),
+            **{f"PRICEBAND{i}": [float(i)] for i in range(1, 11)},
+        })
+        vols = {"DUID": ["T1"], "INTERVAL_DATETIME": pd.to_datetime(["2026-07-01 00:05"])}
+        for i in range(1, 11):
+            vols[f"BANDAVAIL{i}"] = [10.0] if i == 1 else [0.0]
+        curves = compute_offer_curves_daily(prices, pd.DataFrame(vols), "2026-07")
+        n = write_offer_curve_files(curves, str(tmp_path))
+        assert n == 1
+        doc = json.loads((tmp_path / "offer_curves" / "T1.json").read_text())
+        assert doc["scope"] == "offer_based_estimate"
+        assert len(doc["days"]) == 1
+        assert doc["days"][0]["stack"] == [[1.0, 10.0]]
