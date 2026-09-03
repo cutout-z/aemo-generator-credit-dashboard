@@ -641,18 +641,6 @@
     <div class="chart-grid" id="chartGrid">
         <div class="chart-panel">
             <div class="chart-title-wrap">
-                <h3>Potential Black Revenue (100% merchant basis)</h3>
-                <div class="chart-tooltip">
-                    <div class="tooltip-title">Methodology</div>
-                    <div class="tooltip-formula">Revenue = Σ (MWh_5min × RRP × MLF)</div>
-                    Assumes the generator sells 100% of output at the spot price with no PPA or hedge in place. Useful as a stress-test floor for revenue.
-                    <div class="tooltip-caveat">Does not include PPA income, FCAS, or LGC revenue.</div>
-                </div>
-            </div>
-            <div id="chartRevenue"><div class="placeholder">No data yet</div></div>
-        </div>
-        <div class="chart-panel">
-            <div class="chart-title-wrap">
                 <h3>Generation</h3>
                 <div class="chart-tooltip">
                     <div class="tooltip-title">Methodology</div>
@@ -1144,28 +1132,6 @@ function renderCharts(data) {
     const monthly = sliceMonthly(data);
     const fmtMonths = monthly && monthly.months ? monthly.months.map(fmtMonth) : [];
     const catXaxis = { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' };
-    // Revenue chart
-    if (monthly && monthly.revenue_aud) {
-        const revTraces = [{
-            x: fmtMonths,
-            y: monthly.revenue_aud,
-            type: 'bar',
-            marker: { color: '#4a9eff' },
-            hovertemplate: '%{x}<br>$%{y:,.0f}<extra></extra>',
-            name: 'Monthly Revenue',
-            showlegend: false,
-        }];
-        const revRolling = makeRollingTrace(fmtMonths, monthly.revenue_aud, '#ffffff');
-        if (revRolling) { revRolling.hovertemplate = '%{x}<br>12M Avg: $%{y:,.0f}<extra></extra>'; revTraces.push(revRolling); }
-        Plotly.newPlot('chartRevenue', revTraces, {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'AUD', tickformat: '$,.0s' },
-            showlegend: !!revRolling,
-            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
-        }, PLOTLY_CONFIG);
-    }
-
     // Generation chart (MWh) — also shows LGC annotation for eligible generators
     if (monthly && monthly.generation_mwh) {
         const genYTitle = data.lgc_eligible ? 'MWh (≈ LGCs)' : 'MWh';
