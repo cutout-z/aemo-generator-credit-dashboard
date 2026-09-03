@@ -1959,52 +1959,76 @@ function initDragReorder() {
 
 initDragReorder();
 
-// ─── Y-axis direct range scaling ───────────────────────────────────────
-// Plotly 2.x ignores plain drags on the y-axis. This makes grabbing the
-// y-axis stretch/compress the visible range: drag down = expand (zoom
-// out), drag up = compress (zoom in). Delegated at document level so it
-// applies to every chart, present and future.
+// ─── Axis direct range scaling (x + y) ─────────────────────────────────
+// Plotly 2.x offers no plain-drag scaling on axis strips (y drags are
+// ignored; x drags do select-window zoom). This makes grabbing an axis
+// strip stretch/compress that axis' visible range around its centre:
+// y — drag down = expand / up = compress; x — drag right = expand /
+// left = compress. Delegated at document level in the capture phase (so
+// Plotly's own axis handling never engages) and applies to every chart,
+// present and future.
 function initAxisRangeDrag() {
     let drag = null;
-    const inYAxisZone = (gd, e) => {
-        if (!gd._fullLayout) return false;
-        const rect = gd.getBoundingClientRect();
-        if (rect.width === 0) return false;
+    const zoneFor = (gd, e) => {
+        if (!gd._fullLayout) return null;
         const L = gd._fullLayout;
+        const rect = gd.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return null;
         const px = e.clientX - rect.left, py = e.clientY - rect.top;
-        return px < L.margin.l && px > 0 &&
-               py > L.margin.t && py < rect.height - L.margin.b;
+        const plotL = L.margin.l, plotR = rect.width - L.margin.r;
+        const plotT = L.margin.t, plotB = rect.height - L.margin.b;
+        if (px > plotL && px < plotR && py > plotB && py < rect.height) {
+            return L.xaxis.type === 'log' ? null : 'x';
+        }
+        if (px > 0 && px < plotL && py > plotT && py < plotB) {
+            const t = L.yaxis.type;
+            return (t === 'log' || t === 'date' || t === 'category') ? null : 'y';
+        }
+        return null;
     };
     document.addEventListener('mousedown', (e) => {
         if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
         const gd = e.target.closest ? e.target.closest('.js-plotly-plot') : null;
-        if (!gd || !inYAxisZone(gd, e)) return;
-        const range = gd._fullLayout.yaxis.range;
-        const t = gd._fullLayout.yaxis.type;
-        if (!range || t === 'log' || t === 'date' || t === 'category') return;
+        if (!gd) return;
+        const axis = zoneFor(gd, e);
+        if (!axis) return;
+        const ax = gd._fullLayout[axis + 'axis'];
+        if (!ax.range) return;
         e.preventDefault();
+        e.stopPropagation();
+        const rect = gd.getBoundingClientRect();
         drag = {
             gd,
-            startY: e.clientY,
-            range: range.slice(),
-            // ~half a plot-height of drag ≈ one e-fold of zoom
-            k: Math.max(120, (gd.getBoundingClientRect().height - gd._fullLayout.margin.t - gd._fullLayout.margin.b) * 0.45),
+            axis,
+            start: axis === 'x' ? e.clientX : e.clientY,
+            range: ax.range.slice(),
+            // ~half a plot-length of drag ≈ one e-fold of zoom
+            k: Math.max(120, (axis === 'x'
+                ? rect.width - gd._fullLayout.margin.l - gd._fullLayout.margin.r
+                : rect.height - gd._fullLayout.margin.t - gd._fullLayout.margin.b) * 0.45),
             lastApplied: 0,
         };
-    });
+    }, true);
     document.addEventListener('mousemove', (e) => {
         if (!drag) {
             const gd = e.target.closest ? e.target.closest('.js-plotly-plot') : null;
-            if (gd) gd.style.cursor = inYAxisZone(gd, e) ? 'ns-resize' : '';
+            if (gd !== initAxisRangeDrag._lastGd) {
+                if (initAxisRangeDrag._lastGd) initAxisRangeDrag._lastGd.style.cursor = '';
+                initAxisRangeDrag._lastGd = gd || null;
+            }
+            if (gd) {
+                const z = zoneFor(gd, e);
+                gd.style.cursor = z === 'x' ? 'ew-resize' : z === 'y' ? 'ns-resize' : '';
+            }
             return;
         }
-        const dy = e.clientY - drag.startY;
-        if (Math.abs(dy - drag.lastApplied) < 2) return;
-        drag.lastApplied = dy;
-        const f = Math.exp(dy / drag.k);
+        const delta = drag.axis === 'x' ? e.clientX - drag.start : e.clientY - drag.start;
+        if (Math.abs(delta - drag.lastApplied) < 2) return;
+        drag.lastApplied = delta;
+        const f = Math.exp(delta / drag.k);
         const c = (drag.range[0] + drag.range[1]) / 2;
         const half = (drag.range[1] - drag.range[0]) / 2 * f;
-        Plotly.relayout(drag.gd, { 'yaxis.range': [c - half, c + half] });
+        Plotly.relayout(drag.gd, { [drag.axis + 'axis.range']: [c - half, c + half] });
     });
     document.addEventListener('mouseup', () => { drag = null; });
 }
