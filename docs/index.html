@@ -1722,19 +1722,10 @@ function renderCharts(data) {
         constraintPanel.style.display = 'block';
         const tc = data.constraints.top_constraints;
 
-        // Readable labels: AEMO constraint IDs use > and >> as taxonomy
-        // (N> / N>> = system-normal trip constraints, C_ = commissioning
-        // hold point, NC_ = non-conformance). Classify rather than display raw.
+        // Technical labels on the axis (AEMO constraint IDs, e.g. N>XX_XXXXXX);
+        // human-readable classification + description live in the hover only.
+        const constraintLabel = (c) => c.id;
         const duid = data.duid || '';
-        const constraintLabel = (c) => {
-            const cls = c.id.indexOf(duid) !== -1 ? 'Own unit'
-                : c.id.startsWith('C_') ? 'Commissioning'
-                : c.id.startsWith('NC') ? 'Non-conformance'
-                : 'System';
-            const d = (c.description || '').replace(/^[A-Za-z]+=\s*/, '');
-            const short = d.length > 42 ? d.slice(0, 40) + '\u2026' : d;
-            return cls + ' \u2014 ' + short;
-        };
 
         // Credit-relevant summary: own-unit dispatch limits first, then system context
         const summaryBox = document.getElementById('constraintSummaryBox');
@@ -1770,13 +1761,19 @@ function renderCharts(data) {
         const constraintMonths = data.constraints.heatmap && data.constraints.heatmap.months;
         Plotly.newPlot('chartConstraintsBar', [{
             y: tc.map(constraintLabel),
-            customdata: tc.map(c => c.id),
+            customdata: tc.map(c => {
+                const cls = c.id.indexOf(duid) !== -1 ? 'Own unit'
+                    : c.id.startsWith('C_') ? 'Commissioning'
+                    : c.id.startsWith('NC') ? 'Non-conformance'
+                    : 'System';
+                const d = (c.description || '').replace(/^[A-Za-z]+=\s*/, '');
+                return [cls, d];
+            }),
             x: tc.map(c => c.total_hours),
             type: 'bar',
             orientation: 'h',
             marker: { color: '#4a9eff' },
-            text: tc.map(c => c.description ? c.description.substring(0, 60) : ''),
-            hovertemplate: '%{y}<br>ID: %{customdata}<br>%{text}<br>%{x:.1f} hours bound<extra></extra>',
+            hovertemplate: '<b>%{y}</b><br>%{customdata[0]} constraint<br>%{customdata[1]}<br>%{x:.1f} hours bound<extra></extra>',
             textposition: 'none',
         }], {
             ...PLOTLY_LAYOUT_BASE,
