@@ -2084,24 +2084,157 @@ function getExportFilename() {
     return hash || 'generator';
 }
 
+// ─── Export builders ───────────────────────────────────────────────────
+// One row-builder per dashboard data block; shared by CSV (stacked
+// sections) and XLSX (one sheet per section). Covers every block the
+// dashboard renders, including additions: FCAS, offers/offer curve,
+// price distribution, and network constraints.
+
+function buildInfoRows(data) {
+    if (!data) return [];
+    return [{
+        'DUID': data.duid || '',
+        'Station': data.station_name || '',
+        'Region': data.region || '',
+        'Fuel Type': data.fuel_category || '',
+        'Technology': data.technology || '',
+        'Nameplate (MW)': data.capacity_mw != null ? data.capacity_mw : '',
+        'Connection Point': data.connection_point || '',
+        'LGC Eligible': data.lgc_eligible ? 'Yes' : 'No',
+    }];
+}
+
+function buildFCASRows(data) {
+    const f = data && data.fcas;
+    if (!f || !f.months) return [];
+    const services = Object.keys(f.services || {});
+    return f.months.map((month, i) => {
+        const row = { 'Month': month };
+        services.forEach(s => { row[s] = (f.services[s] || [])[i] != null ? f.services[s][i] : ''; });
+        return row;
+    });
+}
+
+function buildFCASParticipationRows(data) {
+    const p = data && data.fcas_participation;
+    if (!p) return [];
+    return [{
+        'Month': p.month || '',
+        'Services Offered': p.services_offered != null ? p.services_offered : '',
+        'Offer Minutes': p.offer_minutes != null ? p.offer_minutes : '',
+        'Participation %': p.participation_pct != null ? p.participation_pct : '',
+        'Avg Max Avail (MW)': p.avg_max_avail_mw != null ? p.avg_max_avail_mw : '',
+        'Max Max Avail (MW)': p.max_max_avail_mw != null ? p.max_max_avail_mw : '',
+        'Note': p.note || '',
+    }];
+}
+
+function buildOffersRows(data) {
+    const o = data && data.offers;
+    if (!o) return [];
+    return [{
+        'Month': o.month || '',
+        'Avg Offered (MW)': o.avg_offered_mw != null ? o.avg_offered_mw : '',
+        'P95 Offered (MW)': o.offered_mw_p95 != null ? o.offered_mw_p95 : '',
+        'Price Band Min Avg ($/MWh)': o.price_band_min_avg != null ? o.price_band_min_avg : '',
+        'Price Band Max Avg ($/MWh)': o.price_band_max_avg != null ? o.price_band_max_avg : '',
+        'Negative Band Day Share': o.negative_band_day_share != null ? o.negative_band_day_share : '',
+        'Rebids per Day': o.rebids_per_day != null ? o.rebids_per_day : '',
+        'Top-2 Band Volume Share': o.top2_band_volume_share != null ? o.top2_band_volume_share : '',
+        'Price Data As Of': o.price_asof_month || '',
+    }];
+}
+
+function buildOfferCurveRows(data) {
+    const oc = data && data.offer_curve;
+    if (!oc || !oc.bands) return [];
+    return oc.bands.map(b => ({
+        'Band': b.band,
+        'Price ($/MWh)': b.price,
+        'Cumulative (MW)': b.cum_mw,
+    }));
+}
+
+function buildPriceDistributionRows(data) {
+    const pd = data && data.price_distribution;
+    if (!pd || !pd.bins) return [];
+    return pd.bins.map((bin, i) => ({
+        'Price Bin ($/MWh)': bin,
+        'Generation Share': (pd.generation_share || [])[i] != null ? pd.generation_share[i] : '',
+    }));
+}
+
+function buildConstraintRows(data) {
+    const c = data && data.constraints;
+    if (!c || !c.top_constraints) return [];
+    const duid = data.duid || '';
+    return c.top_constraints.map(x => ({
+        'Constraint ID': x.id,
+        'Classification': x.id.indexOf(duid) !== -1 ? 'Own unit'
+            : x.id.startsWith('C_') ? 'Commissioning'
+            : x.id.startsWith('NC') ? 'Non-conformance' : 'System',
+        'Description': x.description || '',
+        'Hours Bound': x.total_hours,
+    }));
+}
+
+function buildConstraintHeatmapRows(data) {
+    const c = data && data.constraints;
+    const hm = c && c.heatmap;
+    if (!hm || !hm.months) return [];
+    const rows = [];
+    Object.keys(hm.constraints || {}).forEach(id => {
+        hm.months.forEach((month, i) => {
+            rows.push({
+                'Constraint ID': id,
+                'Month': month,
+                'Hours Bound': hm.constraints[id][i] != null ? hm.constraints[id][i] : '',
+            });
+        });
+    });
+    return rows;
+}
+
+function buildExportSections(data) {
+    return [
+        ['Info', buildInfoRows(data)],
+        ['Monthly', buildMonthlyRows(data)],
+        ['Daily', buildDailyRows(data)],
+        ['MLF', buildMLFRows(data)],
+        ['FCAS', buildFCASRows(data)],
+        ['FCAS Participation', buildFCASParticipationRows(data)],
+        ['Offers', buildOffersRows(data)],
+        ['Offer Curve', buildOfferCurveRows(data)],
+        ['Price Distribution', buildPriceDistributionRows(data)],
+        ['Constraints', buildConstraintRows(data)],
+        ['Constraint Heatmap', buildConstraintHeatmapRows(data)],
+    ].filter(section => section[1].length > 0);
+}
+
+function csvEscape(v) {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
 function downloadCSV() {
     if (!currentData) return;
-    const rows = buildMonthlyRows(currentData);
-    if (rows.length === 0) return;
+    const sections = buildExportSections(currentData);
+    if (sections.length === 0) return;
 
-    const headers = Object.keys(rows[0]);
-    const csvLines = [headers.join(',')];
-    rows.forEach(row => {
-        csvLines.push(headers.map(h => {
-            const v = row[h];
-            return v == null ? '' : v;
-        }).join(','));
+    const lines = [];
+    sections.forEach(([name, rows]) => {
+        const headers = Object.keys(rows[0]);
+        lines.push('Section,' + headers.map(csvEscape).join(','));
+        rows.forEach(row => {
+            lines.push(csvEscape(name) + ',' + headers.map(h => csvEscape(row[h])).join(','));
+        });
     });
 
-    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `${getExportFilename()}_monthly.csv`;
+    link.download = `${getExportFilename()}_data.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
 }
@@ -2166,28 +2299,16 @@ function downloadXLSX() {
     if (!currentData || typeof XLSX === 'undefined') return;
     const wb = XLSX.utils.book_new();
 
-    // Monthly sheet
-    const monthlyRows = buildMonthlyRows(currentData);
-    if (monthlyRows.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(monthlyRows);
-        XLSX.utils.book_append_sheet(wb, ws, 'Monthly');
-    }
+    // One sheet per dashboard data block
+    const sections = buildExportSections(currentData);
+    sections.forEach(([name, rows]) => {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, name.substring(0, 31));
+    });
 
-    // MLF sheet
-    const mlfRows = buildMLFRows(currentData);
-    if (mlfRows.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(mlfRows);
-        XLSX.utils.book_append_sheet(wb, ws, 'MLF');
+    if (wb.SheetNames.length > 0) {
+        XLSX.writeFile(wb, `${getExportFilename()}_data.xlsx`);
     }
-
-    // Daily sheet
-    const dailyRows = buildDailyRows(currentData);
-    if (dailyRows.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(dailyRows);
-        XLSX.utils.book_append_sheet(wb, ws, 'Daily');
-    }
-
-    XLSX.writeFile(wb, `${getExportFilename()}_data.xlsx`);
 }
 
 // ─── Start ─────────────────────────────────────────────────────────────
