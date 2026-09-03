@@ -810,8 +810,8 @@ const PLOTLY_LAYOUT_BASE = {
     margin: { t: 10, r: 20, b: 60, l: 60 },
     xaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140', tickangle: -45, tickfont: { size: 11 } },
     yaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140' },
-    // Dragging the y-axis labels scales/compresses the visible range
-    // instead of panning the data up/down.
+    // Box-drag on the plot zooms both axes; plain y-axis drags are handled
+    // by initAxisRangeDrag() below (Plotly 2.x ignores them natively).
     dragmode: 'zoom',
 };
 
@@ -1958,6 +1958,57 @@ function initDragReorder() {
 }
 
 initDragReorder();
+
+// ─── Y-axis direct range scaling ───────────────────────────────────────
+// Plotly 2.x ignores plain drags on the y-axis. This makes grabbing the
+// y-axis stretch/compress the visible range: drag down = expand (zoom
+// out), drag up = compress (zoom in). Delegated at document level so it
+// applies to every chart, present and future.
+function initAxisRangeDrag() {
+    let drag = null;
+    const inYAxisZone = (gd, e) => {
+        if (!gd._fullLayout) return false;
+        const rect = gd.getBoundingClientRect();
+        if (rect.width === 0) return false;
+        const L = gd._fullLayout;
+        const px = e.clientX - rect.left, py = e.clientY - rect.top;
+        return px < L.margin.l && px > 0 &&
+               py > L.margin.t && py < rect.height - L.margin.b;
+    };
+    document.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+        const gd = e.target.closest ? e.target.closest('.js-plotly-plot') : null;
+        if (!gd || !inYAxisZone(gd, e)) return;
+        const range = gd._fullLayout.yaxis.range;
+        const t = gd._fullLayout.yaxis.type;
+        if (!range || t === 'log' || t === 'date' || t === 'category') return;
+        e.preventDefault();
+        drag = {
+            gd,
+            startY: e.clientY,
+            range: range.slice(),
+            // ~half a plot-height of drag ≈ one e-fold of zoom
+            k: Math.max(120, (gd.getBoundingClientRect().height - gd._fullLayout.margin.t - gd._fullLayout.margin.b) * 0.45),
+            lastApplied: 0,
+        };
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (!drag) {
+            const gd = e.target.closest ? e.target.closest('.js-plotly-plot') : null;
+            if (gd) gd.style.cursor = inYAxisZone(gd, e) ? 'ns-resize' : '';
+            return;
+        }
+        const dy = e.clientY - drag.startY;
+        if (Math.abs(dy - drag.lastApplied) < 2) return;
+        drag.lastApplied = dy;
+        const f = Math.exp(dy / drag.k);
+        const c = (drag.range[0] + drag.range[1]) / 2;
+        const half = (drag.range[1] - drag.range[0]) / 2 * f;
+        Plotly.relayout(drag.gd, { 'yaxis.range': [c - half, c + half] });
+    });
+    document.addEventListener('mouseup', () => { drag = null; });
+}
+initAxisRangeDrag();
 
 // ─── Resize Handles (corner, bottom edge, right edge) ───────────────
 function initResizeHandles() {
