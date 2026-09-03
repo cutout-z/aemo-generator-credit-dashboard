@@ -810,9 +810,18 @@ const PLOTLY_LAYOUT_BASE = {
     margin: { t: 10, r: 20, b: 60, l: 60 },
     xaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140', tickangle: -45, tickfont: { size: 11 } },
     yaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140' },
+    // Dragging the y-axis labels scales/compresses the visible range
+    // instead of panning the data up/down.
+    dragmode: 'zoom',
 };
 
-const PLOTLY_CONFIG = { responsive: true, displayModeBar: false };
+const PLOTLY_CONFIG = {
+    responsive: true,
+    displayModeBar: false,
+    // Drag on the y-axis = scale/compress the visible y range (box-drag on the
+    // plot area zooms both axes; wheel zooms at cursor; double-click resets).
+    scrollZoom: true,
+};
 
 // ─── Init ──────────────────────────────────────────────────────────────
 async function init() {
