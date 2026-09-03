@@ -1503,6 +1503,7 @@ function renderCharts(data) {
             hovertemplate: '%{x}<br>' + service + ': $%{y:.2f}/MWh<extra></extra>',
         }));
         Plotly.newPlot('chartFCAS', fcasTraces, {
+            height: 500,
             ...PLOTLY_LAYOUT_BASE,
             xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
             yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: '$/MWh' },
@@ -1553,6 +1554,18 @@ function renderCharts(data) {
             ofBox.style.display = 'none';
         }
     }
+
+    // Safety net: revive any chart whose container collapsed to 0 height
+    // (autosize renders a 0-height plot when the panel is hidden at newPlot time)
+    function reviveCollapsedPlots() {
+        document.querySelectorAll('.js-plotly-plot').forEach((el) => {
+            if (el.getBoundingClientRect().height >= 50) return;
+            const svg = el.querySelector('svg.main-svg');
+            const h = Math.max(parseInt(svg && svg.getAttribute('height')) || 0, 450);
+            try { Plotly.relayout(el, { height: h }); } catch (e) { /* noop */ }
+        });
+    }
+    setTimeout(reviveCollapsedPlots, 1200);
 
     // Regional price spreads (market factors) — market-level chart
     const spreadPanel = document.getElementById('panelMarketSpread');
