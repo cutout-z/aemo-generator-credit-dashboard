@@ -26,6 +26,9 @@ from src import freshness
 
 def _price_frame(rrp_values, region="NSW1", date="2026-07-15"):
     ts = pd.Timestamp(date)
+    # Tile to >=96 intervals so fixtures clear the 72-interval partial-day filter
+    reps = max(1, -(-96 // max(1, len(rrp_values))))
+    rrp_values = list(rrp_values) * reps
     return pd.DataFrame({
         "SETTLEMENTDATE": [ts + pd.Timedelta(minutes=5 * i) for i in range(len(rrp_values))],
         "REGIONID": region,
