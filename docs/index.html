@@ -767,6 +767,7 @@
                 </div>
             </div>
             <div id="fcasParticipationBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
+            <div id="offersBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
             <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel full-width" id="panelMarketSpread" style="display:none;">
@@ -1528,6 +1529,28 @@ function renderCharts(data) {
                 '<br><span style="opacity:.7">Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are REGIONAL market averages shared by every generator in ' + (data.region || 'the region') + '.</span>';
         } else {
             fpBox.style.display = 'none';
+        }
+    }
+
+    // Per-DUID energy offer curve (BIDDAYOFFER_D prices + BIDPEROFFER_D volumes) — summary box
+    const ofBox = document.getElementById('offersBox');
+    if (ofBox) {
+        if (data.offers) {
+            const of = data.offers;
+            const mw = (v) => v != null ? v + ' MW' : 'n/a';
+            const pc = (v) => v != null ? Math.round(100 * v) + '%' : 'n/a';
+            const dol = (v) => v != null ? (v < 0 ? '-$' + Math.abs(v).toFixed(0) : '$' + v.toFixed(0)) : 'n/a';
+            const asof = of.price_asof_month ? ' (prices as of ' + of.price_asof_month + ')' : '';
+            ofBox.style.display = 'block';
+            ofBox.innerHTML = '<b>Energy offers — this unit</b> (' + of.month + '): ' +
+                'avg ' + mw(of.avg_offered_mw) + ' offered (p95 ' + mw(of.offered_mw_p95) + ')' +
+                ' · band-1 avg ' + dol(of.price_band_min_avg) +
+                ' · band-10 avg ' + dol(of.price_band_max_avg) +
+                ' · neg-band days ' + pc(of.negative_band_day_share) +
+                ' · rebids/day ' + (of.rebids_per_day != null ? of.rebids_per_day.toFixed(1) : 'n/a') + asof +
+                '<br><span style="opacity:.7">Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.</span>';
+        } else {
+            ofBox.style.display = 'none';
         }
     }
 
