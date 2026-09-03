@@ -278,13 +278,9 @@
             min-width: 300px;
             position: relative;
             overflow: hidden;
-            /* Default: half width minus gap */
-            flex: 1 1 calc(50% - 8px);
-            max-width: 100%;
-        }
-
-        .chart-panel.full-width {
+            /* All tiles own their full row */
             flex: 1 1 100%;
+            max-width: 100%;
         }
 
         /* Corner resize handle (bottom-right) */
@@ -651,7 +647,7 @@
             </div>
             <div id="chartGeneration"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel full-width" id="panelDailyCF">
+        <div class="chart-panel" id="panelDailyCF">
             <div class="chart-title-wrap">
                 <h3>Generation (Last 12 Months)</h3>
                 <div class="chart-tooltip">
@@ -723,7 +719,7 @@
             </div>
             <div id="chartMLF"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel full-width">
+        <div class="chart-panel">
             <div class="chart-title-wrap">
                 <h3>Price Capture</h3>
                 <div class="chart-tooltip">
@@ -734,7 +730,7 @@
             </div>
             <div id="chartPriceCapture"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel full-width">
+        <div class="chart-panel">
             <div class="chart-title-wrap">
                 <h3>Spot Price Exposure</h3>
                 <div class="chart-tooltip">
@@ -765,7 +761,7 @@
             </div>
             <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel full-width" id="panelMarketSpread" style="display:none;">
+        <div class="chart-panel" id="panelMarketSpread" style="display:none;">
             <div class="chart-title-wrap">
                 <h3>Regional Price Spreads (BESS Arbitrage)</h3>
                 <div class="chart-tooltip">
@@ -779,7 +775,7 @@
             </div>
             <div id="chartMarketSpread"><div class="placeholder">No data yet</div></div>
         </div>
-        <div class="chart-panel full-width" id="panelConstraints" style="display:none;">
+        <div class="chart-panel" id="panelConstraints" style="display:none;">
             <div class="chart-title-wrap">
                 <h3>Binding Network Constraints</h3>
                 <div class="chart-tooltip">
