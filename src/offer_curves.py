@@ -1,0 +1,265 @@
+"""Energy offer-curve factors (BIDDAYOFFER_D prices + BIDPEROFFER_D volumes).
+
+Builds per-DUID monthly offer-behaviour factors:
+  - avg/peak offered energy availability (MW) from band volumes
+  - price-band positioning (band 1 / band 10 averages)
+  - negative-band day share (willingness to bid below $0)
+  - rebid intensity (distinct offer versions per day)
+  - top-2 band volume concentration (scarcity-band exposure)
+
+All figures are OFFER-BASED ESTIMATES: intent expressed to the market, not
+dispatch outcomes. Enablement/settlement remain participant-only.
+
+Cache note: nemosis caches one parquet per (table, month) holding only the
+columns previously requested. The volumes fetch requires BANDAVAIL1-10, so on
+first run it rebuilds the month's parquet "fat" (one-time re-download). The
+FCAS lane reads a subset and never rewrites (rebuild=False), so the fat cache
+persists and both lanes share one download per month.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+BAND_AVAIL_COLS = [f"BANDAVAIL{i}" for i in range(1, 11)]
+BAND_PRICE_COLS = [f"PRICEBAND{i}" for i in range(1, 11)]
+VOLUME_SELECT = (
+    ["INTERVAL_DATETIME", "DUID", "BIDTYPE", "VERSIONNO"] + BAND_AVAIL_COLS
+)
+PRICE_SELECT = (
+    ["SETTLEMENTDATE", "DUID", "BIDTYPE", "OFFERDATE", "VERSIONNO"]
+    + BAND_PRICE_COLS
+)
+OFFER_FACTORS_CACHE = "offer_factors.feather"
+
+
+def _month_window(year: int, month: int) -> tuple[str, str]:
+    start = f"{year}/{month:02d}/01 00:00:00"
+    if month == 12:
+        end = f"{year + 1}/01/01 00:00:00"
+    else:
+        end = f"{year}/{month + 1:02d}/01 00:00:00"
+    return start, end
+
+
+def _fetch_bid_table(
+    table: str,
+    year: int,
+    month: int,
+    cache_dir: str,
+    select_columns: list[str],
+    rebuild: bool = False,
+) -> pd.DataFrame:
+    from nemosis import dynamic_data_compiler
+
+    start_time, end_time = _month_window(year, month)
+    raw_data_location = str(Path(cache_dir) / "nemosis_cache")
+    Path(raw_data_location).mkdir(parents=True, exist_ok=True)
+    df = dynamic_data_compiler(
+        start_time=start_time,
+        end_time=end_time,
+        table_name=table,
+        raw_data_location=raw_data_location,
+        select_columns=select_columns,
+        fformat="parquet",
+        rebuild=rebuild,
+    )
+    if df is None or df.empty:
+        logger.warning(f"{table} {year}-{month:02d}: no data (unpublished month?)")
+        return pd.DataFrame()
+    missing = {"DUID", "BIDTYPE", "VERSIONNO"} - set(df.columns)
+    if missing:
+        logger.warning(f"{table} {year}-{month:02d}: missing {sorted(missing)} — skipping")
+        return pd.DataFrame()
+    df = df[df["BIDTYPE"] == "ENERGY"].copy()
+    if df.empty:
+        logger.warning(f"{table} {year}-{month:02d}: no ENERGY rows")
+        return pd.DataFrame()
+    # Latest offer version wins (rebids); OFFERDATE breaks ties.
+    df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
+    sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in df.columns else [])
+    key = "INTERVAL_DATETIME" if "INTERVAL_DATETIME" in df.columns else "SETTLEMENTDATE"
+    df = df.sort_values(sort_cols).drop_duplicates(subset=["DUID", key], keep="last")
+    return df
+
+
+def fetch_energy_prices(year: int, month: int, cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
+    """Daily ENERGY offer price bands per DUID (latest version only)."""
+    prices = _fetch_bid_table(
+        "BIDDAYOFFER_D", year, month, cache_dir, PRICE_SELECT, rebuild=rebuild
+    )
+    if prices.empty:
+        return prices
+    for col in BAND_PRICE_COLS:
+        if col not in prices.columns:
+            logger.warning(f"BIDDAYOFFER_D {year}-{month:02d}: {col} missing")
+            return pd.DataFrame()
+        prices[col] = pd.to_numeric(prices[col], errors="coerce")
+    prices["SETTLEMENTDATE"] = pd.to_datetime(prices["SETTLEMENTDATE"])
+    return prices.dropna(subset=BAND_PRICE_COLS, how="all")
+
+
+def fetch_energy_volumes(year: int, month: int, cache_dir: str, rebuild: bool | None = None) -> pd.DataFrame:
+    """Per-interval ENERGY offered volumes per DUID (latest version only).
+
+    rebuild=None: auto-detect a thin cached parquet (no BANDAVAIL columns,
+    written by an older narrow fetch) and rebuild it fat once.
+    """
+    if rebuild is None:
+        parquet = (
+            Path(cache_dir) / "nemosis_cache"
+            / f"PUBLIC_ARCHIVE#BIDPEROFFER_D#FILE01#{year}{month:02d}010000.parquet"
+        )
+        if parquet.exists():
+            try:
+                cached_cols = set(pd.read_parquet(parquet).columns)
+            except Exception:
+                cached_cols = set()
+            rebuild = not set(BAND_AVAIL_COLS).issubset(cached_cols)
+            if rebuild:
+                logger.info(
+                    f"BIDPEROFFER_D {year}-{month:02d}: cached parquet lacks band "
+                    "columns — rebuilding fat (one-time)"
+                )
+        else:
+            rebuild = False
+    volumes = _fetch_bid_table(
+        "BIDPEROFFER_D", year, month, cache_dir, VOLUME_SELECT, rebuild=rebuild
+    )
+    if volumes.empty:
+        return volumes
+    for col in BAND_AVAIL_COLS:
+        if col not in volumes.columns:
+            logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: {col} missing — fat rebuild required")
+            return pd.DataFrame()
+        volumes[col] = pd.to_numeric(volumes[col], errors="coerce")
+    volumes["INTERVAL_DATETIME"] = pd.to_datetime(volumes["INTERVAL_DATETIME"])
+    return volumes
+
+
+def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.DataFrame:
+    """Per-DUID monthly offer-behaviour features from deduped prices+volumes.
+
+    Prices: BIDDAYOFFER_D ENERGY rows (DUID, SETTLEMENTDATE, PRICEBAND1-10).
+    Volumes: BIDPEROFFER_D ENERGY rows (DUID, INTERVAL_DATETIME, BANDAVAIL1-10).
+    """
+    if prices is None or prices.empty or volumes is None or volumes.empty:
+        return pd.DataFrame()
+
+    p = prices.copy()
+    p["month"] = p["SETTLEMENTDATE"].dt.to_period("M").astype(str)
+    per_day = p.groupby(["DUID", "month"]).agg(
+        n_days=("SETTLEMENTDATE", "nunique"),
+        price_band_min_avg=("PRICEBAND1", "mean"),
+        price_band_max_avg=("PRICEBAND10", "mean"),
+    )
+    per_day["negative_band_day_share"] = p.assign(neg=p["PRICEBAND1"] < 0).groupby(
+        ["DUID", "month"]
+    )["neg"].mean()
+    # rebids = offer versions per day; grouping keys are excluded inside
+    # apply, so count rows per day with size() rather than a named column.
+    per_day["rebids_per_day"] = p.groupby(["DUID", "month"]).apply(
+        lambda g: g.groupby("SETTLEMENTDATE").size().mean(), include_groups=False
+    )
+
+    v = volumes.copy()
+    v["month"] = v["INTERVAL_DATETIME"].dt.to_period("M").astype(str)
+    v["offered_mw"] = v[BAND_AVAIL_COLS].sum(axis=1)
+    band_total = v["offered_mw"].where(v["offered_mw"] > 0)
+    v["top2_share"] = (
+        (v["BANDAVAIL9"].fillna(0) + v["BANDAVAIL10"].fillna(0)) / band_total
+    )
+    vol = v.groupby(["DUID", "month"]).agg(
+        offered_mw_avg=("offered_mw", "mean"),
+        offered_mw_p95=("offered_mw", lambda s: s.quantile(0.95)),
+        top2_band_volume_share=("top2_share", "mean"),
+        intervals_offering=("offered_mw", "count"),
+    )
+
+    out = per_day.join(vol, how="outer").reset_index()
+    out["top2_band_volume_share"] = out["top2_band_volume_share"].fillna(0).round(4)
+    for col in ("price_band_min_avg", "price_band_max_avg", "offered_mw_avg", "offered_mw_p95"):
+        out[col] = out[col].round(2)
+    out["rebids_per_day"] = out["rebids_per_day"].round(3)
+    out["negative_band_day_share"] = out["negative_band_day_share"].round(4)
+    # Repo convention (matches fcas_factors): lowercase duid column
+    return out.rename(columns={"DUID": "duid"})
+
+
+def build_offer_factors(months: list[tuple[int, int]], cache_dir: str, data_dir: str) -> pd.DataFrame:
+    """Fetch + compute offer factors for each (year, month); save feather."""
+    frames: list[pd.DataFrame] = []
+    for year, month in months:
+        prices = fetch_energy_prices(year, month, cache_dir)
+        if prices.empty:
+            continue
+        volumes = fetch_energy_volumes(year, month, cache_dir)
+        if volumes.empty:
+            logger.warning(f"Offers {year}-{month:02d}: prices without volumes — skipping month")
+            continue
+        feats = compute_offer_features(prices, volumes)
+        if not feats.empty:
+            logger.info(
+                f"Offer factors {year}-{month:02d}: {len(feats)} DUIDs"
+            )
+            frames.append(feats)
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    out_path = Path(data_dir) / OFFER_FACTORS_CACHE
+    out.to_feather(out_path)
+    logger.info(f"Saved {len(out)} offer factor rows to {out_path}")
+    return out
+
+
+def attach_offer_factors(generators: list[dict], offer_factors: pd.DataFrame | None) -> list[dict]:
+    """Attach doc['offers'] to generator dicts (offer-based estimates)."""
+    if offer_factors is None or offer_factors.empty:
+        return generators
+    by_duid = {
+        duid: g for duid, g in offer_factors.groupby("duid")
+    }
+    attached = 0
+    for gen in generators:
+        duid = gen.get("duid")
+        if not duid or duid not in by_duid:
+            continue
+        rows = by_duid[duid].sort_values("month")
+        latest = rows.iloc[-1]
+        gen["offers"] = {
+            "scope": "offer_based_estimate",
+            "month": latest["month"],
+            "avg_offered_mw": float(latest["offered_mw_avg"]),
+            "offered_mw_p95": float(latest["offered_mw_p95"]),
+            "price_band_min_avg": float(latest["price_band_min_avg"]),
+            "price_band_max_avg": float(latest["price_band_max_avg"]),
+            "negative_band_day_share": float(latest["negative_band_day_share"]),
+            "rebids_per_day": float(latest["rebids_per_day"]),
+            "top2_band_volume_share": float(latest["top2_band_volume_share"]),
+        }
+        attached += 1
+    logger.info(f"Attached offer factors to {attached} generators")
+    return generators
+
+
+def attach_offer_factor_doc(doc: dict, rows: pd.DataFrame | None) -> None:
+    """Attach doc['offers'] from this DUID's factor rows (latest month wins)."""
+    if rows is None or rows.empty:
+        return
+    r = rows.sort_values("month").iloc[-1]
+    doc["offers"] = {
+        "scope": "offer_based_estimate",
+        "month": r["month"],
+        "avg_offered_mw": float(r["offered_mw_avg"]),
+        "offered_mw_p95": float(r["offered_mw_p95"]),
+        "price_band_min_avg": float(r["price_band_min_avg"]),
+        "price_band_max_avg": float(r["price_band_max_avg"]),
+        "negative_band_day_share": float(r["negative_band_day_share"]),
+        "rebids_per_day": float(r["rebids_per_day"]),
+        "top2_band_volume_share": float(r["top2_band_volume_share"]),
+    }

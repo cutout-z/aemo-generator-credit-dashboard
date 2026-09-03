@@ -128,6 +128,8 @@ def main():
                         help="Rebuild FCAS history from cached DISPATCHPRICE files (implies --skip-scada)")
     parser.add_argument("--no-processed-cache-snapshot", action="store_true",
                         help="Do not restore/publish compact processed cache snapshots")
+    parser.add_argument("--skip-offer-factors", action="store_true",
+                        help="Skip per-DUID energy offer-curve factors")
     parser.add_argument("--skip-fcas-factors", action="store_true",
                         help="Skip per-DUID FCAS participation factors (BIDPEROFFER_D download)")
     args = parser.parse_args()
@@ -560,6 +562,36 @@ def main():
             fcas_factors = pd.read_feather(cached_ff)
             logger.info(f"Loaded {len(fcas_factors)} cached FCAS factor rows")
 
+    # Step 3e2: Per-DUID energy offer-curve factors (BIDDAYOFFER_D prices +
+    # BIDPEROFFER_D ENERGY volumes). Offer-based estimates of bid behaviour.
+    offer_factors = pd.DataFrame()
+    if not args.skip_offer_factors:
+        logger.info("=== Step 3e2: Energy offer-curve factors ===")
+        from .offer_curves import build_offer_factors
+        try:
+            of_new = build_offer_factors(
+                _months_to_process(args.months_back, args.full_refresh),
+                str(data_dir), str(data_dir),
+            )
+            if not of_new.empty:
+                of_path = data_dir / "offer_factors.feather"
+                if of_path.exists() and not args.full_refresh:
+                    of_existing = pd.read_feather(of_path)
+                    reprocessed = set(of_new["month"].unique())
+                    of_existing = of_existing[~of_existing["month"].isin(reprocessed)]
+                    offer_factors = pd.concat([of_existing, of_new], ignore_index=True)
+                else:
+                    offer_factors = of_new
+                offer_factors.to_feather(of_path)
+                logger.info(f"Saved {len(offer_factors)} offer factor rows to {of_path}")
+        except Exception as e:
+            logger.warning(f"Offer factor computation failed: {e}")
+    else:
+        cached_of = data_dir / "offer_factors.feather"
+        if cached_of.exists():
+            offer_factors = pd.read_feather(cached_of)
+            logger.info(f"Loaded {len(offer_factors)} cached offer factor rows")
+
     # Step 3f: Freshness guards — fail BEFORE publishing stale data.
     # The daily commit is not a freshness signal: the pipeline re-processes the
     # most recent archive months, so a total download failure still "succeeds".
@@ -577,7 +609,8 @@ def main():
                          fcas_data=fcas_by_region_month if fcas_by_region_month else None,
                          daily_aggregates=daily_agg,
                          constraint_data=constraint_agg,
-                         fcas_factors=fcas_factors if not fcas_factors.empty else None)
+                         fcas_factors=fcas_factors if not fcas_factors.empty else None,
+                         offer_factors=offer_factors if not offer_factors.empty else None)
     publish_market_json(
         market_factors, market_quarterly, str(docs_data_dir),
         qed_benchmarks=QED_NEM_SPREAD_AUD_MWH,

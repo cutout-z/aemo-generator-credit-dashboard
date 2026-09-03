@@ -83,7 +83,8 @@ def generate_generator_json(
     constraint_data: pd.DataFrame | None = None,
     fcas_factor_rows: pd.DataFrame | None = None,
     output_dir: str | None = None,
-) -> Path:
+
+    offer_factor_rows=None,) -> Path:
     """Write a single generator's JSON file with all dashboard data.
 
     Args:
@@ -163,6 +164,8 @@ def generate_generator_json(
     # Per-DUID FCAS participation factors (BIDPEROFFER_D offers)
     from .fcas_factor import attach_fcas_factor_doc
     attach_fcas_factor_doc(doc, fcas_factor_rows)
+    from .offer_curves import attach_offer_factor_doc
+    attach_offer_factor_doc(doc, offer_factor_rows)
 
     # Daily capacity factor (last 12 months)
     if daily_data is not None and not daily_data.empty:
@@ -295,6 +298,7 @@ def generate_all(
     daily_aggregates: pd.DataFrame | None = None,
     constraint_data: pd.DataFrame | None = None,
     fcas_factors: pd.DataFrame | None = None,
+    offer_factors: pd.DataFrame | None = None,
     market: str = "NEM",
 ) -> int:
     """Generate all per-generator JSON files and the index.
@@ -399,12 +403,19 @@ def generate_all(
             if duid_fcas_factors.empty:
                 duid_fcas_factors = None
 
+        duid_offers = None
+        if offer_factors is not None and not offer_factors.empty:
+            duid_offers = offer_factors[offer_factors["duid"] == duid].copy()
+            if duid_offers.empty:
+                duid_offers = None
+
         generate_generator_json(
             duid, metadata, monthly, mlf, price_dist,
             draft_mlf=d_mlf, draft_fy_label=draft_fy_label,
             fcas_monthly=fcas_monthly, daily_data=daily,
             constraint_data=duid_constraints,
-            fcas_factor_rows=duid_fcas_factors, output_dir=gen_dir,
+            fcas_factor_rows=duid_fcas_factors,
+            offer_factor_rows=duid_offers, output_dir=gen_dir,
         )
         count += 1
 
