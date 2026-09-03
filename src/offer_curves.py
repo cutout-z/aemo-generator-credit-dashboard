@@ -454,13 +454,15 @@ def write_offer_curve_files(curves: pd.DataFrame, docs_data_dir: str) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     n = 0
     for duid, grp in curves.sort_values(["date", "price"]).groupby("duid"):
+        # Sanitize path-hostile characters (some DUIDs contain '/' or '#')
+        safe = str(duid).replace("/", "_")
         days = []
         for date, dgrp in grp.groupby("date"):
             days.append({
                 "date": date,
                 "stack": [[float(r["price"]), float(r["cum_mw"])] for _, r in dgrp.iterrows()],
             })
-        (out_dir / f"{duid}.json").write_text(json.dumps({
+        (out_dir / f"{safe}.json").write_text(json.dumps({
             "scope": "offer_based_estimate",
             "updated": pd.Timestamp.utcnow().strftime("%Y-%m-%d"),
             "days": days,

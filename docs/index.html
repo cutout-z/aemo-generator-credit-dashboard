@@ -1587,7 +1587,7 @@ function renderCharts(data) {
     if (ocWrap && ocChart && ocDay) {
         const duid = (data.duid || '').trim();
         if (duid) {
-            fetch('data/offer_curves/' + encodeURIComponent(duid) + '.json')
+            fetch('data/offer_curves/' + encodeURIComponent(duid.replace(/\//g, '_')) + '.json')
                 .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
                 .then((doc) => {
                     const days = (doc.days || []).slice().sort((a, b) => b.date.localeCompare(a.date));
