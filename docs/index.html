@@ -768,6 +768,10 @@
             </div>
             <div id="fcasParticipationBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
             <div id="offersBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
+            <div id="offerCurveWrap" style="display:none;margin-bottom:6px;">
+                <div style="font-size:13px;font-weight:600;margin:4px 0 2px;">Offer curve — 10-band bid stack <span style="font-weight:400;opacity:.7">(latest month with both prices &amp; volumes)</span></div>
+                <div id="offerCurveChart"><div class="placeholder">No data yet</div></div>
+            </div>
             <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel full-width" id="panelMarketSpread" style="display:none;">
@@ -1552,6 +1556,39 @@ function renderCharts(data) {
                 '<br><span style="opacity:.7">Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.</span>';
         } else {
             ofBox.style.display = 'none';
+        }
+    }
+
+    // Per-DUID 10-band offer curve (bid stack) — step chart
+    const ocWrap = document.getElementById('offerCurveWrap');
+    const ocChart = document.getElementById('offerCurveChart');
+    if (ocWrap && ocChart) {
+        if (data.offer_curve && data.offer_curve.bands && data.offer_curve.bands.length) {
+            const oc = data.offer_curve;
+            // Step: price flat across each band's MW segment; zero-width bands skipped
+            const segX = [], segY = [];
+            let prev = 0;
+            for (const b of oc.bands) {
+                if (b.cum_mw - prev <= 1e-9) { prev = b.cum_mw; continue; }
+                segX.push(prev, b.price, b.price, null);
+                segY.push(prev, prev, b.cum_mw, null);
+                prev = b.cum_mw;
+            }
+            const traces = [{
+                x: segX, y: segY, mode: 'lines', line: { shape: 'hv', width: 2, color: '#4aa3ff' },
+                name: 'Bid stack', hovertemplate: 'Cum MW %{y:.0f} at $%{x:.0f}/MWh<extra></extra>'
+            }];
+            ocWrap.style.display = 'block';
+            Plotly.newPlot('offerCurveChart', traces, {
+                ...PLOTLY_LAYOUT_BASE,
+                height: 360,
+                xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: { text: 'Offered price ($/MWh)' }, rangemode: 'tozero' },
+                yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: { text: 'Cumulative offered MW' }, rangemode: 'tozero' },
+                showlegend: false,
+                margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 16 }
+            }, PLOTLY_CONFIG);
+        } else {
+            ocWrap.style.display = 'none';
         }
     }
 
