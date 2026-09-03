@@ -590,10 +590,11 @@ def main():
         # Step 3e3: per-DUID 10-band offer curves (chart data)
         try:
             from .offer_curves import build_offer_curves
-            offer_curves = build_offer_curves(
+            oc_result = build_offer_curves(
                 _months_to_process(args.months_back, args.full_refresh),
                 str(data_dir), str(data_dir),
-            ) or None
+            )
+            offer_curves = oc_result if oc_result is not None and not oc_result.empty else None
         except Exception as e:
             logger.warning(f"Offer curve computation failed: {e}")
     else:
