@@ -2184,6 +2184,20 @@ function buildMonthlyRows(data) {
         };
         if (m.curtailment_pct) row['Curtailment Proxy'] = m.curtailment_pct[i];
         if (m.econ_curtailment_pct) row['Economic Curtailment'] = m.econ_curtailment_pct[i];
+        // S3-11: expose the MLF factor behind each month's revenue in CSV/XLSX.
+        // status exact/prior-carry => revenue_aud is MLF-adjusted with the
+        // recorded factor from the recorded source FY; status unknown =>
+        // revenue is UNADJUSTED spot revenue and is provisional. Absent
+        // arrays (legacy data published before provenance) render no columns.
+        if (m.revenue_mlf_status) {
+            const st = m.revenue_mlf_status[i];
+            row['Revenue MLF Status'] = st === 'unknown'
+                ? 'unknown — PROVISIONAL (unadjusted)'
+                : (st || '');
+            row['Revenue MLF Source FY'] = (m.revenue_mlf_source_fy || [])[i] || '';
+            row['Revenue MLF Factor'] = (m.revenue_mlf_value || [])[i] != null
+                ? m.revenue_mlf_value[i] : '';
+        }
         return row;
     });
 }

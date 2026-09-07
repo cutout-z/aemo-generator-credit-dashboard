@@ -11,8 +11,60 @@ import numpy as np
 import pandas as pd
 
 from . import config
+from .aggregate import (
+    REVENUE_MLF_SOURCE_FY_COL,
+    REVENUE_MLF_STATUS_COL,
+    REVENUE_MLF_VALUE_COL,
+    MLF_STATUS_PRIOR_CARRY,
+    MLF_STATUS_UNKNOWN,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _fy_label_or_none(src_fy_start) -> str | None:
+    """Format a fy_start_year as 'FY25-26'; None for missing/NaN."""
+    if src_fy_start is None:
+        return None
+    try:
+        if isinstance(src_fy_start, float) and math.isnan(src_fy_start):
+            return None
+        start = int(src_fy_start)
+    except (TypeError, ValueError):
+        return None
+    return config.fy_label(start)
+
+
+def _add_revenue_mlf_provenance(monthly_doc: dict, monthly_data: pd.DataFrame) -> None:
+    """Attach per-month revenue-MLF provenance arrays to a doc['monthly'] block.
+
+    S3-11: every revenue_aud value is either MLF-adjusted (status ``exact`` or
+    ``prior-carry`` — the applied factor and its source FY are recorded) or
+    UNADJUSTED spot revenue when the DUID had no factor at or before that
+    month's FY (status ``unknown``, value None) — which is PROVISIONAL by
+    contract and must never be presented as an MLF-adjusted figure.
+
+    The arrays parallel ``months``. Rows aggregated before the S3-11
+    provenance columns existed carry None entries; a frame with no recorded
+    provenance at all simply omits the keys (absence is not 'all exact').
+    """
+    if REVENUE_MLF_STATUS_COL not in monthly_data.columns:
+        return
+    statuses = monthly_data[REVENUE_MLF_STATUS_COL]
+    if statuses.dropna().empty:
+        return  # legacy frame — no month has recorded provenance
+    monthly_doc["revenue_mlf_status"] = [
+        None if pd.isna(v) else str(v) for v in statuses
+    ]
+    if REVENUE_MLF_SOURCE_FY_COL in monthly_data.columns:
+        monthly_doc["revenue_mlf_source_fy"] = [
+            _fy_label_or_none(v) for v in monthly_data[REVENUE_MLF_SOURCE_FY_COL]
+        ]
+    if REVENUE_MLF_VALUE_COL in monthly_data.columns:
+        monthly_doc["revenue_mlf_value"] = [
+            None if pd.isna(v) else float(v)
+            for v in monthly_data[REVENUE_MLF_VALUE_COL]
+        ]
 
 
 def _safe_filename(duid: str) -> str:
@@ -166,6 +218,13 @@ def generate_generator_json(
             "revenue_aud": monthly_data["revenue_aud"].round(0).tolist(),
             "capacity_factor": monthly_data["capacity_factor"].round(4).tolist(),
         }
+        # S3-11: per-month revenue-MLF provenance. Every month's revenue_aud
+        # carries which factor was applied and where it came from; a month
+        # whose DUID had NO factor at or before that month's FY is UNADJUSTED
+        # spot revenue (status "unknown", value None) and must be read as
+        # provisional. Months without provenance columns (legacy aggregates
+        # produced before S3-11) simply omit the arrays.
+        _add_revenue_mlf_provenance(doc["monthly"], monthly_data)
         # Curtailment only for solar/wind
         # S3-01: curtailment_pct is a forecast-to-output shortfall proxy
         # (1 − SCADA/AVAILABILITY). The former grid/mechanical causal split
@@ -917,5 +976,30 @@ def _aggregate_station_monthly(
         result["captured_price"] = captured_price
         result["avg_rrp"] = avg_rrp
         result["price_capture_ratio"] = pcr
+
+    # S3-11: station monthly revenue is the SUM of member-unit revenues, each
+    # adjusted by its own MLF factor (or unadjusted+provisional when unknown).
+    # A single station factor is not meaningful (members may carry different
+    # factors/FYs), so expose the provenance contract at the station level as
+    # the most conservative member status per month — a station month whose
+    # revenue contains ANY unadjusted member revenue is itself provisional.
+    # Per-member factors remain available in doc["mlf_by_duid"].
+    if REVENUE_MLF_STATUS_COL in station_monthly.columns:
+        has_mlf_status = station_monthly[REVENUE_MLF_STATUS_COL].dropna()
+        if not has_mlf_status.empty:
+            statuses = []
+            for m in months:
+                month_statuses = (
+                    grouped.get_group(m)[REVENUE_MLF_STATUS_COL].dropna().astype(str)
+                )
+                if month_statuses.empty:
+                    statuses.append(None)
+                elif (month_statuses == MLF_STATUS_UNKNOWN).any():
+                    statuses.append(MLF_STATUS_UNKNOWN)
+                elif (month_statuses == MLF_STATUS_PRIOR_CARRY).any():
+                    statuses.append(MLF_STATUS_PRIOR_CARRY)
+                else:
+                    statuses.append("exact")
+            result["revenue_mlf_status"] = statuses
 
     return result

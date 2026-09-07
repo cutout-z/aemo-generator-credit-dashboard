@@ -28,7 +28,7 @@ def aggregate_month(
     prices: pd.DataFrame,
     dispatchload: pd.DataFrame | None,
     generators: pd.DataFrame,
-    mlf_lookup: dict[str, float] | None,
+    mlf_lookup: dict[str, dict] | None,
     year: int,
     month: int,
     intermittent_scada: pd.DataFrame | None = None,
@@ -40,7 +40,13 @@ def aggregate_month(
         prices: DISPATCHPRICE with SETTLEMENTDATE, REGIONID, RRP
         dispatchload: DISPATCHLOAD with SETTLEMENTDATE, DUID, AVAILABILITY (or None)
         generators: Generator metadata with DUID, REGION, CAPACITY_MW, FUEL_CATEGORY
-        mlf_lookup: Dict mapping DUID -> current MLF value (or None for no MLF adjustment)
+        mlf_lookup: Per-DUID MLF resolution for this month's FY — dict mapping
+            DUID -> {"mlf", "source_fy_start", "status"} as built by
+            build_mlf_lookup (S3-11). Exact/prior-carry DUIDs are adjusted by
+            their factor; status "unknown" DUIDs get UNADJUSTED revenue
+            (factor 1.0) that is explicitly labelled provisional in the row's
+            revenue_mlf_* provenance columns. None/empty = no MLF data at all
+            (every DUID unknown — unadjusted, provisional).
         year: Year being processed
         month: Month being processed
 
@@ -52,6 +58,10 @@ def aggregate_month(
                  denominators: curtailment_actual_mwh / curtailment_potential_mwh
                  (eligible actual and availability energy behind the shortfall
                  proxy) and price_mwh_* per-bin energy behind each share.
+                 (S3-11) Every row also carries the MLF provenance used for its
+                 revenue_aud: revenue_mlf_status (exact/prior-carry/unknown),
+                 revenue_mlf_source_fy_start (source FY or None), and
+                 revenue_mlf_value (applied factor, None when unadjusted).
     """
     if scada.empty:
         return pd.DataFrame()
@@ -92,12 +102,31 @@ def aggregate_month(
     for duid, group in merged.groupby("DUID"):
         capacity = duid_capacity.get(duid)
         fuel = duid_fuel.get(duid, "Other")
-        mlf = mlf_lookup.get(duid, 1.0) if mlf_lookup else 1.0
+
+        # S3-11: resolve the factor actually applied to this DUID's revenue.
+        # A missing resolution (or status "unknown") means revenue is
+        # UNADJUSTED (×1.0) and is labelled provisional — never a silent 1.0
+        # masquerading as an MLF-adjusted figure, never a future FY's factor.
+        res = mlf_lookup.get(duid) if isinstance(mlf_lookup, dict) else None
+        if (
+            not isinstance(res, dict)
+            or res.get("status") == MLF_STATUS_UNKNOWN
+        ):
+            mlf_status = MLF_STATUS_UNKNOWN
+            mlf_source_fy_start = None
+            mlf_value = None
+            mlf = 1.0
+        else:
+            mlf_status = res["status"]
+            mlf_source_fy_start = res.get("source_fy_start")
+            mlf_value = float(res["mlf"])
+            mlf = mlf_value
 
         # MWh: 5-minute intervals → divide by 12 to get MWh
         mwh = group["SCADAVALUE"].clip(lower=0).sum() / 12.0
 
         # Revenue: MWh_interval × RRP × MLF, summed
+        # (unknown status: ×1.0 — unadjusted spot revenue, provisional)
         group_valid = group.dropna(subset=["RRP"])
         revenue = (group_valid["SCADAVALUE"].clip(lower=0) / 12.0 * group_valid["RRP"] * mlf).sum()
 
@@ -169,6 +198,12 @@ def aggregate_month(
             "generation_mwh": round(mwh, 1),
             "revenue_aud": round(revenue, 0),
             "capacity_factor": round(cap_factor, 4) if cap_factor is not None else None,
+            # S3-11: revenue-MLF provenance — which factor (if any) was applied
+            # to this month's revenue_aud and where it came from. Status
+            # "unknown" => revenue is UNADJUSTED (factor 1.0) and provisional.
+            REVENUE_MLF_STATUS_COL: mlf_status,
+            REVENUE_MLF_SOURCE_FY_COL: mlf_source_fy_start,
+            REVENUE_MLF_VALUE_COL: round(mlf_value, 6) if mlf_value is not None else None,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
             "curtailment_actual_mwh": curt_actual_mwh,
             "curtailment_potential_mwh": curt_potential_mwh,
@@ -280,25 +315,75 @@ def aggregate_month_daily(
     return pd.DataFrame(rows)
 
 
+# MLF resolution statuses (S3-11). Every per-DUID revenue lookup resolves to
+# exactly one of these — the resolution is per DUID and NEVER consults a
+# future FY for historical revenue.
+MLF_STATUS_EXACT = "exact"
+MLF_STATUS_PRIOR_CARRY = "prior-carry"
+MLF_STATUS_UNKNOWN = "unknown"
+
+# Feather/JSON column names that carry per-month revenue-MLF provenance on
+# monthly aggregate rows (see aggregate_month / generate_json).
+REVENUE_MLF_STATUS_COL = "revenue_mlf_status"
+REVENUE_MLF_SOURCE_FY_COL = "revenue_mlf_source_fy_start"
+REVENUE_MLF_VALUE_COL = "revenue_mlf_value"
+
+
 def build_mlf_lookup(
     mlf_history: pd.DataFrame,
     target_fy_start: int,
-) -> dict[str, float]:
-    """Build DUID -> MLF lookup for a given financial year.
+) -> dict[str, dict]:
+    """Resolve the MLF for every DUID against one target FY, PER DUID.
 
-    Falls back to the nearest available FY if the exact one isn't found.
+    Returns ``{DUID: {"mlf": float | None, "source_fy_start": int | None,
+    "status": "exact" | "prior-carry" | "unknown"}}``.
+
+    Resolution contract (S3-11):
+      - ``exact``       — the DUID has a published factor for ``target_fy_start``;
+      - ``prior-carry`` — no factor for the target FY, but the DUID has at
+        least one EARLIER factor: the most recent earlier FY carries over
+        (an explicitly allowed prior-year carry — never a silent 1.0);
+      - ``unknown``     — no factor at or before the target FY (future-only
+        rows or no rows at all). Revenue must then be treated as UNADJUSTED
+        and PROVISIONAL, never presented as an MLF-adjusted figure.
+
+    The old behaviour is gone: it returned the whole exact-FY slice when any
+    exact row existed (so a unit missing that FY silently dropped out and
+    aggregation used 1.0 even when the unit had a prior value), and when the
+    whole FY was absent it fell back to each unit's LATEST available FY —
+    including years AFTER the target — applying a future factor to historical
+    revenue. Neither path recorded an imputation or source FY.
     """
     if mlf_history is None or mlf_history.empty:
         return {}
 
-    # Try exact FY first
-    exact = mlf_history[mlf_history["fy_start_year"] == target_fy_start]
-    if not exact.empty:
-        return dict(zip(exact["DUID"], exact["mlf"]))
-
-    # Fall back to latest available FY per DUID
-    latest = mlf_history.sort_values("fy_start_year").drop_duplicates("DUID", keep="last")
-    return dict(zip(latest["DUID"], latest["mlf"]))
+    out: dict[str, dict] = {}
+    for duid, group in mlf_history.groupby("DUID", sort=False):
+        rows = group.sort_values("fy_start_year")
+        exact = rows[rows["fy_start_year"] == target_fy_start]
+        if not exact.empty:
+            out[duid] = {
+                "mlf": float(exact["mlf"].iloc[0]),
+                "source_fy_start": target_fy_start,
+                "status": MLF_STATUS_EXACT,
+            }
+            continue
+        prior = rows[rows["fy_start_year"] < target_fy_start]
+        if not prior.empty:
+            src = prior.iloc[-1]
+            out[duid] = {
+                "mlf": float(src["mlf"]),
+                "source_fy_start": int(src["fy_start_year"]),
+                "status": MLF_STATUS_PRIOR_CARRY,
+            }
+            continue
+        # No factor at or before the target FY — future-only rows (or none).
+        out[duid] = {
+            "mlf": None,
+            "source_fy_start": None,
+            "status": MLF_STATUS_UNKNOWN,
+        }
+    return out
 
 
 FCAS_COLS = [

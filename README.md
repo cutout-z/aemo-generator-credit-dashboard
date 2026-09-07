@@ -331,6 +331,6 @@ The current CF > 1.0 audit list covers the TAS/NSW hydro peakers KAREEYA1–4, P
 - **Decile is a legacy proxy**: The ~2.4h decile option is retained for continuity with the AEMO QED benchmark, which has itself fallen sharply (2025Q2 $342 → 2026Q2 $51/MWh)
 - **LGC volumes are estimated**: 1 MWh ≈ 1 LGC for eligible generators — actual creation may differ due to station use and accreditation
 - **Connection point gaps**: ~20% of generators lack connection point data in DUDETAILSUMMARY (constraint mapping is approximate)
-- **MLF fallback**: If exact FY data is missing for a generator, the latest available FY is used
+- **MLF fallback is per-DUID and never future-dated**: revenue for a month is adjusted by that DUID's MLF for the month's financial year when one exists (`exact`); otherwise the most recent *prior* FY factor is carried (`prior-carry`, source FY recorded); a DUID with no factor at or before that FY gets **unadjusted** revenue (`unknown`), which is labelled provisional/unadjusted in every export (JSON monthly block + CSV/XLSX). A future FY's factor is never applied to historical revenue. See the `revenue_mlf_status` / `revenue_mlf_source_fy` / `revenue_mlf_value` arrays in each generator's JSON.
 - **Data lag**: AEMO data has a ~2 week lag; the 2-month reprocessing window accounts for this
 - **Prudential data gap**: AEMO's own credit and prudential data is participant-only; this dashboard approximates credit exposure from public market data (see `docs/FUTURE_DATA_SOURCES.md`)
