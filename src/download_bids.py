@@ -36,6 +36,8 @@ def fetch_fcas_bids_month(
     Returns DataFrame with columns:
         INTERVAL_DATETIME, DUID, BIDTYPE, MAXAVAIL, ENABLEMENTMIN, ENABLEMENTMAX
     Rows filtered to the 8 FCAS bid types; ENERGY bids are dropped here.
+    MAXAVAIL == 0 rows are KEPT (S3-05): an explicit zero offer is observed
+    source coverage, not an absence.
     """
     nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
     Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
@@ -97,12 +99,17 @@ def fetch_fcas_bids_month(
         )
 
     bids["MAXAVAIL"] = pd.to_numeric(bids["MAXAVAIL"], errors="coerce")
+    # S3-05: retain explicit zero offers. A MAXAVAIL=0 row is an OBSERVED
+    # offer (the unit was bidding that service at zero) — dropping it before
+    # aggregation conflated "offered nothing" with "no offer on record" and
+    # hid intervals from downstream coverage counts. Zero rows keep flowing;
+    # factor aggregation separates observed intervals from positive ones.
     bids = bids.dropna(subset=["MAXAVAIL"])
-    bids = bids[bids["MAXAVAIL"] > 0]
     bids["INTERVAL_DATETIME"] = pd.to_datetime(bids["INTERVAL_DATETIME"])
 
     logger.info(
         f"BIDPEROFFER_D FCAS {year}-{month:02d}: {len(bids):,} rows, "
-        f"{bids['DUID'].nunique()} DUIDs offering"
+        f"{bids['DUID'].nunique()} DUIDs with offers "
+        f"(incl. {int((bids['MAXAVAIL'] == 0).sum()):,} zero-offer rows)"
     )
     return bids

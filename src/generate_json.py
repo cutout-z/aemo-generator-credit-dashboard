@@ -20,6 +20,29 @@ def _safe_filename(duid: str) -> str:
     return duid.replace("/", "_").replace("#", "_").replace("\\", "_")
 
 
+def _add_daily_coverage(daily_doc: dict, daily_rows: pd.DataFrame) -> None:
+    """Publish per-day observed/expected interval counts into a doc['daily'] block.
+
+    S3-05: daily rows carry intervals_observed/intervals_expected (288 = full
+    day). Rows cached before S3-05 have no counts (NaN = coverage unknown).
+    The parallel arrays are emitted only when at least one row in the window
+    carries counts; null entries mark individual legacy days. Absent keys
+    mean the whole window predates the coverage columns — consumers must not
+    read absence as "all days complete".
+    """
+    col = "intervals_observed"
+    if col not in daily_rows.columns or daily_rows[col].dropna().empty:
+        return
+    exp_col = "intervals_expected" if "intervals_expected" in daily_rows.columns else None
+    daily_doc["intervals_observed"] = [
+        None if pd.isna(v) else int(v) for v in daily_rows[col]
+    ]
+    if exp_col is not None:
+        daily_doc["intervals_expected"] = [
+            None if pd.isna(v) else int(v) for v in daily_rows[exp_col]
+        ]
+
+
 def generate_index(
     generators: pd.DataFrame,
     output_dir: str | None = None,
@@ -178,6 +201,7 @@ def generate_generator_json(
             "capacity_factor": daily_data["daily_capacity_factor"].tolist(),
             "generation_mwh": daily_data["daily_generation_mwh"].tolist(),
         }
+        _add_daily_coverage(doc["daily"], daily_data)
 
     _add_constraints_doc(doc, constraint_data)
 
@@ -661,9 +685,17 @@ def _generate_station_files(
         if daily_aggregates is not None and not daily_aggregates.empty:
             station_daily = daily_aggregates[daily_aggregates["duid"].isin(duids)]
             if not station_daily.empty:
-                grouped_daily = station_daily.groupby("date").agg(
-                    daily_generation_mwh=("daily_generation_mwh", "sum"),
-                ).reset_index()
+                agg_spec = {"daily_generation_mwh": ("daily_generation_mwh", "sum")}
+                has_daily_cov = (
+                    "intervals_observed" in station_daily.columns
+                    and "intervals_expected" in station_daily.columns
+                )
+                if has_daily_cov:
+                    # Station coverage = union of member-unit intervals
+                    # (sum of per-unit observed/expected counts).
+                    agg_spec["intervals_observed"] = ("intervals_observed", "sum")
+                    agg_spec["intervals_expected"] = ("intervals_expected", "sum")
+                grouped_daily = station_daily.groupby("date").agg(**agg_spec).reset_index()
                 # Recompute CF from total generation and total capacity
                 if total_capacity and total_capacity > 0:
                     grouped_daily["daily_capacity_factor"] = (
@@ -677,6 +709,7 @@ def _generate_station_files(
                     "capacity_factor": grouped_daily["daily_capacity_factor"].tolist(),
                     "generation_mwh": grouped_daily["daily_generation_mwh"].round(1).tolist(),
                 }
+                _add_daily_coverage(doc["daily"], grouped_daily)
 
         # Binding constraints: union the DUID-level rows for the station.
         # A single binding constraint can map to multiple station DUIDs; keep

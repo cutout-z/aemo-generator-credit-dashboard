@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from . import config
+from .interval_days import INTERVALS_PER_DAY, interval_calendar_day_str
 
 logger = logging.getLogger(__name__)
 
@@ -226,19 +227,43 @@ def aggregate_month_daily(
 ) -> pd.DataFrame:
     """Aggregate a single month of 5-minute SCADA data to daily per-generator metrics.
 
-    Returns DataFrame with columns: duid, date, daily_generation_mwh, daily_capacity_factor
+    S3-05: daily rows are INTERVAL-ENDING calendar days. AEMO stamps each
+    5-minute interval with its END time and NEMOSIS month windows are
+    (start, end] — so the interval ending at next month's midnight (the
+    final 23:55–24:00 slice of the month) used to be dated as the first day
+    of the NEXT month, fabricating an extra one-interval "day" (513 rows for
+    2026-08-01 in the committed cache, max CF 0.41%). Here midnight-ending
+    intervals are assigned to the preceding calendar day, duplicate interval
+    keys are dropped before aggregation (an interval counts once no matter
+    how fetch windows overlap), and every row publishes
+    intervals_observed/intervals_expected (288 for a full day) so a partial
+    day is explicit instead of masquerading as a full day.
+
+    Capacity factor keeps the full-calendar-day denominator
+    (mwh / capacity / 24 h): a constant full-day output yields CF 1.0, and a
+    day that genuinely dispatched for only part of the day reads as the
+    underperformance it is. Interval counts let consumers tell that apart
+    from data-completeness issues.
+
+    Returns DataFrame with columns: duid, date, daily_generation_mwh,
+    daily_capacity_factor, intervals_observed, intervals_expected
     """
-    if scada.empty:
+    if scada is None or scada.empty:
         return pd.DataFrame()
 
     duid_capacity = generators.set_index("DUID")["CAPACITY_MW"].to_dict()
 
     scada = scada.copy()
-    scada["date"] = scada["SETTLEMENTDATE"].dt.date.astype(str)
+    scada = scada.dropna(subset=["SETTLEMENTDATE"])
+    # Dedupe interval keys first: one row per (DUID, interval-end) so an
+    # interval is never double-counted after overlapping fetch windows.
+    scada = scada.drop_duplicates(subset=["DUID", "SETTLEMENTDATE"], keep="last")
+    scada["date"] = interval_calendar_day_str(scada["SETTLEMENTDATE"])
 
     rows = []
     for (duid, date_str), group in scada.groupby(["DUID", "date"]):
         capacity = duid_capacity.get(duid)
+        observed = int(len(group))
         mwh = group["SCADAVALUE"].clip(lower=0).sum() / 12.0
         cf = mwh / (capacity * 24) if capacity and capacity > 0 else None
         if cf is not None and cf > 1.1:
@@ -248,6 +273,8 @@ def aggregate_month_daily(
             "date": date_str,
             "daily_generation_mwh": round(mwh, 1),
             "daily_capacity_factor": round(cf, 4) if cf is not None else None,
+            "intervals_observed": observed,
+            "intervals_expected": INTERVALS_PER_DAY,
         })
 
     return pd.DataFrame(rows)

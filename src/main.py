@@ -327,12 +327,13 @@ def main():
         # Daily aggregates — keep only last 12 months
         if new_daily_rows:
             new_daily = pd.concat(new_daily_rows, ignore_index=True)
-            # Deduplicate boundary dates (NEMOSIS returns overlapping months)
-            # Keep the max values per (duid, date) since partial days get split
-            new_daily = new_daily.groupby(["duid", "date"], as_index=False).agg(
-                daily_generation_mwh=("daily_generation_mwh", "max"),
-                daily_capacity_factor=("daily_capacity_factor", "max"),
-            )
+            # S3-05: with interval-ending calendar days, consecutive monthly
+            # fetches produce disjoint date sets — no boundary day is split
+            # across months anymore, so the old max-merge of partial days is
+            # gone. Guard against legacy/rerun duplicates instead: keep ONE
+            # row per (duid, date). Month frames append in ascending order, so
+            # a re-derived full day replaces any earlier partial copy.
+            new_daily = new_daily.drop_duplicates(subset=["duid", "date"], keep="last")
             if daily_path.exists() and not args.full_refresh:
                 existing_daily = pd.read_feather(daily_path)
                 reprocessed_dates = set(new_daily["date"].unique())

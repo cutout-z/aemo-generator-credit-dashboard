@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from .interval_days import interval_calendar_day, interval_month
+
 logger = logging.getLogger(__name__)
 
 BAND_AVAIL_COLS = [f"BANDAVAIL{i}" for i in range(1, 11)]
@@ -158,6 +160,19 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
 
     Prices: BIDDAYOFFER_D ENERGY rows (DUID, SETTLEMENTDATE, PRICEBAND1-10).
     Volumes: BIDPEROFFER_D ENERGY rows (DUID, INTERVAL_DATETIME, BANDAVAIL1-10).
+
+    S3-05 trading-day alignment: volume intervals are stamped at their END,
+    so a volume's month/calendar day is assigned from
+    ``interval_month``/``interval_calendar_day`` (the interval ending at
+    midnight belongs to the preceding day). Price rows name a whole trading
+    day and keep their own SETTLEMENTDATE period.
+
+    S3-05 coverage contract: each row gains ``vol_intervals_observed`` (the
+    distinct volume intervals the unit offered into that month) and
+    ``vol_source_complete`` — whether the fetched volume frame for that month
+    reached the month's final calendar day. A mid-month archive/cache
+    fragment is flagged incomplete so the attach layer never promotes it to
+    an unqualified full-month statistic.
     """
     if prices is None or prices.empty or volumes is None or volumes.empty:
         return pd.DataFrame()
@@ -179,7 +194,18 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
     )
 
     v = volumes.copy()
-    v["month"] = v["INTERVAL_DATETIME"].dt.to_period("M").astype(str)
+    v["month"] = interval_month(v["INTERVAL_DATETIME"])
+    v["_day"] = interval_calendar_day(v["INTERVAL_DATETIME"])
+    # Source completeness per month present in this volume frame: complete
+    # only if some unit offered on the month's final calendar day.
+    last_by_month = v.groupby("month")["_day"].max()
+    vol_complete: dict[str, bool] = {}
+    for m, last in last_by_month.items():
+        period = pd.Period(m, freq="M")
+        vol_complete[m] = bool(
+            (last.year, last.month) == (period.year, period.month)
+            and last.day == period.days_in_month
+        )
     v["offered_mw"] = v[BAND_AVAIL_COLS].sum(axis=1)
     band_total = v["offered_mw"].where(v["offered_mw"] > 0)
     v["top2_share"] = (
@@ -190,10 +216,12 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
         offered_mw_p95=("offered_mw", lambda s: s.quantile(0.95)),
         top2_band_volume_share=("top2_share", "mean"),
         intervals_offering=("offered_mw", "count"),
+        vol_intervals_observed=("INTERVAL_DATETIME", "nunique"),
     )
 
     out = per_day.join(vol, how="outer").reset_index()
     out["top2_band_volume_share"] = out["top2_band_volume_share"].fillna(0).round(4)
+    out["vol_source_complete"] = out["month"].map(vol_complete).fillna(False).astype(bool)
     for col in ("price_band_min_avg", "price_band_max_avg", "offered_mw_avg", "offered_mw_p95"):
         out[col] = out[col].round(2)
     out["rebids_per_day"] = out["rebids_per_day"].round(3)
@@ -222,6 +250,11 @@ def build_offer_factors(months: list[tuple[int, int]], cache_dir: str, data_dir:
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
+    # S3-05: adjacent month fetches can each contribute a row for the same
+    # (duid, month) — the next month's first trading day rides in the prior
+    # month's inclusive-end window. Frames append in ascending month order, so
+    # keep the LAST row per (duid, month): the fuller copy wins.
+    out = out.drop_duplicates(subset=["duid", "month"], keep="last")
     out_path = Path(data_dir) / OFFER_FACTORS_CACHE
     out.to_feather(out_path)
     logger.info(f"Saved {len(out)} offer factor rows to {out_path}")
@@ -261,18 +294,36 @@ def attach_offer_factors(generators: list[dict], offer_factors: pd.DataFrame | N
 def attach_offer_factor_doc(doc: dict, rows: pd.DataFrame | None) -> None:
     """Attach doc['offers'] from this DUID's factor rows.
 
-    The summary takes the latest month, but each field falls back to the most
-    recent month that has it — e.g. the newest month may lack prices because
-    BIDDAYOFFER_D is published ~2 weeks behind the volume table. The month
-    each price field came from is recorded in price_asof_month.
+    S3-05 source-coverage contract: the headline month is the LATEST month
+    whose volume source was complete (``vol_source_complete`` True) — a
+    complete, comparable month. A newer partial fragment is never promoted to
+    an unqualified full-month statistic; it is reported under
+    ``later_partial_window`` instead. When only partial rows exist the latest
+    one is used with ``window: \"partial\"``. Rows cached before the coverage
+    columns existed (flag NaN) retain the historical latest-month behaviour —
+    coverage is unknown, not invented.
+
+    Each field falls back to the most recent month AT OR BEFORE the headline
+    month that has it — e.g. the newest complete month may lack prices
+    because BIDDAYOFFER_D is published ~2 weeks behind the volume table (and
+    a newer partial month must never leak its fields into the headline). The
+    month each price field came from is recorded in price_asof_month.
     """
     if rows is None or rows.empty:
         return
-    rs = rows.sort_values("month")
-    latest = rs.iloc[-1]
+    rs = rows.sort_values("month").reset_index(drop=True)
+    has_cov = {"vol_source_complete"} <= set(rs.columns)
+
+    base_idx = len(rs) - 1  # legacy fallback: latest month
+    if has_cov:
+        complete_idx = rs.index[rs["vol_source_complete"].fillna(False).astype(bool)]
+        if len(complete_idx):
+            base_idx = complete_idx[-1]
+    latest = rs.loc[base_idx]
+    head = rs.loc[rs["month"] <= latest["month"]]
 
     def _latest_val(col):
-        for _, row in rs.iloc[::-1].iterrows():
+        for _, row in head.iloc[::-1].iterrows():
             v = row.get(col)
             if pd.notna(v):
                 return float(v), row["month"]
@@ -298,6 +349,31 @@ def attach_offer_factor_doc(doc: dict, rows: pd.DataFrame | None) -> None:
     asof_months = sorted({m for m in price_fields.values() if m})
     if asof_months and asof_months[-1] != out["month"]:
         out["price_asof_month"] = asof_months[-1]
+
+    if has_cov:
+        flag = latest.get("vol_source_complete")
+        if flag is not None and not pd.isna(flag):
+            base_complete = bool(flag)
+            out["source_complete"] = base_complete
+            obs = latest.get("vol_intervals_observed")
+            if obs is not None and not pd.isna(obs):
+                out["intervals_observed"] = int(obs)
+            if not base_complete:
+                out["window"] = "partial"
+        # Newer partial fragments than the chosen complete month: record, never promote.
+        flagged = rs.loc[rs["vol_source_complete"].notna()]
+        if not flagged.empty:
+            later_partial = flagged.loc[
+                (flagged["month"] > latest["month"])
+                & (~flagged["vol_source_complete"].astype(bool))
+            ]
+            if len(later_partial):
+                lp = later_partial.iloc[-1]
+                lp_window = {"month": lp["month"]}
+                obs = lp.get("vol_intervals_observed")
+                if obs is not None and not pd.isna(obs):
+                    lp_window["intervals_observed"] = int(obs)
+                out["later_partial_window"] = lp_window
     doc["offers"] = out
 
 
@@ -321,8 +397,24 @@ def compute_offer_curves(prices: pd.DataFrame, volumes: pd.DataFrame, month: str
             f"volume cols {sorted(missing_v)} — skipping"
         )
         return pd.DataFrame()
-    pv = prices.groupby("DUID")[BAND_PRICE_COLS].mean()
+    # S3-05 trading-day alignment: BIDDAYOFFER price rows name a whole
+    # trading day and belong to their OWN month — drop a next-month day-1 row
+    # that the inclusive-end (start, end] fetch window dragged into this
+    # month's frame. Volume intervals are assigned via interval_calendar_day
+    # (midnight-ending intervals belong to the preceding day).
+    pr = prices.copy()
+    pr["_period"] = pr["SETTLEMENTDATE"].dt.to_period("M").astype(str)
+    pr = pr[pr["_period"] == month]
+    pv = pr.groupby("DUID")[BAND_PRICE_COLS].mean()
     vv = volumes.groupby("DUID")[BAND_AVAIL_COLS].mean().clip(lower=0)
+    # Source completeness for this month's volume frame (mid-month fragments
+    # never reach the month's final calendar day).
+    vol_last = interval_calendar_day(volumes["INTERVAL_DATETIME"]).max()
+    period = pd.Period(month, freq="M")
+    source_complete = bool(
+        (vol_last.year, vol_last.month) == (period.year, period.month)
+        and vol_last.day == period.days_in_month
+    )
     duids = pv.index.intersection(vv.index)
     rows = []
     for duid in duids:
@@ -335,6 +427,7 @@ def compute_offer_curves(prices: pd.DataFrame, volumes: pd.DataFrame, month: str
                 "band": i,
                 "price": float(pv.loc[duid, f"PRICEBAND{i}"]),
                 "cum_mw": round(cum, 3),
+                "source_complete": source_complete,
             })
     return pd.DataFrame(rows)
 
@@ -380,22 +473,41 @@ def build_offer_curves(months: list[tuple[int, int]], cache_dir: str, data_dir: 
 
 
 def attach_offer_curve_doc(doc: dict, rows: pd.DataFrame | None) -> None:
-    """Attach doc['offer_curve'] (latest month) for the bid-stack step chart."""
+    """Attach doc['offer_curve'] (latest COMPLETE month) for the bid-stack step chart.
+
+    S3-05 source-coverage contract: rows carry ``source_complete`` (the month's
+    volume frame reached its final calendar day). The chart month is the
+    latest complete month; when only partial months exist the latest one is
+    used and labelled ``window: \"partial\"``. Rows cached before the coverage
+    column existed (flag absent/NaN) keep the historical latest-month
+    behaviour — coverage unknown, not invented.
+    """
     if rows is None or rows.empty:
         return
-    rs = rows.sort_values(["month", "band"])
-    latest_month = rs["month"].iloc[-1]
-    cur = rs[rs["month"] == latest_month]
+    rs = rows.sort_values(["month", "band"]).reset_index(drop=True)
+    has_cov = "source_complete" in rs.columns
+
+    base_month = rs["month"].iloc[-1]
+    if has_cov:
+        complete = rs.loc[rs["source_complete"].fillna(False).astype(bool)]
+        if not complete.empty:
+            base_month = complete["month"].iloc[-1]
+    cur = rs[rs["month"] == base_month]
     if len(cur) < 10:
         return
-    doc["offer_curve"] = {
+    out = {
         "scope": "offer_based_estimate",
-        "month": latest_month,
+        "month": base_month,
         "bands": [
             {"band": int(r["band"]), "price": float(r["price"]), "cum_mw": float(r["cum_mw"])}
             for _, r in cur.iterrows()
         ],
     }
+    if has_cov:
+        flag = cur["source_complete"].iloc[0]
+        if flag is not None and not pd.isna(flag) and not bool(flag):
+            out["window"] = "partial"
+    doc["offer_curve"] = out
 
 
 OFFER_CURVES_DAILY_CACHE = "offer_curves_daily.feather"
@@ -406,8 +518,12 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
 
     BIDDAYOFFER_D carries one row per DUID/day (version-deduped upstream), so
     the day's prices are that row's bands; volumes are averaged across the
-    day's intervals. Zero-width bands are dropped HERE (cum == previous cum),
-    so downstream files stay compact and axes stay sane.
+    day's intervals. S3-05: volume intervals are END-stamped — the day a
+    volume belongs to is interval_calendar_day(INTERVAL_DATETIME), so the
+    interval ending at midnight joins the preceding calendar day. Price days
+    keep their BIDDAYOFFER_D trading-day date. Zero-width bands are dropped
+    HERE (cum == previous cum), so downstream files stay compact and axes
+    stay sane.
     """
     if prices.empty or volumes.empty:
         return pd.DataFrame()
@@ -421,7 +537,7 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
     pr = prices.copy()
     vr = volumes.copy()
     pr["date"] = pd.to_datetime(pr["SETTLEMENTDATE"]).dt.strftime("%Y-%m-%d")
-    vr["date"] = pd.to_datetime(vr["INTERVAL_DATETIME"]).dt.strftime("%Y-%m-%d")
+    vr["date"] = interval_calendar_day(pd.to_datetime(vr["INTERVAL_DATETIME"])).astype(str)
     pv = pr.groupby(["DUID", "date"])[BAND_PRICE_COLS].mean()
     vv = vr.groupby(["DUID", "date"])[BAND_AVAIL_COLS].mean().clip(lower=0)
     # BANDAVAIL tranches are INCREMENTAL (each band = additional MW on top of
