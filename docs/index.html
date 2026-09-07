@@ -536,6 +536,17 @@
             fill: currentColor;
         }
 
+        .load-status {
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            color: #fca5a5;
+        }
+
         /* Responsive */
         @media (max-width: 900px) {
             .chart-grid { grid-template-columns: 1fr; }
@@ -621,6 +632,7 @@
                 <span class="value mono" id="genConnection"></span>
             </div>
         </div>
+        <div id="loadStatus" class="load-status" style="display:none;"></div>
     </div>
 
     <!-- Time period selector -->
@@ -973,6 +985,34 @@ document.addEventListener('click', (e) => {
 });
 
 // ─── Generator Selection ───────────────────────────────────────────────
+// ─── Selection + fetch state (S3-02) ──────────────────────────────────
+// Only the most recently selected generator may render. Each selection
+// bumps a token; responses from stale selections (and aborted fetches)
+// are discarded, so a slow earlier response can never overwrite the
+// charts of a later one.
+let selectionToken = 0;
+let selectionAbort = null;
+
+const CHART_IDS = [
+    'chartGeneration', 'chartCapacity', 'chartCurtailment',
+    'chartEconCurtailment', 'chartMLF', 'chartPriceCapture',
+    'chartPriceDistribution', 'chartFCAS', 'chartMarketSpread',
+    'chartDailyCF', 'offerCurveChart',
+];
+
+function purgeChartsAndState() {
+    // Explicit no-data state for every chart: stale traces from a previous
+    // generator (or a data-rich → metadata-only transition) must never
+    // survive into a new view.
+    for (const id of CHART_IDS) {
+        const el = document.getElementById(id);
+        if (el) Plotly.purge(el);
+    }
+    setPeriodLabel('chartGeneration', []);
+    setPeriodLabel('chartPriceDistribution', []);
+    currentData = null;
+}
+
 async function selectGenerator(duid) {
     searchDropdown.classList.remove('visible');
     window.location.hash = duid;
@@ -982,11 +1022,22 @@ async function selectGenerator(duid) {
 
     searchInput.value = gen.station_name;
 
-    // Show identity card and controls
+    // Cancel any in-flight load for a previous selection
+    const token = ++selectionToken;
+    if (selectionAbort) selectionAbort.abort();
+    selectionAbort = new AbortController();
+
+    // Fresh identity + purged charts BEFORE fetching: the previous
+    // generator's numbers must not stay on screen under the new name.
+    purgeChartsAndState();
+
+    // Show identity card and controls (downloads stay hidden until a
+    // payload is accepted — see below)
     document.getElementById('welcomeState').style.display = 'none';
     document.getElementById('identityCard').classList.add('visible');
     document.getElementById('timeControls').classList.add('visible');
     document.getElementById('chartGrid').classList.add('visible');
+    document.getElementById('downloadButtons').style.display = 'none';
 
     const isStation = gen.type === 'station';
     document.getElementById('genName').innerHTML = `
@@ -1000,7 +1051,6 @@ async function selectGenerator(duid) {
     document.getElementById('genTech').textContent = gen.technology;
     document.getElementById('genCapacity').textContent = gen.capacity_mw ? `${gen.capacity_mw} MW` : 'N/A';
     document.getElementById('genConnection').textContent = gen.connection_point;
-    document.getElementById('downloadButtons').style.display = 'flex';
 
     // Hide curtailment panels for non-solar/wind
     const isSolarWind = gen.fuel_category === 'Solar' || gen.fuel_category === 'Wind';
@@ -1008,12 +1058,29 @@ async function selectGenerator(duid) {
     document.getElementById('panelEconCurtailment').style.display = isSolarWind ? 'block' : 'none';
 
     // Load detailed data
+    const statusEl = document.getElementById('loadStatus');
+    const fileKey = gen.file || duid;
     try {
-        const fileKey = gen.file || duid;
-        const resp = await fetch(`data/generators/${fileKey}.json`);
+        statusEl.textContent = 'Loading data…';
+        statusEl.style.display = 'block';
+        const resp = await fetch(`data/generators/${fileKey}.json`, { signal: selectionAbort.signal });
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status} loading data for ${duid}`);
+        }
         const data = await resp.json();
+        if (token !== selectionToken) return; // superseded while in flight
         renderCharts(data);
+        // Download controls only for an accepted, rendered payload
+        document.getElementById('downloadButtons').style.display = 'flex';
+        statusEl.style.display = 'none';
     } catch (e) {
+        if (e && e.name === 'AbortError') return;      // superseded selection
+        if (token !== selectionToken) return;           // superseded selection
+        // Surface the failure under the selected identity — never silently
+        // keep a previous generator's charts or show empty placeholders.
+        purgeChartsAndState();
+        statusEl.textContent = `Could not load data for ${duid}: ${e.message}. The dataset may not exist yet for this selection.`;
+        statusEl.style.display = 'block';
         console.error(`Error loading ${duid}:`, e);
     }
 }
@@ -1126,7 +1193,7 @@ function renderCharts(data) {
     const fmtMonths = monthly && monthly.months ? monthly.months.map(fmtMonth) : [];
     const catXaxis = { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' };
     // Generation chart (MWh) — also shows LGC annotation for eligible generators
-    if (monthly && monthly.generation_mwh) {
+    if (monthly && monthly.generation_mwh && monthly.generation_mwh.length > 0) {
         const genYTitle = data.lgc_eligible ? 'MWh (≈ LGCs)' : 'MWh';
         const genTraces = [{
             x: fmtMonths,
@@ -1151,7 +1218,7 @@ function renderCharts(data) {
     }
 
     // Capacity factor chart
-    if (monthly && monthly.capacity_factor) {
+    if (monthly && monthly.capacity_factor && monthly.capacity_factor.some(v => v != null)) {
         const cfTraces = [{
             x: fmtMonths,
             y: monthly.capacity_factor,
@@ -1168,7 +1235,7 @@ function renderCharts(data) {
         Plotly.newPlot('chartCapacity', cfTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Capacity Factor', range: [0, Math.min(1, Math.max(...monthly.capacity_factor.filter(v => v != null)) + 0.1)], tickformat: '.0%' },
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Capacity Factor', tickformat: '.0%' },
             shapes: [{
                 type: 'line', y0: 0.25, y1: 0.25, x0: 0, x1: 1, xref: 'paper',
                 line: { color: '#475569', width: 1, dash: 'dash' },
@@ -1179,7 +1246,7 @@ function renderCharts(data) {
     }
 
     // Curtailment chart — single shortfall-proxy series (S3-01: no causal split)
-    if (monthly && monthly.curtailment_pct) {
+    if (monthly && monthly.curtailment_pct && monthly.curtailment_pct.some(v => v != null)) {
         const curtTraces = [{
             x: fmtMonths,
             y: monthly.curtailment_pct,
@@ -1204,7 +1271,7 @@ function renderCharts(data) {
 
     // Economic curtailment chart
     const econPanel = document.getElementById('panelEconCurtailment');
-    if (monthly && monthly.econ_curtailment_pct) {
+    if (monthly && monthly.econ_curtailment_pct && monthly.econ_curtailment_pct.some(v => v != null)) {
         econPanel.style.display = 'block';
         const econTraces = [{
             x: fmtMonths,
@@ -1317,7 +1384,7 @@ function renderCharts(data) {
     }
 
     // Price capture
-    if (monthly && monthly.captured_price) {
+    if (monthly && monthly.captured_price && monthly.captured_price.some(v => v != null)) {
         const avgPriceLabel = 'Regional Avg RRP';
         const avgPriceHover = 'Avg RRP';
         Plotly.newPlot('chartPriceCapture', [
@@ -1350,7 +1417,7 @@ function renderCharts(data) {
     }
 
     // Spot price exposure (horizontal bar) — colour by price range
-    if (data.price_distribution) {
+    if (data.price_distribution && data.price_distribution.bins && data.price_distribution.bins.length > 0) {
         const bins = data.price_distribution.bins;
         const pctValues = data.price_distribution.generation_share.map(v => Math.round(v * 1000) / 10);
         // Color by price: red=negative, green=0-50, blue=50-100, purple=>100
@@ -1486,9 +1553,12 @@ function renderCharts(data) {
     if (ocWrap && ocChart && ocDay) {
         const duid = (data.duid || '').trim();
         if (duid) {
-            fetch('data/offer_curves/' + encodeURIComponent(duid.replace(/\//g, '_')) + '.json')
+            const ocToken = selectionToken;
+            fetch('data/offer_curves/' + encodeURIComponent(duid.replace(/\//g, '_')) + '.json',
+                  { signal: selectionAbort ? selectionAbort.signal : undefined })
                 .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
                 .then((doc) => {
+                    if (ocToken !== selectionToken) return; // superseded selection
                     const days = (doc.days || []).slice().sort((a, b) => b.date.localeCompare(a.date));
                     if (!days.length) { ocWrap.style.display = 'none'; return; }
                     ocWrap.style.display = 'block';
@@ -1501,10 +1571,42 @@ function renderCharts(data) {
                     ocDay.onchange = draw;
                     draw();
                 })
-                .catch(() => { ocWrap.style.display = 'none'; });
+                .catch(() => { if (ocToken === selectionToken) ocWrap.style.display = 'none'; });
         } else {
             ocWrap.style.display = 'none';
         }
+    }
+
+    // S3-02: explicit no-data state when a section is absent from this
+    // payload — a previous generator's chart must never stay on screen.
+    if (!(monthly && monthly.generation_mwh && monthly.generation_mwh.length > 0)) {
+        Plotly.purge(document.getElementById('chartGeneration'));
+    }
+    if (!(monthly && monthly.capacity_factor && monthly.capacity_factor.some(v => v != null))) {
+        Plotly.purge(document.getElementById('chartCapacity'));
+    }
+    if (!(monthly && monthly.curtailment_pct && monthly.curtailment_pct.some(v => v != null))) {
+        Plotly.purge(document.getElementById('chartCurtailment'));
+        setPeriodLabel('chartCurtailment', []);
+    }
+    if (!(monthly && monthly.econ_curtailment_pct && monthly.econ_curtailment_pct.some(v => v != null))) {
+        Plotly.purge(document.getElementById('chartEconCurtailment'));
+    }
+    if (!mlfTraces.length) {
+        Plotly.purge(document.getElementById('chartMLF'));
+    }
+    if (!(monthly && monthly.captured_price && monthly.captured_price.some(v => v != null))) {
+        Plotly.purge(document.getElementById('chartPriceCapture'));
+    }
+    if (!(data.price_distribution && data.price_distribution.bins && data.price_distribution.bins.length > 0)) {
+        Plotly.purge(document.getElementById('chartPriceDistribution'));
+        setPeriodLabel('chartPriceDistribution', []);
+    }
+    if (!fcasHasData) {
+        Plotly.purge(document.getElementById('chartFCAS'));
+    }
+    if (!(data.daily && data.daily.dates && data.daily.dates.length > 0)) {
+        Plotly.purge(document.getElementById('chartDailyCF'));
     }
 
     // Safety net: revive any chart whose container collapsed to 0 height

@@ -106,7 +106,7 @@ def aggregate_month(
             )
 
         # Curtailment proxy (solar/wind only): 1 − actual/availability.
-        # S2-04/S3-01: this is a forecast-to-output shortfall PROXY, not a
+        # S3-01: this is a forecast-to-output shortfall PROXY, not a
         # causal measure. AVAILABILITY is the bid-in forecast (includes
         # outages), so "curtailment" here bundles grid constraints AND
         # mechanical/comms downtime. The former quality-flag split
