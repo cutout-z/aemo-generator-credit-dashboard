@@ -73,7 +73,7 @@ All metrics are computed at monthly granularity from 5-minute interval data.
 - **Draft MLF**: AEMO publishes indicative MLFs for the upcoming FY around March each year. Shown as a distinct marker on the MLF trajectory chart.
 - **Intervention filtering**: AEMO manual market interventions (`INTERVENTION != 0`) are excluded from price and dispatch data (~0.5% of records).
 - **Financial year convention**: July 1 to June 30. MLFs are published per FY.
-- **FCAS prices**: 8 regional FCAS markets (Raise/Lower × 6s/60s/5min/Regulation) shown as context and labelled **regional average** — they describe the market, not the generator. Per-generator FCAS participation factors are estimated from bid offers (BIDPEROFFER_D); actual enablement and revenue are participant-only data and not estimated. Energy offer-curve factors (the per-generator `offers` block) are built the same way from BIDDAYOFFER_D prices plus BIDPEROFFER_D ENERGY volumes — offer-based estimates of bid behaviour (band positioning, negative-band willingness, rebid intensity), not dispatch outcomes.
+- **FCAS prices**: 8 regional FCAS markets (Raise/Lower × 6s/60s/5min/Regulation) shown as context and labelled **regional average** — they describe the market, not the generator. Per-generator FCAS participation factors are estimated from bid offers (BIDPEROFFER_D); actual enablement and revenue are participant-only data and not estimated. Energy offer-curve factors (the per-generator `offers` block) are built the same way from BIDDAYOFFER_D prices plus BIDPEROFFER_D ENERGY volumes — offer-based estimates of bid behaviour (band positioning, negative-band willingness), not dispatch outcomes.
 
 ### Curtailment methodology note
 
@@ -141,7 +141,7 @@ A single-page static site built with vanilla HTML/CSS/JS and [Plotly.js](https:/
 - **Time selector**: 3M / 6M / 12M / 3Y / 5Y / All (does not affect MLF chart)
 - **Duration selector**: The Regional Price Spreads panel parameterizes the capture window (1h / 2h / 4h / 8h / Decile)
 - **FCAS participation summary box**: Per-DUID services offered, share of intervals offering, and average/peak offered MW from BIDPEROFFER_D
-- **Offer-curve factors**: Per-DUID energy offer behaviour — avg/p95 offered MW, band-1/band-10 price positioning, negative-band day share, rebids/day, top-2-band volume concentration (BIDDAYOFFER_D + BIDPEROFFER_D, scope-labelled offer_based_estimate)
+- **Offer-curve factors**: Per-DUID energy offer behaviour — avg/p95 offered MW, band-1/band-10 price positioning, negative-band day share, top-2-band volume concentration (BIDDAYOFFER_D + BIDPEROFFER_D, scope-labelled offer_based_estimate)
 - **Constraints classification**: Binding constraints classified as Own unit / Commissioning / Non-conformance / System, with a credit-translation callout comparing commissioning caps to nameplate
 - **Scope labelling**: Market-level panels are explicitly labelled (regional average / applies to every unit in the region) so they are not mistaken for generator-level data
 - **Methodology tooltips**: Hover over any chart title for formula, methodology, and caveats

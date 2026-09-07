@@ -1550,8 +1550,7 @@ function renderCharts(data) {
                 'avg ' + mw(of.avg_offered_mw) + ' offered (p95 ' + mw(of.offered_mw_p95) + ')' +
                 ' · band-1 avg ' + dol(of.price_band_min_avg) +
                 ' · band-10 avg ' + dol(of.price_band_max_avg) +
-                ' · neg-band days ' + pc(of.negative_band_day_share) +
-                ' · rebids/day ' + (of.rebids_per_day != null ? of.rebids_per_day.toFixed(1) : 'n/a') + asof +
+                ' · neg-band days ' + pc(of.negative_band_day_share) + asof +
                 '<br><span style="opacity:.7">Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.</span>';
         } else {
             ofBox.style.display = 'none';
@@ -2281,7 +2280,6 @@ function buildOffersRows(data) {
         'Price Band Min Avg ($/MWh)': o.price_band_min_avg != null ? o.price_band_min_avg : '',
         'Price Band Max Avg ($/MWh)': o.price_band_max_avg != null ? o.price_band_max_avg : '',
         'Negative Band Day Share': o.negative_band_day_share != null ? o.negative_band_day_share : '',
-        'Rebids per Day': o.rebids_per_day != null ? o.rebids_per_day : '',
         'Top-2 Band Volume Share': o.top2_band_volume_share != null ? o.top2_band_volume_share : '',
         'Price Data As Of': o.price_asof_month || '',
     }];

@@ -4,8 +4,14 @@ Builds per-DUID monthly offer-behaviour factors:
   - avg/peak offered energy availability (MW) from band volumes
   - price-band positioning (band 1 / band 10 averages)
   - negative-band day share (willingness to bid below $0)
-  - rebid intensity (distinct offer versions per day)
   - top-2 band volume concentration (scarcity-band exposure)
+
+Rebids/day is intentionally ABSENT (S3-09): _fetch_bid_table dedupes each
+frame to the latest offer version per (DUID, day), so any post-dedupe
+per-day row count is structurally 1.0 — a precise-looking constant, not
+observed rebid intensity. Reintroduce only from RETAINED pre-deduplication
+offer history (distinct actual offer versions/events counted before final
+price-band selection).
 
 All figures are OFFER-BASED ESTIMATES: intent expressed to the market, not
 dispatch outcomes. Enablement/settlement remain participant-only.
@@ -187,11 +193,8 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
     per_day["negative_band_day_share"] = p.assign(neg=p["PRICEBAND1"] < 0).groupby(
         ["DUID", "month"]
     )["neg"].mean()
-    # rebids = offer versions per day; grouping keys are excluded inside
-    # apply, so count rows per day with size() rather than a named column.
-    per_day["rebids_per_day"] = p.groupby(["DUID", "month"]).apply(
-        lambda g: g.groupby("SETTLEMENTDATE").size().mean(), include_groups=False
-    )
+    # S3-09: no rebids_per_day here — p is already deduped to one row per
+    # (DUID, day) by _fetch_bid_table, so a day-row count would be 1.0 always.
 
     v = volumes.copy()
     v["month"] = interval_month(v["INTERVAL_DATETIME"])
@@ -224,7 +227,6 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
     out["vol_source_complete"] = out["month"].map(vol_complete).fillna(False).astype(bool)
     for col in ("price_band_min_avg", "price_band_max_avg", "offered_mw_avg", "offered_mw_p95"):
         out[col] = out[col].round(2)
-    out["rebids_per_day"] = out["rebids_per_day"].round(3)
     out["negative_band_day_share"] = out["negative_band_day_share"].round(4)
     # Repo convention (matches fcas_factors): lowercase duid column
     return out.rename(columns={"DUID": "duid"})
@@ -287,7 +289,6 @@ def attach_offer_factors(generators: list[dict], offer_factors: pd.DataFrame | N
             "price_band_min_avg": float(latest["price_band_min_avg"]),
             "price_band_max_avg": float(latest["price_band_max_avg"]),
             "negative_band_day_share": float(latest["negative_band_day_share"]),
-            "rebids_per_day": float(latest["rebids_per_day"]),
             "top2_band_volume_share": float(latest["top2_band_volume_share"]),
         }
         attached += 1
@@ -341,14 +342,11 @@ def attach_offer_factor_doc(doc: dict, rows: pd.DataFrame | None) -> None:
         ("price_band_min_avg", "price_band_min_avg"),
         ("price_band_max_avg", "price_band_max_avg"),
         ("negative_band_day_share", "negative_band_day_share"),
-        ("rebids_per_day", "rebids_per_day"),
         ("top2_band_volume_share", "top2_band_volume_share"),
     ):
         v, asof = _latest_val(col)
         out[key] = v
-        if key.startswith("price_band") or key in (
-            "negative_band_day_share", "rebids_per_day"
-        ):
+        if key.startswith("price_band") or key in ("negative_band_day_share",):
             price_fields[key] = asof
     asof_months = sorted({m for m in price_fields.values() if m})
     if asof_months and asof_months[-1] != out["month"]:

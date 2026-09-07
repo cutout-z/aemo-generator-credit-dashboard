@@ -76,7 +76,7 @@ def _offer_history(months: list[str], duids=("GEN1", "GEN2")) -> pd.DataFrame:
                 "duid": duid, "month": m, "offered_mw_avg": 5.0,
                 "offered_mw_p95": 8.0, "price_band_min_avg": -100.0,
                 "price_band_max_avg": 1000.0, "negative_band_day_share": 0.1,
-                "rebids_per_day": 1.0, "top2_band_volume_share": 0.5,
+                "top2_band_volume_share": 0.5,
                 "vol_intervals_observed": 288, "vol_source_complete": True,
             })
     return pd.DataFrame(rows)

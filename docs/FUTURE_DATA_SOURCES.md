@@ -12,9 +12,11 @@ re-doing the access research (all URLs below were live-verified 3 Sep 2026).
   (daily PRICEBAND1-10 prices, rebids deduped by VERSIONNO) plus
   `BIDPEROFFER_D` ENERGY rows (per-interval BANDAVAIL1-10 volumes).
 - **Outputs**: monthly avg/p95 offered MW, band-1/band-10 price positioning,
-  negative-band day share (willingness to offer below $0), rebids/day,
+  negative-band day share (willingness to offer below $0),
   top-2-band volume concentration. Published per generator as
-  `doc["offers"]` with `scope: offer_based_estimate`.
+  `doc["offers"]` with `scope: offer_based_estimate`. (rebids/day is not
+  published: offer frames are deduped to the latest version per day, so a
+  post-dedupe count is structurally 1.0 — see `src/offer_curves.py`.)
 - **Scope**: offers are *intent*, not dispatch outcomes. Enablement and
   settled revenue remain participant-only.
 - **Gotchas**: nemosis takes `raw_data_location` only (a `cache=` kwarg
