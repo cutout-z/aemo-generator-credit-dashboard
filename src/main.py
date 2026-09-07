@@ -20,7 +20,7 @@ from .download_constraints import (
     fetch_spdconnectionpointconstraint,
 )
 from .download_dispatch import fetch_dispatch_price_month
-from .download_intermittent import fetch_intermittent_month
+from .download_intermittent import fetch_intermittent_month  # noqa: F401  (S3-01: retained for cache-migration tooling; unused by pipeline)
 from .download_metadata import fetch_generators
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .fetch_mlf import fetch_mlf_data
@@ -260,15 +260,10 @@ def main():
 
                 dispatchload = fetch_dispatchload_month(year, month, str(data_dir), rebuild=args.full_refresh)
 
-                # INTERMITTENT_GEN_SCADA for curtailment splitting (Aug 2024+)
-                intermittent = None
-                if (year, month) >= config.INTERMITTENT_SCADA_START:
-                    try:
-                        intermittent = fetch_intermittent_month(
-                            year, month, str(data_dir), rebuild=args.full_refresh
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not fetch INTERMITTENT_GEN_SCADA for {month_label}: {e}")
+                # S3-01: INTERMITTENT_GEN_SCADA quality summaries are no longer
+                # fetched here — the grid/mechanical curtailment split was
+                # unsupported causal inference and has been removed. Cached
+                # quality feather files remain on disk (unused by the pipeline).
 
                 # Build MLF lookup for this month's FY
                 fy_start = year if month >= 7 else year - 1
@@ -277,7 +272,6 @@ def main():
                 # Aggregate
                 monthly = aggregate_month(
                     scada, prices, dispatchload, generators, mlf_lookup, year, month,
-                    intermittent_scada=intermittent,
                 )
                 if not monthly.empty:
                     new_rows.append(monthly)
@@ -297,7 +291,7 @@ def main():
             finally:
                 # Free large DataFrames between months to stay within
                 # GitHub Actions runner memory limits (~7 GB).
-                scada = prices = dispatchload = intermittent = None
+                scada = prices = dispatchload = None
                 gc.collect()
 
         # Merge new with existing

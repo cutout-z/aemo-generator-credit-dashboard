@@ -105,11 +105,15 @@ def aggregate_month(
                 f"(SCADA {mwh:.1f} MWh > nameplate {capacity * hours_in_month:.1f} MWh)"
             )
 
-        # Curtailment (solar/wind only)
+        # Curtailment proxy (solar/wind only): 1 − actual/availability.
+        # S2-04/S3-01: this is a forecast-to-output shortfall PROXY, not a
+        # causal measure. AVAILABILITY is the bid-in forecast (includes
+        # outages), so "curtailment" here bundles grid constraints AND
+        # mechanical/comms downtime. The former quality-flag split
+        # (grid vs mechanical) was removed — ELAV "Good" flags signal
+        # telemetry agreement, not why output was limited.
         curtailment = None
         econ_curtailment = None
-        grid_curtailment = None
-        mech_curtailment = None
         if fuel in config.CURTAILMENT_FUEL_TYPES:
             avail_valid = group.dropna(subset=["AVAILABILITY"])
             if not avail_valid.empty:
@@ -117,27 +121,6 @@ def aggregate_month(
                 total_avail = avail_valid["AVAILABILITY"].clip(lower=0).sum()
                 if total_avail > 0:
                     curtailment = max(0.0, 1.0 - total_actual / total_avail)
-
-            # Split curtailment using INTERMITTENT_GEN_SCADA quality flags.
-            # The downloader now provides a compact DUID-level quality summary,
-            # but this also accepts older raw table-shaped data during migration.
-            if curtailment is not None and curtailment > 0 and intermittent_scada is not None and not intermittent_scada.empty:
-                duid_int = intermittent_scada[intermittent_scada["DUID"] == duid]
-                if not duid_int.empty:
-                    if {"total_intervals", "good_intervals"}.issubset(duid_int.columns):
-                        total_intervals = float(duid_int["total_intervals"].sum())
-                        good_intervals = float(duid_int["good_intervals"].sum())
-                    else:
-                        elav = duid_int[duid_int["SCADA_TYPE"] == "ELAV"]
-                        total_intervals = float(len(elav))
-                        good_intervals = float(len(elav[elav["SCADA_QUALITY"] == "Good"]))
-
-                    if total_intervals > 0:
-                        # Good quality = grid is constraining output
-                        # Bad quality = mechanical/comms issue
-                        good_ratio = good_intervals / total_intervals
-                        grid_curtailment = curtailment * good_ratio
-                        mech_curtailment = curtailment * (1 - good_ratio)
 
             # Economic curtailment: generation forgone during negative price periods
             # Intervals where AVAILABILITY > 0 AND RRP < 0 AND SCADA is low
@@ -175,8 +158,6 @@ def aggregate_month(
             "revenue_aud": round(revenue, 0),
             "capacity_factor": round(cap_factor, 4) if cap_factor is not None else None,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
-            "grid_curtailment_pct": round(grid_curtailment, 4) if grid_curtailment is not None else None,
-            "mechanical_curtailment_pct": round(mech_curtailment, 4) if mech_curtailment is not None else None,
             "econ_curtailment_pct": round(econ_curtailment, 4) if econ_curtailment is not None else None,
             "captured_price": round(captured, 2) if captured is not None else None,
             "avg_rrp": round(avg_rrp, 2) if avg_rrp is not None else None,

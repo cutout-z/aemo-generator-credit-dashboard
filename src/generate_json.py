@@ -120,12 +120,12 @@ def generate_generator_json(
             "capacity_factor": monthly_data["capacity_factor"].round(4).tolist(),
         }
         # Curtailment only for solar/wind
+        # S3-01: curtailment_pct is a forecast-to-output shortfall proxy
+        # (1 − SCADA/AVAILABILITY). The former grid/mechanical causal split
+        # is removed; metric_version marks the schema+methodology generation.
         if "curtailment_pct" in monthly_data.columns:
             doc["monthly"]["curtailment_pct"] = monthly_data["curtailment_pct"].round(4).tolist()
-        if "grid_curtailment_pct" in monthly_data.columns:
-            doc["monthly"]["grid_curtailment_pct"] = monthly_data["grid_curtailment_pct"].round(4).tolist()
-        if "mechanical_curtailment_pct" in monthly_data.columns:
-            doc["monthly"]["mechanical_curtailment_pct"] = monthly_data["mechanical_curtailment_pct"].round(4).tolist()
+            doc["monthly"]["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
         if "econ_curtailment_pct" in monthly_data.columns:
             doc["monthly"]["econ_curtailment_pct"] = monthly_data["econ_curtailment_pct"].round(4).tolist()
         # Price capture
@@ -273,13 +273,16 @@ def write_curtailment_by_fy(
         curt = _weighted(group, "curtailment_pct")
         if curt is None:
             continue
-        grid = _weighted(group, "grid_curtailment_pct") if "grid_curtailment_pct" in group.columns else None
+        # S3-01: metric_version travels with the CSV so the downstream
+        # consumer (AEMO Renewable Generator Dashboard) can tell which
+        # methodology produced each row. grid_curtailment_pct is no longer
+        # published — the causal split was unsupported.
         rows.append({
             "duid": duid,
             "fy_start": int(fy_start),
             "fy_label": f"FY{fy_start % 100:02d}-{(fy_start + 1) % 100:02d}",
             "curtailment_pct": round(curt, 4),
-            "grid_curtailment_pct": round(grid, 4) if grid is not None else None,
+            "metric_version": config.CURTAILMENT_METRIC_VERSION,
             "generation_mwh": round(float(group["generation_mwh"].sum()), 0),
             "months_covered": int(len(group)),
         })
@@ -637,16 +640,12 @@ def _aggregate_station_monthly(
     revenue = []
     cap_factor = []
     curtailment = []
-    grid_curtailment = []
-    mech_curtailment = []
     econ_curtailment = []
     captured_price = []
     avg_rrp = []
     pcr = []
 
     has_curtailment = "curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
-    has_grid_curt = "grid_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
-    has_mech_curt = "mechanical_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
     has_econ_curt = "econ_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
     has_price = "captured_price" in station_monthly.columns
 
@@ -680,12 +679,6 @@ def _aggregate_station_monthly(
         if has_curtailment:
             curtailment.append(weighted_pct(month_data, "curtailment_pct"))
 
-        if has_grid_curt:
-            grid_curtailment.append(weighted_pct(month_data, "grid_curtailment_pct"))
-
-        if has_mech_curt:
-            mech_curtailment.append(weighted_pct(month_data, "mechanical_curtailment_pct"))
-
         if has_econ_curt:
             econ_curtailment.append(weighted_pct(month_data, "econ_curtailment_pct"))
 
@@ -714,10 +707,7 @@ def _aggregate_station_monthly(
     }
     if has_curtailment:
         result["curtailment_pct"] = curtailment
-    if has_grid_curt:
-        result["grid_curtailment_pct"] = grid_curtailment
-    if has_mech_curt:
-        result["mechanical_curtailment_pct"] = mech_curtailment
+        result["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
     if has_econ_curt:
         result["econ_curtailment_pct"] = econ_curtailment
     if has_price:

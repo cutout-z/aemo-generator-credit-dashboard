@@ -58,6 +58,12 @@ def fetch_intermittent_month(
 
     Tries MMSDM archive first (Dec 2024+), then NEMOSIS/Current as fallback.
     Returns DataFrame with columns: DUID, total_intervals, good_intervals.
+
+    S3-01 note: these counts are data-quality telemetry only. They are no
+    longer used to attribute curtailment to grid vs mechanical causes
+    (that inference was unsupported — "Good" quality flags do not explain
+    why output was limited). Retained for archive cache migration and
+    potential future validated methodology.
     """
     if (year, month) < config.INTERMITTENT_SCADA_START:
         return pd.DataFrame()

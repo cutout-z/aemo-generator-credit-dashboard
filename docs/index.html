@@ -673,12 +673,12 @@
         </div>
         <div class="chart-panel" id="panelCurtailment">
             <div class="chart-title-wrap">
-                <h3>Grid Curtailment Analysis</h3>
+                <h3>Curtailment Proxy</h3>
                 <div class="chart-tooltip">
                     <div class="tooltip-title">Methodology</div>
-                    <div class="tooltip-formula">Curtailment % = 1 − (SCADA / UIGF)</div>
-                    Compares actual output to AEMO's unconstrained intermittent generation forecast (UIGF) from DISPATCHLOAD.
-                    <div class="tooltip-caveat">From Dec 2024: grid curtailment only (using INTERMITTENT_GEN_SCADA quality flags). Pre-Dec 2024: includes both grid curtailment and mechanical outages as they cannot be separated.</div>
+                    <div class="tooltip-formula">Shortfall % = 1 − (SCADA / AVAILABILITY)</div>
+                    Compares actual output (SCADA) to the generator's bid-in availability (DISPATCHLOAD AVAILABILITY). A forecast-to-output shortfall proxy — not a measured curtailment.
+                    <div class="tooltip-caveat">Cannot separate grid constraints from outages: availability includes outages, and SCADA quality flags do not explain why output was limited. No causal split is published (metric v2.0-proxy).</div>
                 </div>
             </div>
             <div id="chartCurtailment"><div class="placeholder">No data yet</div></div>
@@ -694,18 +694,6 @@
                 </div>
             </div>
             <div id="chartEconCurtailment"><div class="placeholder">No data yet</div></div>
-        </div>
-        <div class="chart-panel" id="panelMechOutage" style="display:none;">
-            <div class="chart-title-wrap">
-                <h3>Mechanical Outage</h3>
-                <div class="chart-tooltip">
-                    <div class="tooltip-title">Methodology</div>
-                    <div class="tooltip-formula">Outage % = (non-Good quality intervals / total intervals) &times; total curtailment</div>
-                    Proportion of curtailment attributable to mechanical/comms issues rather than grid constraints, derived from INTERMITTENT_GEN_SCADA quality flags (Uninitialised, RemotelySuspect, NotInService, etc.).
-                    <div class="tooltip-caveat">Available from Dec 2024 only. Does not distinguish planned maintenance from forced outages.</div>
-                </div>
-            </div>
-            <div id="chartMechOutage"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel">
             <div class="chart-title-wrap">
@@ -1190,43 +1178,16 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     }
 
-    // Curtailment chart — stacked bars for grid/mechanical, total line overlay
+    // Curtailment chart — single shortfall-proxy series (S3-01: no causal split)
     if (monthly && monthly.curtailment_pct) {
-        const curtTraces = [];
-        const gridData = monthly.grid_curtailment_pct;
-        const mechData = monthly.mechanical_curtailment_pct;
-        const hasGridSplit = gridData && gridData.some(v => v != null);
-
-        if (hasGridSplit) {
-            // Grid curtailment only; fall back to total for months without split data
-            const gridBars = fmtMonths.map((_, i) => {
-                if (gridData[i] != null) return gridData[i];
-                return monthly.curtailment_pct[i]; // total includes mechanical pre-Dec 2024
-            });
-            curtTraces.push({
-                x: fmtMonths,
-                y: gridBars,
-                type: 'bar',
-                name: 'Grid Curtailment',
-                marker: {
-                    color: fmtMonths.map((_, i) => gridData[i] != null ? '#f97316' : 'rgba(249, 115, 22, 0.5)'),
-                },
-                hovertemplate: fmtMonths.map((_, i) =>
-                    gridData[i] != null
-                        ? '%{x}<br>Grid: %{y:.1%}<extra></extra>'
-                        : '%{x}<br>Total (incl. outages): %{y:.1%}<extra></extra>'
-                ),
-            });
-        } else {
-            curtTraces.push({
-                x: fmtMonths,
-                y: monthly.curtailment_pct,
-                type: 'bar',
-                name: 'Total (incl. outages)',
-                marker: { color: 'rgba(249, 115, 22, 0.5)' },
-                hovertemplate: '%{x}<br>Total (incl. outages): %{y:.1%}<extra></extra>',
-            });
-        }
+        const curtTraces = [{
+            x: fmtMonths,
+            y: monthly.curtailment_pct,
+            type: 'bar',
+            name: 'Curtailment proxy',
+            marker: { color: '#f97316' },
+            hovertemplate: '%{x}<br>Shortfall proxy: %{y:.1%}<extra></extra>',
+        }];
 
         // Rolling average
         const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
@@ -1235,9 +1196,8 @@ function renderCharts(data) {
         Plotly.newPlot('chartCurtailment', curtTraces, {
             ...PLOTLY_LAYOUT_BASE,
             xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Curtailment %', tickformat: '.0%' },
-            barmode: 'stack',
-            showlegend: true,
+            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Shortfall % (proxy)', tickformat: '.0%' },
+            showlegend: !!curtRolling,
             legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
         }, PLOTLY_CONFIG);
     }
@@ -1268,38 +1228,6 @@ function renderCharts(data) {
         }, PLOTLY_CONFIG);
     } else if (econPanel) {
         econPanel.style.display = 'none';
-    }
-
-    // Mechanical outage chart (separate from curtailment, Dec 2024+ only)
-    const mechPanel = document.getElementById('panelMechOutage');
-    const mechData = monthly && monthly.mechanical_curtailment_pct;
-    const hasMechData = mechData && mechData.some(v => v != null && v > 0);
-    if (hasMechData) {
-        mechPanel.style.display = 'block';
-        // Only show months that have data
-        const mechMonths = [];
-        const mechValues = [];
-        fmtMonths.forEach((m, i) => {
-            if (mechData[i] != null) {
-                mechMonths.push(m);
-                mechValues.push(mechData[i]);
-            }
-        });
-        Plotly.newPlot('chartMechOutage', [{
-            x: mechMonths,
-            y: mechValues,
-            type: 'bar',
-            marker: { color: '#ef4444' },
-            hovertemplate: '%{x}<br>Outage: %{y:.1%}<extra></extra>',
-            name: 'Mechanical Outage',
-            showlegend: false,
-        }], {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Outage %', tickformat: '.1%' },
-        }, PLOTLY_CONFIG);
-    } else if (mechPanel) {
-        mechPanel.style.display = 'none';
     }
 
     // MLF trajectory (always shows all years — annual, not monthly)
@@ -2114,9 +2042,7 @@ function buildMonthlyRows(data) {
             'Avg Regional RRP ($/MWh)': m.avg_rrp ? m.avg_rrp[i] : null,
             'Price Capture Ratio': m.price_capture_ratio ? m.price_capture_ratio[i] : null,
         };
-        if (m.curtailment_pct) row['Total Curtailment'] = m.curtailment_pct[i];
-        if (m.grid_curtailment_pct) row['Grid Curtailment'] = m.grid_curtailment_pct[i];
-        if (m.mechanical_curtailment_pct) row['Mechanical Curtailment'] = m.mechanical_curtailment_pct[i];
+        if (m.curtailment_pct) row['Curtailment Proxy'] = m.curtailment_pct[i];
         if (m.econ_curtailment_pct) row['Economic Curtailment'] = m.econ_curtailment_pct[i];
         return row;
     });

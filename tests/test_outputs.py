@@ -267,12 +267,19 @@ class TestCurtailmentByFY:
         df = pd.read_csv(path)
         assert len(df) > 0, "curtailment_by_fy.csv is empty"
 
-    def test_expected_columns(self):
+    def test_expected_columns_transition(self):
+        """S3-01 schema migration: the live CSV is produced by the NAS pipeline,
+        so it lags code until the next scheduled run. Accept either the legacy
+        schema or the v2 proxy schema, but never both split columns absent AND
+        no version marker (i.e. some recognised schema must be present)."""
         df = pd.read_csv(DOCS_DATA_DIR / "curtailment_by_fy.csv")
-        expected = {"duid", "fy_start", "fy_label", "curtailment_pct",
-                    "grid_curtailment_pct", "generation_mwh", "months_covered"}
-        missing = expected - set(df.columns)
-        assert not missing, f"curtailment_by_fy.csv missing columns: {missing}"
+        legacy = {"duid", "fy_start", "fy_label", "curtailment_pct",
+                  "grid_curtailment_pct", "generation_mwh", "months_covered"}
+        v2 = {"duid", "fy_start", "fy_label", "curtailment_pct",
+              "metric_version", "generation_mwh", "months_covered"}
+        assert legacy.issubset(set(df.columns)) or v2.issubset(set(df.columns)), (
+            f"curtailment_by_fy.csv matches neither legacy nor v2 schema: {list(df.columns)}"
+        )
 
     def test_curtailment_in_range(self):
         df = pd.read_csv(DOCS_DATA_DIR / "curtailment_by_fy.csv")

@@ -54,8 +54,10 @@ def test_station_aggregation_includes_mechanical_and_constraints(tmp_path):
         station = json.load(f)
 
     assert station["monthly"]["curtailment_pct"] == [0.35]
-    assert station["monthly"]["grid_curtailment_pct"] == [0.175]
-    assert station["monthly"]["mechanical_curtailment_pct"] == [0.25]
+    # S3-01: proxy only — no causal split columns; version travels with the metric
+    assert station["monthly"]["curtailment_metric_version"] == "2.0-proxy"
+    assert "grid_curtailment_pct" not in station["monthly"]
+    assert "mechanical_curtailment_pct" not in station["monthly"]
     assert station["monthly"]["econ_curtailment_pct"] == [0.05]
 
     top_by_id = {row["id"]: row for row in station["constraints"]["top_constraints"]}

@@ -53,6 +53,12 @@ FUEL_TYPE_MAP = {
 # Fuel types where curtailment analysis is meaningful
 CURTAILMENT_FUEL_TYPES = {"Solar", "Wind"}
 
+# S3-01: curtailment is a forecast-to-output shortfall proxy (1 − SCADA/
+# AVAILABILITY). Version marks the schema/methodology generation so
+# downstream consumers can tell rows produced by the retired causal
+# split (grid/mechanical) from proxy-only rows.
+CURTAILMENT_METRIC_VERSION = "2.0-proxy"
+
 # INTERMITTENT_GEN_SCADA availability start (year, month)
 INTERMITTENT_SCADA_START = (2024, 8)
 
