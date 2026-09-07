@@ -33,6 +33,7 @@ from .market_factors import (
 )
 from .download_bids import fetch_fcas_bids_month
 from .fcas_factor import compute_fcas_factors
+from .factor_cache import merge_month_rows
 from .freshness import check_monthly_freshness, check_daily_freshness
 from .generate_market_json import publish_market_json
 
@@ -537,16 +538,14 @@ def main():
                 logger.warning(f"FCAS factor computation failed for {month_label}: {e}")
         if fcas_factor_frames:
             fcas_new = pd.concat(fcas_factor_frames, ignore_index=True)
-            ff_path = data_dir / "fcas_factors.feather"
-            if ff_path.exists() and not args.full_refresh:
-                ff_existing = pd.read_feather(ff_path)
-                reprocessed = set(fcas_new["month"].unique())
-                ff_existing = ff_existing[~ff_existing["month"].isin(reprocessed)]
-                fcas_factors = pd.concat([ff_existing, fcas_new], ignore_index=True)
-            else:
-                fcas_factors = fcas_new
-            fcas_factors.to_feather(ff_path)
-            logger.info(f"Saved {len(fcas_factors)} FCAS factor rows to {ff_path}")
+            # S3-07: single persistence owner — merge_month_rows reads the
+            # existing history FIRST and writes once; the builder never
+            # touches the cache, so a warm run preserves every month outside
+            # the recomputed window.
+            fcas_factors = merge_month_rows(
+                data_dir / "fcas_factors.feather", fcas_new,
+                full_refresh=args.full_refresh, label="FCAS factor",
+            )
     else:
         cached_ff = data_dir / "fcas_factors.feather"
         if cached_ff.exists():
@@ -559,33 +558,43 @@ def main():
     offer_curves = None
     if not args.skip_offer_factors:
         logger.info("=== Step 3e2: Energy offer-curve factors ===")
-        from .offer_curves import build_offer_factors
+        oc_months = _months_to_process(args.months_back, args.full_refresh)
         try:
-            of_new = build_offer_factors(
-                _months_to_process(args.months_back, args.full_refresh),
-                str(data_dir), str(data_dir),
+            from .offer_curves import OFFER_FACTORS_CACHE, build_offer_factors
+            # S3-07: builders return facts and never write the cache; the
+            # merge below reads the existing history FIRST (before any
+            # write) and persists once — a warm run can no longer overwrite
+            # the very file it then reads back as old history (the old code
+            # let build_offer_factors clobber offer_factors.feather with the
+            # recent window, so the subsequent merge read that window back as
+            # "existing", dropped it, and left ONLY the recent window).
+            of_new = build_offer_factors(oc_months, str(data_dir))
+            offer_factors = merge_month_rows(
+                data_dir / OFFER_FACTORS_CACHE, of_new,
+                full_refresh=args.full_refresh, label="offer factor",
             )
-            if not of_new.empty:
-                of_path = data_dir / "offer_factors.feather"
-                if of_path.exists() and not args.full_refresh:
-                    of_existing = pd.read_feather(of_path)
-                    reprocessed = set(of_new["month"].unique())
-                    of_existing = of_existing[~of_existing["month"].isin(reprocessed)]
-                    offer_factors = pd.concat([of_existing, of_new], ignore_index=True)
-                else:
-                    offer_factors = of_new
-                offer_factors.to_feather(of_path)
-                logger.info(f"Saved {len(offer_factors)} offer factor rows to {of_path}")
         except Exception as e:
             logger.warning(f"Offer factor computation failed: {e}")
         # Step 3e3: per-DUID 10-band offer curves (chart data)
         try:
-            from .offer_curves import build_offer_curves
-            oc_result = build_offer_curves(
-                _months_to_process(args.months_back, args.full_refresh),
-                str(data_dir), str(data_dir),
+            from .offer_curves import (
+                OFFER_CURVES_CACHE, OFFER_CURVES_DAILY_CACHE,
+                build_offer_curves, write_offer_curve_files,
             )
-            offer_curves = oc_result if oc_result is not None and not oc_result.empty else None
+            oc_monthly, oc_daily = build_offer_curves(oc_months, str(data_dir))
+            offer_curves = merge_month_rows(
+                data_dir / OFFER_CURVES_CACHE, oc_monthly,
+                full_refresh=args.full_refresh, label="offer curve",
+            )
+            if oc_daily is not None and not oc_daily.empty:
+                # Daily stacks are an explicitly BOUNDED latest-window cache
+                # (S3-07): recomputed each run for the processed window only,
+                # never accumulated into five years of per-day history, and
+                # never part of the durable processed-cache snapshot. The
+                # published docs/data/offer_curves/{DUID}.json day files are
+                # rewritten from this window each run.
+                oc_daily.to_feather(data_dir / OFFER_CURVES_DAILY_CACHE)
+                write_offer_curve_files(oc_daily, str(docs_data_dir))
         except Exception as e:
             logger.warning(f"Offer curve computation failed: {e}")
     else:

@@ -230,8 +230,14 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
     return out.rename(columns={"DUID": "duid"})
 
 
-def build_offer_factors(months: list[tuple[int, int]], cache_dir: str, data_dir: str) -> pd.DataFrame:
-    """Fetch + compute offer factors for each (year, month); save feather."""
+def build_offer_factors(months: list[tuple[int, int]], cache_dir: str) -> pd.DataFrame:
+    """Fetch + compute offer factors for each (year, month).
+
+    S3-07 pure-builder contract: returns the computed facts and NEVER writes
+    a cache file — the caller (main.py via src/factor_cache.merge_month_rows)
+    owns persistence, so a warm run cannot overwrite the history file it then
+    reads back to merge.
+    """
     frames: list[pd.DataFrame] = []
     for year, month in months:
         prices = fetch_energy_prices(year, month, cache_dir)
@@ -255,9 +261,7 @@ def build_offer_factors(months: list[tuple[int, int]], cache_dir: str, data_dir:
     # month's inclusive-end window. Frames append in ascending month order, so
     # keep the LAST row per (duid, month): the fuller copy wins.
     out = out.drop_duplicates(subset=["duid", "month"], keep="last")
-    out_path = Path(data_dir) / OFFER_FACTORS_CACHE
-    out.to_feather(out_path)
-    logger.info(f"Saved {len(out)} offer factor rows to {out_path}")
+    logger.info("Computed %d offer factor rows for %d month(s)", len(out), len(months))
     return out
 
 
@@ -432,9 +436,23 @@ def compute_offer_curves(prices: pd.DataFrame, volumes: pd.DataFrame, month: str
     return pd.DataFrame(rows)
 
 
-def build_offer_curves(months: list[tuple[int, int]], cache_dir: str, data_dir: str) -> pd.DataFrame:
-    """Fetch + compute per-DUID offer curves for each month; cache-merge like factors."""
-    frames = []
+def build_offer_curves(
+    months: list[tuple[int, int]], cache_dir: str
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fetch + compute per-DUID monthly offer curves and the bounded daily window.
+
+    S3-07 pure-builder contract: returns ``(monthly, daily)`` facts and NEVER
+    writes a cache file or the published day JSONs — the caller (main.py)
+    owns persistence: monthly rows merge into the versioned history via
+    src/factor_cache.merge_month_rows; the daily frame is an explicitly
+    BOUNDED latest-window cache, overwritten each run for the processed
+    window only (never five years of per-day stacks) and re-published to
+    docs/data/offer_curves/{DUID}.json by write_offer_curve_files.
+
+    ``daily`` is the bounded display window for the processed months; an
+    empty frame means no daily stacks were computable this run.
+    """
+    frames: list[pd.DataFrame] = []
     for year, month in months:
         try:
             prices = fetch_energy_prices(year, month, cache_dir)
@@ -446,12 +464,8 @@ def build_offer_curves(months: list[tuple[int, int]], cache_dir: str, data_dir: 
                 logger.info(f"Offer curves {year}-{month:02d}: {n} DUIDs")
         except Exception as e:
             logger.warning(f"Offer curves {year}-{month:02d} failed: {e}")
-    if not frames:
-        return pd.DataFrame()
-    out = pd.concat(frames, ignore_index=True)
-    out_path = Path(data_dir) / OFFER_CURVES_CACHE
-    out.to_feather(out_path)
-    logger.info(f"Saved {len(out)} offer curve rows to {out_path}")
+    monthly = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    logger.info("Computed %d monthly offer-curve rows", len(monthly))
 
     # Daily stacks: reuse the same fetched frames, no extra downloads
     daily_frames = []
@@ -464,12 +478,9 @@ def build_offer_curves(months: list[tuple[int, int]], cache_dir: str, data_dir: 
                 daily_frames.append(d)
         except Exception as e:
             logger.warning(f"Daily offer curves {year}-{month:02d} failed: {e}")
-    if daily_frames:
-        daily = pd.concat(daily_frames, ignore_index=True)
-        daily.to_feather(Path(data_dir) / OFFER_CURVES_DAILY_CACHE)
-        logger.info(f"Saved {len(daily)} daily offer-curve rows")
-        write_offer_curve_files(daily, str(Path(data_dir).parent / "docs" / "data"))
-    return out
+    daily = pd.concat(daily_frames, ignore_index=True) if daily_frames else pd.DataFrame()
+    logger.info("Computed %d daily offer-curve rows", len(daily))
+    return monthly, daily
 
 
 def attach_offer_curve_doc(doc: dict, rows: pd.DataFrame | None) -> None:

@@ -4,6 +4,20 @@ The raw NEMOSIS/AEMO cache is large and machine-local. The processed cache is
 the small validated project history that the dashboard actually needs. These
 helpers publish that compact layer under docs/data so a cold runner can restore
 settled history before reprocessing only the recent overlap window.
+
+Cache authority (S3-07): restore fills GAPS ONLY — a file already present in
+the machine-local data dir is never overwritten by the published snapshot
+(local-present wins; the snapshot is the NAS pipeline's own latest publish, so
+the two disagree only when a local file was produced by something newer than
+the last snapshot — never clobber it). The snapshot is the versioned,
+validated copy of what the pipeline published last run.
+
+Factor persistence policy (S3-07): the four compact factor histories the
+published JSON needs are part of the versioned snapshot (SNAPSHOT_FILES) —
+per-DUID monthly offer/FCAS behaviour, monthly 10-band offer curves and the
+long regional market-spread trend behind market_daily.json. Factor caches in
+LATEST_WINDOW_CACHE_FILES are explicitly DECLARED latest-window, not durable
+history: they are recomputed each run for the current processing window only.
 """
 
 from __future__ import annotations
@@ -27,10 +41,29 @@ SNAPSHOT_FILES = (
     "generators.feather",
     "mlf_history.feather",
     "mlf_tracker_summary.csv",
+    # S3-07: factor histories are durable — the regional market-spread trend,
+    # per-DUID monthly FCAS/offer behaviour and monthly 10-band offer curves
+    # all belong in the snapshot so a cold runner restores the long history
+    # behind the published JSONs before reprocessing only the recent window.
+    "market_factors_daily.feather",
+    "fcas_factors.feather",
+    "offer_factors.feather",
+    "offer_curves.feather",
 )
 
 SNAPSHOT_GLOBS = (
     "intermittent_quality_*.feather",
+)
+
+# Factor caches explicitly declared LATEST-WINDOW (S3-07), never part of the
+# durable snapshot: recomputed from the AEMO archive for the current
+# processing window on every run. offer_curves_daily.feather holds per-DUID
+# per-DAY bid stacks — the published day selector needs only a bounded recent
+# window, and five years of per-day stacks is not retained (the
+# docs/data/offer_curves/*.json day files are rewritten from this window each
+# run).
+LATEST_WINDOW_CACHE_FILES = (
+    "offer_curves_daily.feather",
 )
 
 

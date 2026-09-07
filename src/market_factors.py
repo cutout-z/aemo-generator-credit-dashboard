@@ -103,7 +103,12 @@ def build_market_factors(data_dir: str, months: list[tuple[int, int]]) -> pd.Dat
 
     Reads DISPATCHPRICE from the raw cache (no new downloads for months not
     in `months`); merges results into the accumulated daily factors feather so
-    history survives raw-cache pruning.
+    history survives raw-cache pruning. S3-07: this accumulated history is
+    part of the versioned processed-cache snapshot
+    (docs/data/processed-cache/market_factors_daily.feather) — a cold runner
+    restores it before recomputing the recent window, so the long regional
+    trend behind the published market_daily.json survives bounded raw
+    retention. Restore fills gaps only; a local file is never clobbered.
 
     Returns the full accumulated DataFrame.
     """
