@@ -130,7 +130,9 @@ def generate_generator_json(
     output_dir: str | None = None,
 
     offer_factor_rows=None,
-    offer_curve_rows=None,) -> Path:
+    offer_curve_rows=None,
+    factor_source_status: dict | None = None,
+) -> Path:
     """Write a single generator's JSON file with all dashboard data.
 
     Args:
@@ -214,6 +216,21 @@ def generate_generator_json(
     attach_offer_factor_doc(doc, offer_factor_rows)
     from .offer_curves import attach_offer_curve_doc
     attach_offer_curve_doc(doc, offer_curve_rows)
+
+    # S3-08: when an optional source failed and its blocks were carried over
+    # from the last-known-good cache (retained=True), stamp them so consumers
+    # can tell retained-stale values from freshly computed ones. The block's
+    # own 'month' is the as-of of the retained data — no duplicated field.
+    # Absence of the stamp means the block was computed from this run's data.
+    if factor_source_status:
+        for key, src in (
+            ("fcas_participation", "fcas_factors"),
+            ("offers", "offer_factors"),
+            ("offer_curve", "offer_curves"),
+        ):
+            lane = factor_source_status.get(src)
+            if lane and lane.get("retained") and key in doc and doc[key]:
+                doc[key]["source_status"] = "retained_stale"
 
     # Daily capacity factor (last 12 months)
     if daily_data is not None and not daily_data.empty:
@@ -470,6 +487,7 @@ def generate_all(
     fcas_factors: pd.DataFrame | None = None,
     offer_factors: pd.DataFrame | None = None,
     offer_curves: pd.DataFrame | None = None,
+    factor_source_status: dict | None = None,
     market: str = "NEM",
 ) -> int:
     """Generate all per-generator JSON files and the index.
@@ -585,7 +603,9 @@ def generate_all(
             constraint_data=duid_constraints,
             fcas_factor_rows=duid_fcas_factors,
             offer_factor_rows=duid_offers,
-            offer_curve_rows=duid_curves, output_dir=gen_dir,
+            offer_curve_rows=duid_curves,
+            factor_source_status=factor_source_status,
+            output_dir=gen_dir,
         )
         count += 1
 

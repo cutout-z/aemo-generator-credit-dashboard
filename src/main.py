@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import gc
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +36,16 @@ from .fcas_factor import compute_fcas_factors
 from .factor_cache import merge_month_rows
 from .freshness import check_monthly_freshness, check_daily_freshness
 from .generate_market_json import publish_market_json
+from .run_status import (
+    LaneRun,
+    build_manifest,
+    check_factor_block_continuity,
+    read_last_good,
+    write_run_manifest,
+    STATUS_DEGRADED,
+    STATUS_ERROR,
+    STATUS_SKIPPED,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,6 +120,194 @@ def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, 
     return months
 
 
+# ────────────────────────────────────────────────────────────────────────
+# S3-08 optional-source lanes. Each lane records its run state (LaneRun)
+# and, when the source fails or delivers nothing new, retains the
+# last-known-good factor history from its cache so published per-DUID
+# blocks never vanish from a "successful" run. The caller (main) runs the
+# factor-block continuity guard before publishing and writes the
+# machine-readable run-status manifest for the operator channel.
+# ────────────────────────────────────────────────────────────────────────
+
+def _skip_lane_retained(
+    lane: LaneRun, cache_path: Path, skip_flag_desc: str,
+) -> pd.DataFrame:
+    """Explicit operator skip: retain the cache when it exists.
+
+    ``skipped`` lanes are documented operator intent — they appear in the run
+    manifest but do not alert. When no cache exists the frame is empty and the
+    continuity guard rejects the publish if populated blocks would vanish.
+    """
+    retained = read_last_good(cache_path)
+    lane.status = STATUS_SKIPPED
+    if not retained.empty:
+        lane.retained = True
+        lane.frame = retained
+        lane.note = f"{skip_flag_desc}; last-known-good history retained from cache"
+    else:
+        lane.frame = pd.DataFrame()
+        lane.note = f"{skip_flag_desc}; no cache present — nothing retained"
+    return lane.frame
+
+
+def _run_fcas_factor_lane(
+    data_dir: Path,
+    months: list[tuple[int, int]],
+    *,
+    skip: bool,
+    full_refresh: bool,
+) -> tuple[pd.DataFrame, LaneRun]:
+    """Per-DUID FCAS participation factors (BIDPEROFFER_D offers), Step 3e."""
+    lane = LaneRun(source="fcas_factors", block="fcas_participation")
+    cache_path = data_dir / "fcas_factors.feather"
+    if skip:
+        return _skip_lane_retained(lane, cache_path, "explicit --skip-fcas-factors"), lane
+
+    lane.attempted_months = len(months)
+    frames: list[pd.DataFrame] = []
+    errors: list[str] = []
+    for year, month in months:
+        month_label = f"{year}-{month:02d}"
+        try:
+            bids = fetch_fcas_bids_month(year, month, str(data_dir), rebuild=full_refresh)
+            if bids is None or bids.empty:
+                continue  # month not published / no rows — not a failure
+            facts = compute_fcas_factors(bids, year, month)
+            if not facts.empty:
+                frames.append(facts)
+        except Exception as e:
+            errors.append(f"{month_label}: {e}")
+            logger.warning("FCAS factor computation failed for %s: %s", month_label, e)
+
+    if frames:
+        new = pd.concat(frames, ignore_index=True)
+        lane.months_with_data = int(new["month"].nunique())
+        # S3-07: single persistence owner — merge reads existing history FIRST
+        # and writes once; out-of-window months are preserved.
+        merged = merge_month_rows(
+            cache_path, new, full_refresh=full_refresh, label="FCAS factor",
+        )
+        lane.frame = merged
+        if errors:
+            lane.status = STATUS_DEGRADED
+            lane.error = "; ".join(errors)
+        return lane.frame, lane
+
+    # No fresh facts at all → retain the last-known-good history.
+    retained = read_last_good(cache_path)
+    if not retained.empty:
+        lane.retained = True
+        lane.frame = retained
+        lane.status = STATUS_DEGRADED
+        lane.error = "; ".join(errors) if errors else "no source rows for any attempted month"
+        if not errors:
+            lane.note = "source returned no rows (unpublished months?) — last-known-good retained"
+        return lane.frame, lane
+    lane.status = STATUS_ERROR
+    lane.frame = pd.DataFrame()
+    lane.error = "; ".join(errors) if errors else "no source rows and no cache to retain (cold start)"
+    return lane.frame, lane
+
+
+def _run_offer_factor_lane(
+    data_dir: Path,
+    months: list[tuple[int, int]],
+    *,
+    skip: bool,
+    full_refresh: bool,
+) -> tuple[pd.DataFrame, LaneRun]:
+    """Per-DUID energy offer-curve factors (BIDDAYOFFER/BIDPEROFFER), Step 3e2."""
+    from .offer_curves import OFFER_FACTORS_CACHE, build_offer_factors
+
+    lane = LaneRun(source="offer_factors", block="offers")
+    cache_path = data_dir / OFFER_FACTORS_CACHE
+    if skip:
+        return _skip_lane_retained(lane, cache_path, "explicit --skip-offer-factors"), lane
+
+    lane.attempted_months = len(months)
+    try:
+        # S3-07: pure builder returns facts; the caller owns persistence.
+        new = build_offer_factors(months, str(data_dir))
+        if not new.empty:
+            lane.months_with_data = int(new["month"].nunique())
+            merged = merge_month_rows(
+                cache_path, new, full_refresh=full_refresh, label="offer factor",
+            )
+            lane.frame = merged
+            return lane.frame, lane
+    except Exception as e:
+        logger.warning("Offer factor computation failed: %s", e)
+        lane.error = str(e)
+
+    retained = read_last_good(cache_path)
+    if not retained.empty:
+        lane.retained = True
+        lane.frame = retained
+        lane.status = STATUS_DEGRADED
+        lane.error = lane.error or "no offer rows for any attempted month"
+        if not lane.error or lane.error.startswith("no offer"):
+            lane.note = "no offer rows (unpublished months?) — last-known-good retained"
+        return lane.frame, lane
+    lane.status = STATUS_ERROR
+    lane.frame = pd.DataFrame()
+    lane.error = lane.error or "no offer rows and no cache to retain (cold start)"
+    return lane.frame, lane
+
+
+def _run_offer_curve_lane(
+    data_dir: Path,
+    months: list[tuple[int, int]],
+    *,
+    skip: bool,
+    full_refresh: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame | None, LaneRun]:
+    """Per-DUID 10-band offer curves (monthly block + bounded daily window), Step 3e3."""
+    from .offer_curves import OFFER_CURVES_CACHE, build_offer_curves
+
+    lane = LaneRun(source="offer_curves", block="offer_curve")
+    cache_path = data_dir / OFFER_CURVES_CACHE
+    if skip:
+        retained = _skip_lane_retained(lane, cache_path, "explicit --skip-offer-factors")
+        return retained, None, lane
+
+    lane.attempted_months = len(months)
+    try:
+        oc_monthly, oc_daily = build_offer_curves(months, str(data_dir))
+        if oc_monthly is not None and not oc_monthly.empty:
+            lane.months_with_data = int(oc_monthly["month"].nunique())
+            merged = merge_month_rows(
+                cache_path, oc_monthly, full_refresh=full_refresh, label="offer curve",
+            )
+            lane.frame = merged
+            return lane.frame, oc_daily, lane
+    except Exception as e:
+        logger.warning("Offer curve computation failed: %s", e)
+        lane.error = str(e)
+
+    retained = read_last_good(cache_path)
+    if not retained.empty:
+        lane.retained = True
+        lane.frame = retained
+        lane.status = STATUS_DEGRADED
+        lane.error = lane.error or "no offer-curve rows for any attempted month"
+        if not lane.error or lane.error.startswith("no offer-curve"):
+            lane.note = "no offer-curve rows (unpublished months?) — last-known-good retained"
+        return lane.frame, None, lane
+    lane.status = STATUS_ERROR
+    lane.frame = pd.DataFrame()
+    lane.error = lane.error or "no offer-curve rows and no cache to retain (cold start)"
+    return lane.frame, None, lane
+
+
+def _factor_source_status_map(lanes: list[LaneRun]) -> dict:
+    """{source: {status, retained}} for the JSON writer's retained-stale stamp."""
+    return {
+        lane.source: {"status": lane.status, "retained": lane.retained}
+        for lane in lanes
+        if lane is not None and lane.block is not None
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="AEMO Generator Credit Dashboard pipeline")
     parser.add_argument("--full-refresh", action="store_true", help="Re-download all data (5 years)")
@@ -136,6 +334,10 @@ def main():
     args = parser.parse_args()
     if args.fcas_rebuild:
         args.skip_scada = True
+
+    # S3-08: run-start timestamp for the run-status manifest (recorded up front
+    # so a long run's manifest reflects when the run actually started).
+    _run_started_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     project_root = Path(__file__).resolve().parent.parent
     data_dir = project_root / config.DATA_DIR
@@ -509,6 +711,8 @@ def main():
     # even though the raw cache is pruned after 120 days.
     logger.info("=== Step 3d: Market spread factors ===")
     market_factors = pd.DataFrame()
+    market_quarterly = pd.DataFrame()
+    market_lane = LaneRun(source="market_factors")
     try:
         available_price_months = []
         for mdir in sorted((data_dir / "nemosis_cache").glob(
@@ -519,93 +723,66 @@ def main():
         market_quarterly = build_quarterly_summary(market_factors)
         check_qed_divergence(market_quarterly)
     except Exception as e:
-        logger.error(f"Market factor computation failed: {e}")
+        # S3-08: publish_market_json refuses empty factors (line 56) so the
+        # published market_daily.json is left untouched on failure — but the
+        # failure is recorded for the operator channel, never hidden.
+        logger.error("Market factor computation failed: %s", e)
+        market_lane.status = STATUS_DEGRADED
+        market_lane.error = str(e)
         market_quarterly = pd.DataFrame()
+    market_lane.frame = market_factors
+
+    # Steps 3e/3e2/3e3: per-DUID optional-source factor lanes.
+    # S3-08: each lane runs through a recorder that retains the last-known-good
+    # factor history from its cache when the source fails or delivers nothing
+    # new — a failure may never erase populated panels from the published
+    # generator docs. The factor-block continuity guard (Step 3g) rejects the
+    # publish outright when a populated block would still vanish, and the
+    # machine-readable run-status manifest (written at the end) carries each
+    # lane's success/coverage/as-of/error state to the operator channel.
+    factor_months = _months_to_process(args.months_back, args.full_refresh)
 
     # Step 3e: Per-DUID FCAS participation factors (BIDPEROFFER_D offers).
     # These are generator-specific, unlike the regional FCAS price averages.
-    fcas_factors = pd.DataFrame()
-    if not args.skip_fcas_factors:
-        logger.info("=== Step 3e: FCAS participation factors ===")
-        fcas_factor_frames = []
-        for year, month in _months_to_process(args.months_back, args.full_refresh):
-            month_label = f"{year}-{month:02d}"
-            try:
-                bids = fetch_fcas_bids_month(year, month, str(data_dir), rebuild=args.full_refresh)
-                if not bids.empty:
-                    fcas_factor_frames.append(compute_fcas_factors(bids, year, month))
-            except Exception as e:
-                logger.warning(f"FCAS factor computation failed for {month_label}: {e}")
-        if fcas_factor_frames:
-            fcas_new = pd.concat(fcas_factor_frames, ignore_index=True)
-            # S3-07: single persistence owner — merge_month_rows reads the
-            # existing history FIRST and writes once; the builder never
-            # touches the cache, so a warm run preserves every month outside
-            # the recomputed window.
-            fcas_factors = merge_month_rows(
-                data_dir / "fcas_factors.feather", fcas_new,
-                full_refresh=args.full_refresh, label="FCAS factor",
-            )
-    else:
-        cached_ff = data_dir / "fcas_factors.feather"
-        if cached_ff.exists():
-            fcas_factors = pd.read_feather(cached_ff)
-            logger.info(f"Loaded {len(fcas_factors)} cached FCAS factor rows")
+    logger.info("=== Step 3e: FCAS participation factors ===")
+    fcas_factors, fcas_lane = _run_fcas_factor_lane(
+        data_dir, factor_months,
+        skip=args.skip_fcas_factors, full_refresh=args.full_refresh,
+    )
 
     # Step 3e2: Per-DUID energy offer-curve factors (BIDDAYOFFER_D prices +
     # BIDPEROFFER_D ENERGY volumes). Offer-based estimates of bid behaviour.
-    offer_factors = pd.DataFrame()
-    offer_curves = None
-    if not args.skip_offer_factors:
-        logger.info("=== Step 3e2: Energy offer-curve factors ===")
-        oc_months = _months_to_process(args.months_back, args.full_refresh)
-        try:
-            from .offer_curves import OFFER_FACTORS_CACHE, build_offer_factors
-            # S3-07: builders return facts and never write the cache; the
-            # merge below reads the existing history FIRST (before any
-            # write) and persists once — a warm run can no longer overwrite
-            # the very file it then reads back as old history (the old code
-            # let build_offer_factors clobber offer_factors.feather with the
-            # recent window, so the subsequent merge read that window back as
-            # "existing", dropped it, and left ONLY the recent window).
-            of_new = build_offer_factors(oc_months, str(data_dir))
-            offer_factors = merge_month_rows(
-                data_dir / OFFER_FACTORS_CACHE, of_new,
-                full_refresh=args.full_refresh, label="offer factor",
-            )
-        except Exception as e:
-            logger.warning(f"Offer factor computation failed: {e}")
-        # Step 3e3: per-DUID 10-band offer curves (chart data)
-        try:
-            from .offer_curves import (
-                OFFER_CURVES_CACHE, OFFER_CURVES_DAILY_CACHE,
-                build_offer_curves, write_offer_curve_files,
-            )
-            oc_monthly, oc_daily = build_offer_curves(oc_months, str(data_dir))
-            offer_curves = merge_month_rows(
-                data_dir / OFFER_CURVES_CACHE, oc_monthly,
-                full_refresh=args.full_refresh, label="offer curve",
-            )
-            if oc_daily is not None and not oc_daily.empty:
-                # Daily stacks are an explicitly BOUNDED latest-window cache
-                # (S3-07): recomputed each run for the processed window only,
-                # never accumulated into five years of per-day history, and
-                # never part of the durable processed-cache snapshot. The
-                # published docs/data/offer_curves/{DUID}.json day files are
-                # rewritten from this window each run.
-                oc_daily.to_feather(data_dir / OFFER_CURVES_DAILY_CACHE)
-                write_offer_curve_files(oc_daily, str(docs_data_dir))
-        except Exception as e:
-            logger.warning(f"Offer curve computation failed: {e}")
-    else:
-        cached_of = data_dir / "offer_factors.feather"
-        if cached_of.exists():
-            offer_factors = pd.read_feather(cached_of)
-            logger.info(f"Loaded {len(offer_factors)} cached offer factor rows")
-        cached_oc = data_dir / "offer_curves.feather"
-        if cached_oc.exists():
-            offer_curves = pd.read_feather(cached_oc)
-            logger.info(f"Loaded {len(offer_curves)} cached offer curve rows")
+    logger.info("=== Step 3e2: Energy offer-curve factors ===")
+    offer_factors, offer_lane = _run_offer_factor_lane(
+        data_dir, factor_months,
+        skip=args.skip_offer_factors, full_refresh=args.full_refresh,
+    )
+
+    # Step 3e3: per-DUID 10-band offer curves (chart data; monthly block +
+    # bounded latest-window daily stacks).
+    logger.info("=== Step 3e3: Per-DUID offer curves ===")
+    offer_curves, offer_curves_daily, curve_lane = _run_offer_curve_lane(
+        data_dir, factor_months,
+        skip=args.skip_offer_factors, full_refresh=args.full_refresh,
+    )
+    if offer_curves_daily is not None and not offer_curves_daily.empty:
+        from .offer_curves import (
+            OFFER_CURVES_DAILY_CACHE, write_offer_curve_files,
+        )
+        # Daily stacks are an explicitly BOUNDED latest-window cache
+        # (S3-07): recomputed each run for the processed window only,
+        # never accumulated into five years of per-day history, and never
+        # part of the durable processed-cache snapshot. The published
+        # docs/data/offer_curves/{DUID}.json day files are rewritten from
+        # this window each run. On a failed lane the old day files are left
+        # untouched (last-known-good) and the manifest records the lane as
+        # degraded — they are never rewritten from stale frames.
+        offer_curves_daily.to_feather(data_dir / OFFER_CURVES_DAILY_CACHE)
+        write_offer_curve_files(offer_curves_daily, str(docs_data_dir))
+
+    factor_lanes = [
+        fcas_lane, offer_lane, curve_lane,
+    ]
 
     # Step 3f: Freshness guards — fail BEFORE publishing stale data.
     # The daily commit is not a freshness signal: the pipeline re-processes the
@@ -613,6 +790,20 @@ def main():
     logger.info("=== Step 3f: Freshness guards ===")
     check_monthly_freshness(all_monthly)
     check_daily_freshness(all_daily)
+
+    # Step 3g: Factor-block continuity guard — reject publication when a
+    # populated factor metric would vanish without a documented reason.
+    # Core freshness passing must not hide a degraded optional source.
+    logger.info("=== Step 3g: Factor-block continuity guard ===")
+    gen_dir = docs_data_dir / "generators"
+    violations = check_factor_block_continuity(
+        gen_dir, {lane.source: lane for lane in factor_lanes},
+    )
+    if violations:
+        raise RuntimeError(
+            "S3-08 factor-block continuity guard: refusing to publish — "
+            + " | ".join(violations)
+        )
 
     # Step 4: Generate JSON output
     logger.info("=== Step 4: Generating JSON output ===")
@@ -626,14 +817,34 @@ def main():
                          constraint_data=constraint_agg,
                          fcas_factors=fcas_factors if not fcas_factors.empty else None,
                          offer_factors=offer_factors if not offer_factors.empty else None,
-                         offer_curves=offer_curves if offer_curves is not None and not offer_curves.empty else None)
+                         offer_curves=offer_curves if offer_curves is not None and not offer_curves.empty else None,
+                         factor_source_status=_factor_source_status_map(factor_lanes))
     publish_market_json(
         market_factors, market_quarterly, str(docs_data_dir),
         qed_benchmarks=QED_NEM_SPREAD_AUD_MWH,
     )
     if not args.no_processed_cache_snapshot:
         publish_processed_cache(data_dir, docs_data_dir)
-    logger.info(f"Done. Wrote index + {count} generator files.")
+
+    # Step 5: Machine-readable run-status manifest for the operator channel.
+    # Written only when the publish actually happened (any guard failure above
+    # raised and aborted the run before this point). Committed with the rest of
+    # docs/data on the NAS; the Mac-side staleness check surfaces degraded or
+    # errored lanes as alerts.
+    all_lanes = factor_lanes + [market_lane]
+    manifest = build_manifest(
+        {lane.source: lane for lane in all_lanes if lane is not None},
+        mode="full_refresh" if args.full_refresh else "incremental",
+        months_back=None if args.full_refresh else args.months_back,
+        guards={"monthly_freshness": "pass", "daily_freshness": "pass"},
+        outputs={
+            "generator_files": int(count),
+            "processed_cache_snapshot": not args.no_processed_cache_snapshot,
+        },
+        started_utc=_run_started_utc,
+    )
+    write_run_manifest(manifest, docs_data_dir)
+    logger.info("Done. Wrote index + %d generator files.", count)
 
 
 if __name__ == "__main__":

@@ -225,6 +225,9 @@ See `deploy/README.md` for runner setup details.
 The daily lane enforces systematic quality gates — a failure stops the run and alerts rather than publishing suspect data:
 
 - **Freshness guards**: the pipeline hard-fails if the latest monthly aggregate is older than 75 days or the latest daily data older than 60 days; a Mac-side alert (via autopull) flags staleness
+- **Optional-source retention (S3-08)**: FCAS/offer factor lanes are optional — when one fails or delivers nothing new, the pipeline retains the last-known-good factor history from its cache (blocks keep their as-of month and are stamped `source_status: "retained_stale"` in the published generator JSONs) instead of erasing populated panels from an otherwise-successful run
+- **Factor-block continuity guard**: publication is rejected outright when a populated `fcas_participation`/`offers`/`offer_curve` block would vanish without a documented reason (a cleanly-run source may attest a unit genuinely has no offers; a degraded/errored/skipped lane may not)
+- **Run-status manifest**: every publish writes `docs/data/run_status.json` — a machine-readable record of each source lane's status/coverage/as-of/error plus the freshness-guard result. The Mac-side autopull staleness check reads it, so a degraded optional source alerts through the existing operator-status channel instead of hiding behind fresh core data
 - **Fuel-aware daily capacity-factor bounds**: daily CF is checked against hard bounds — hydro 1.25, non-hydro 1.10 — a breach fails the run
 - **Monthly CF > 1.0 audit**: `src/audit_cf.py` lists units needing investigation; the current list covers TAS/NSW hydro peakers KAREEYA1–4, POAT110 and FISHER, plus gas units BW02, OSB-AG and QPS3 under review
 - **BARRON correction**: BARRON-1/2 capacity corrected 21 → 33.2 MW with a retroactive history fix (see below)

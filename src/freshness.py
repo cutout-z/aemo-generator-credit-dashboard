@@ -87,12 +87,23 @@ def mac_side_staleness_check(
     serves). Returns a list of alert strings — empty when fresh. Intended for
     the aemo-dashboard-autopull hook; alerts print so the cron surface shows
     them.
+
+    S3-08: also consumes the committed machine-readable run manifest
+    (``docs/data/run_status.json``, written by the pipeline each publish) —
+    any optional source lane that ended ``degraded``/``error`` adds an AEMO
+    ALERT, so a source failure can never hide behind core data that still
+    looks fresh. The manifest is a sibling of the processed-cache dir.
     """
     from pathlib import Path
+
+    from .run_status import RUN_STATUS_FILENAME, manifest_alerts
 
     alerts: list[str] = []
     cache = Path(processed_cache_dir)
     now = now or datetime.now()
+
+    manifest_path = cache.parent / RUN_STATUS_FILENAME
+    alerts.extend(manifest_alerts(manifest_path))
 
     monthly_path = cache / "monthly_aggregates.feather"
     daily_path = cache / "daily_aggregates.feather"
