@@ -31,6 +31,64 @@ _CACHE_FILE = "mlf_tracker_summary.csv"
 _FY_COL = re.compile(r"^FY(\d{2})-(\d{2})$")
 _DRAFT_COL = re.compile(r"^FY(\d{2})-(\d{2}) \(Draft\)$")
 
+# Contract for the long-form MLF history frame every consumer relies on
+# (aggregate.build_mlf_lookup, generate_json mlf blocks).
+MLF_HISTORY_COLUMNS = ("DUID", "fy_label", "fy_start_year", "mlf")
+# Documented plausible MLF envelope. Genuine AEMO MLFs sit ~0.75-1.30; values
+# outside 0.5-1.5 are sentinels/units errors (e.g. -999, 9.99) that must never
+# reach a revenue lookup. This is the same band the output tests enforce.
+MLF_PLAUSIBLE_RANGE = (0.5, 1.5)
+
+
+def validate_mlf_history(mlf_history: pd.DataFrame) -> pd.DataFrame:
+    """Validate the long-form MLF history frame; raise ValueError when unusable.
+
+    The frame is the module's own melt output, so the schema contract is exact
+    (the four long columns, nothing else). Checks:
+      - exact long schema ``MLF_HISTORY_COLUMNS`` (a wide FY-per-column frame —
+        the legacy download_mlf-era shape — fails here),
+      - non-empty with at least one DUID and one FY,
+      - ``mlf`` coercible to float, finite, and inside ``MLF_PLAUSIBLE_RANGE``
+        (catches -999-style sentinels before they reach aggregation),
+      - ``fy_start_year``/``DUID``/``fy_label`` fully populated.
+
+    Returns the frame unchanged on success.
+    """
+    if mlf_history is None or not isinstance(mlf_history, pd.DataFrame):
+        raise ValueError("MLF history is not a DataFrame")
+    cols = set(mlf_history.columns)
+    if cols != set(MLF_HISTORY_COLUMNS):
+        raise ValueError(
+            "MLF history schema mismatch: expected columns "
+            f"{list(MLF_HISTORY_COLUMNS)}, got {list(mlf_history.columns)}"
+        )
+    if mlf_history.empty:
+        raise ValueError("MLF history frame is empty")
+    if mlf_history["DUID"].isna().any() or (mlf_history["DUID"].astype(str).str.strip() == "").any():
+        raise ValueError("MLF history contains empty DUIDs")
+    if mlf_history["fy_label"].isna().any():
+        raise ValueError("MLF history contains empty fy_label values")
+    if mlf_history["fy_start_year"].isna().any():
+        raise ValueError("MLF history contains empty fy_start_year values")
+
+    lo, hi = MLF_PLAUSIBLE_RANGE
+    coerced = pd.to_numeric(mlf_history["mlf"], errors="coerce")
+    if coerced.isna().any():
+        bad = mlf_history.loc[coerced.isna(), ["DUID", "fy_label", "mlf"]].head(5)
+        raise ValueError(
+            f"MLF history contains non-numeric mlf values (sentinel?): "
+            f"{bad.to_dict('records')}"
+        )
+    out_of_range = coerced[(coerced < lo) | (coerced > hi)]
+    if not out_of_range.empty:
+        bad = mlf_history.loc[out_of_range.index, ["DUID", "fy_label", "mlf"]].head(5)
+        raise ValueError(
+            f"MLF values outside the plausible range {lo}-{hi} "
+            f"(sentinel/units error — never use as a factor): "
+            f"{bad.to_dict('records')}"
+        )
+    return mlf_history
+
 
 def fetch_mlf_data(
     cache_dir: str,
@@ -41,9 +99,16 @@ def fetch_mlf_data(
     Returns:
         mlf_history   — DataFrame [DUID, fy_label, fy_start_year, mlf], long format.
                         One row per DUID per FY, covering FY15-16 to current final FY.
+                        Validated by :func:`validate_mlf_history` (schema, sentinels,
+                        plausible range) before being returned.
         draft_mlfs    — dict {DUID: float} for the next FY's draft, or None if not yet published.
         draft_fy_label — e.g. "FY27-28", or None.
         cp_map        — dict {DUID: CONNECTIONPOINTID} for constraint aggregation.
+
+    Raises:
+        ValueError: the melted history frame fails schema/sentinel/range checks
+            (e.g. a -999 sentinel in an FY column).
+        RuntimeError: the tracker summary carries no final FY columns.
     """
     cache_path = Path(cache_dir) / _CACHE_FILE
 
@@ -90,6 +155,12 @@ def fetch_mlf_data(
     final_fy_cols = [c for c in summary.columns if _FY_COL.match(c)]
     draft_fy_cols = [c for c in summary.columns if _DRAFT_COL.match(c)]
 
+    if not final_fy_cols:
+        raise RuntimeError(
+            "MLF Tracker summary has no final FY columns — refusing to return "
+            "an empty MLF frame. Columns: " + ", ".join(map(str, summary.columns))
+        )
+
     # ── MLF history: melt wide → long ────────────────────────────────────────
     melted = (
         summary[["DUID"] + final_fy_cols]
@@ -106,6 +177,9 @@ def fetch_mlf_data(
         f"MLF history: {len(melted)} DUID×FY records across "
         f"{melted['DUID'].nunique()} DUIDs, {melted['fy_label'].nunique()} FYs"
     )
+
+    # ── History-frame validation (schema / sentinels / plausible range) ─────
+    validate_mlf_history(melted)
 
     # ── Draft MLFs ────────────────────────────────────────────────────────────
     draft_mlfs: dict[str, float] | None = None

@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from src.aggregate import aggregate_month
 from src.download_intermittent import _summarise_quality
@@ -21,7 +22,11 @@ def test_summarise_quality_counts_elav_good_intervals_only():
     assert "GEN2" in set(summary["DUID"])
 
 
-def test_aggregate_month_publishes_proxy_without_causal_split():
+@pytest.mark.parametrize("good_intervals", [0, 2, 4])
+def test_aggregate_month_proxy_is_quality_independent(good_intervals):
+    """S3-01/S3-10: the curtailment shortfall proxy must NOT depend on SCADA
+    quality summaries — the removed causal grid/mechanical split must never
+    reappear, regardless of how many ELAV intervals are 'Good'."""
     ts = pd.to_datetime(["2026-03-01 00:05:00", "2026-03-01 00:10:00"])
     scada = pd.DataFrame({"SETTLEMENTDATE": ts, "DUID": ["GEN1", "GEN1"], "SCADAVALUE": [5.0, 5.0]})
     prices = pd.DataFrame({"SETTLEMENTDATE": ts, "REGIONID": ["NSW1", "NSW1"], "RRP": [100.0, 100.0]})
@@ -34,15 +39,17 @@ def test_aggregate_month_publishes_proxy_without_causal_split():
             "FUEL_CATEGORY": ["Solar"],
         }
     )
-    intermittent = pd.DataFrame({"DUID": ["GEN1"], "total_intervals": [4], "good_intervals": [3]})
+    intermittent = pd.DataFrame(
+        {"DUID": ["GEN1"], "total_intervals": [4], "good_intervals": [good_intervals]}
+    )
 
     result = aggregate_month(scada, prices, dispatchload, generators, {}, 2026, 3, intermittent)
     row = result.iloc[0]
 
-    # S3-01: total shortfall proxy still published; the quality-flag
-    # proportional split (which locked in a causal grid/mechanical
-    # inference) must not appear even when quality summaries are supplied.
+    # Shortfall proxy is 1 - SCADA/AVAILABILITY = 0.5 regardless of quality.
     assert row["curtailment_pct"] == 0.5
+    # The causal split must not appear even when quality summaries are supplied
+    # (and quality would previously have steered the grid/mechanical shares).
     assert "grid_curtailment_pct" not in result.columns
     assert "mechanical_curtailment_pct" not in result.columns
 
