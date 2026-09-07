@@ -1130,6 +1130,35 @@ function fmtMonthLong(label) {
     return label;
 }
 
+// S3-03: human-readable window label for constraint observations, e.g.
+// "Mar 2025 – Feb 2026". Empty string when no month axis exists.
+function constraintWindowLabel(data) {
+    const months = data && data.constraints && data.constraints.heatmap && data.constraints.heatmap.months
+        ? data.constraints.heatmap.months
+        : (data && data.monthly && data.monthly.months ? data.monthly.months : null);
+    if (months && months.length > 0) {
+        return fmtMonth(months[0]) + ' \u2013 ' + fmtMonth(months[months.length - 1]);
+    }
+    return '';
+}
+
+// S3-03: own-unit constraint matching requires explicit member DUIDs. AEMO
+// constraint IDs are uppercase; station docs carry a `duids` member list and
+// their `duid` is null — an empty/absent DUID must never match (the empty
+// string is a substring of every ID). Shared by the constraint summary box,
+// the chart classification, and the CSV export so all three agree.
+function constraintMemberDuids(data) {
+    if (Array.isArray(data && data.duids) && data.duids.length) {
+        return data.duids.map(d => String(d).toUpperCase());
+    }
+    return data && data.duid ? [String(data.duid).toUpperCase()] : [];
+}
+
+function constraintReferencesOwnUnit(data, id) {
+    const idUpper = String(id).toUpperCase();
+    return constraintMemberDuids(data).some(m => idUpper.includes(m));
+}
+
 // Inject (or update) a period label span next to the chart panel's <h3> title
 function setPeriodLabel(chartId, months) {
     const chartEl = document.getElementById(chartId);
@@ -1764,12 +1793,15 @@ function renderCharts(data) {
         // Technical labels on the axis (AEMO constraint IDs, e.g. N>XX_XXXXXX);
         // human-readable classification + description live in the hover only.
         const constraintLabel = (c) => c.id;
-        const duid = data.duid || '';
+
+        // S3-03: own-unit matching via shared member-list helpers (see
+        // constraintMemberDuids above) — never an empty-string substring match.
+        const referencesOwnUnit = (id) => constraintReferencesOwnUnit(data, id);
 
         // Credit-relevant summary: own-unit dispatch limits first, then system context
         const summaryBox = document.getElementById('constraintSummaryBox');
         if (summaryBox) {
-            const own = tc.filter(c => c.id.indexOf(duid) !== -1);
+            const own = tc.filter(c => referencesOwnUnit(c.id));
             const ownHours = own.reduce((s, c) => s + c.total_hours, 0);
             let caps = [];
             own.forEach(c => {
@@ -1781,11 +1813,17 @@ function renderCharts(data) {
             const cap = caps.length ? Math.max(...caps) : null;
             let html = '';
             if (cap != null && data.capacity_mw && cap < data.capacity_mw) {
-                html = '<b>Commissioning-limited:</b> this unit\u2019s own hold-point constraints cap output near \u00b1' + cap +
-                    ' MW (' + ownHours.toFixed(1) + 'h bound) vs ' + data.capacity_mw + ' MW nameplate. Full-nameplate revenue is not yet reachable \u2014 near-term revenue views should be scaled accordingly.';
+                // Historical observation, dated by the constraint window — not a
+                // prediction: the hold-point cap bound output during the reported
+                // months. Commissioning status may have changed since.
+                html = '<b>Historical binding exposure (through ' + (constraintWindowLabel(data) || 'reported window') + '):</b> ' +
+                    'this unit\u2019s own hold-point constraints bound output near \u00b1' + cap +
+                    ' MW (' + ownHours.toFixed(1) + 'h bound) vs ' + data.capacity_mw + ' MW nameplate during the reported window. ' +
+                    'Full-nameplate output was not reachable in those months.';
             } else if (ownHours > 0) {
-                html = '<b>Own-unit constraints:</b> ' + own.length + ' constraint' + (own.length > 1 ? 's' : '') +
-                    ' reference this unit directly (' + ownHours.toFixed(1) + 'h bound), including commissioning/non-conformance limits.';
+                html = '<b>Own-unit constraints (through ' + (constraintWindowLabel(data) || 'reported window') + '):</b> ' +
+                    own.length + ' constraint' + (own.length > 1 ? 's' : '') +
+                    ' referenced this unit directly (' + ownHours.toFixed(1) + 'h bound), including commissioning/non-conformance limits.';
             } else {
                 const top = tc[0];
                 const desc = (top.description || '').replace(/^[A-Za-z]+=\s*/, '');
@@ -1801,7 +1839,7 @@ function renderCharts(data) {
         Plotly.newPlot('chartConstraintsBar', [{
             y: tc.map(constraintLabel),
             customdata: tc.map(c => {
-                const cls = c.id.indexOf(duid) !== -1 ? 'Own unit'
+                const cls = referencesOwnUnit(c.id) ? 'Own unit'
                     : c.id.startsWith('C_') ? 'Commissioning'
                     : c.id.startsWith('NC') ? 'Non-conformance'
                     : 'System';
@@ -2270,10 +2308,11 @@ function buildPriceDistributionRows(data) {
 function buildConstraintRows(data) {
     const c = data && data.constraints;
     if (!c || !c.top_constraints) return [];
-    const duid = data.duid || '';
     return c.top_constraints.map(x => ({
         'Constraint ID': x.id,
-        'Classification': x.id.indexOf(duid) !== -1 ? 'Own unit'
+        // S3-03: explicit member-list matching (station docs carry `duids`,
+        // unit docs a single `duid`); absent/empty DUIDs match nothing.
+        'Classification': constraintReferencesOwnUnit(data, x.id) ? 'Own unit'
             : x.id.startsWith('C_') ? 'Commissioning'
             : x.id.startsWith('NC') ? 'Non-conformance' : 'System',
         'Description': x.description || '',
