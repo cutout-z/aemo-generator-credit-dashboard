@@ -1,61 +1,58 @@
-# VPS Frequency-Driven Updates
+# Frequency-Driven Updates — NAS runner (production)
 
-The intended production model is:
+The production model (see the main `README.md` "Deployment" section for the
+authoritative overview):
 
-- Hetzner VPS runs the frequency-driven data pipeline and keeps only the raw cache needed for recent updates.
-- GitHub stores code, publishable `docs/data` outputs, and the compact `docs/data/processed-cache` settled-history snapshot.
-- GitHub Pages deploys after the VPS pushes updated `docs/data`.
-- GitHub Actions remains useful for manual verification, but should not be the primary heavy data runner.
+- The **NAS runner** (QNAP `ai-wif-runner` container) runs the
+  frequency-driven data pipeline and keeps only the raw cache needed for
+  recent updates.
+- GitHub stores code, publishable `docs/data` outputs, and the compact
+  `docs/data/processed-cache` settled-history snapshot.
+- GitHub Pages deploys after the NAS lane pushes updated `docs/data`.
+- GitHub Actions remains useful for manual verification, but is not the
+  primary heavy data runner.
 
 ## Update Lanes
 
-| Lane | Timer | Pipeline args | Purpose |
-| --- | --- | --- | --- |
-| Daily market data | `aemo-generator-credit-daily.timer` | `--months-back 2 --refresh-mlf --skip-constraints` | Reprocess recent SCADA, dispatch prices, dispatch load, FCAS, and pick up small MLF tracker changes. |
-| Weekly reference data | `aemo-generator-credit-reference.timer` | `--months-back 2 --refresh-metadata --refresh-mlf --skip-constraints` | Refresh AEMO registration/metadata and MLF tracker without a full 5-year rebuild. |
-| Annual MLF lane | `aemo-generator-credit-mlf.timer` | `--skip-scada --skip-constraints --refresh-mlf` | Force a lightweight MLF refresh around annual final MLF publication without touching SCADA or constraints. |
+QNAP scheduled tasks invoke `nas-job aemo-generator-credit-*`, which runs
+this repo's `deploy/run-vps-update.sh` (the shared entry script) with
+per-lane `PIPELINE_ARGS`:
 
-## VPS Setup Notes
+| Lane | `PIPELINE_ARGS` | Purpose |
+| --- | --- | --- |
+| Daily market data | `--months-back 2 --refresh-mlf --skip-constraints` | Reprocess recent SCADA, dispatch prices, dispatch load, FCAS, and pick up small MLF tracker changes. |
+| Weekly reference data | `--months-back 2 --refresh-metadata --refresh-mlf --skip-constraints` | Refresh AEMO registration/metadata and MLF tracker without a full 5-year rebuild. |
+| Annual MLF lane | `--skip-scada --skip-constraints --refresh-mlf` | Force a lightweight MLF refresh around annual final MLF publication without touching SCADA or constraints. |
 
-The processed-cache snapshot is the durable source of settled history. Routine VPS runs should not need a full raw-history cache: they restore the compact snapshot, reprocess the recent mutable overlap window, verify older months are unchanged, and publish a new snapshot. The current VPS disk is therefore acceptable for normal automation if raw cache is kept bounded. Add a larger volume only if you want the VPS to perform full historical rebuilds or deep raw-source audits locally.
-
-Routine daily/reference lanes deliberately skip constraint history. The current constraint source can trigger large historical raw-cache downloads when `gencondata.feather` is missing, so constraints are treated as settled processed history unless a separate audited constraint-refresh lane is introduced.
-
-Recommended layout:
-
-```text
-/opt/aemo-generator-credit-dashboard      git checkout + virtualenv
-/srv/aemo-generator-credit/data           optional bounded raw/recent cache
-/etc/aemo-generator-credit/*.env          per-lane service settings
-```
-
-The repo's `data/` directory is gitignored. On the VPS it can live on the root disk for normal automation, or be symlinked to a larger volume if you later want local full-history rebuilds:
-
-```bash
-ln -sfn /srv/aemo-generator-credit/data /opt/aemo-generator-credit-dashboard/data
-```
-
-Create `/etc/aemo-generator-credit/daily.env`, `reference.env`, and `mlf.env` from the example files in this directory. The service user needs a repo-scoped deploy key that can push to `cutout-z/aemo-generator-credit-dashboard`.
+The lane registry, cadence windows and report paths live in
+`tools/nas-runner/configs/brain-ops.nas.toml` (the NAS runner tooling). The
+`run-vps-update.sh` name is retained from the retired VPS era for
+compatibility — it is a NAS lane now. Each lane runs the full test suite and
+commits/pushes only when `docs/data` changed.
 
 ## Raw Cache Retention
 
-Routine runs prune raw NEMOSIS files and legacy full intermittent feather caches older than `RAW_CACHE_RETENTION_DAYS` after validation. The default is 120 days, which is deliberately wider than the normal 2-month mutable window. The compact `docs/data/processed-cache` snapshot is never pruned by this script.
+Routine runs prune raw NEMOSIS files and legacy full intermittent feather
+caches older than `RAW_CACHE_RETENTION_DAYS` after validation. The default is
+120 days, which is deliberately wider than the normal 2-month mutable window.
+The compact `docs/data/processed-cache` snapshot is never pruned by this
+script.
 
+---
 
-## Install Timers
+## Historical: Hetzner VPS + systemd timers (retired)
 
-```bash
-sudo cp deploy/aemo-generator-credit@.service /etc/systemd/system/
-sudo cp deploy/aemo-generator-credit-*.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now aemo-generator-credit-daily.timer
-sudo systemctl enable --now aemo-generator-credit-reference.timer
-sudo systemctl enable --now aemo-generator-credit-mlf.timer
-```
+Before the NAS migration (2026-05) this project ran on a Hetzner VPS with
+systemd timers and a `/opt/aemo-generator-credit-dashboard` checkout. That
+setup is **historical** — do not reinstall it:
 
-Run once manually:
-
-```bash
-sudo systemctl start aemo-generator-credit@daily.service
-journalctl -u aemo-generator-credit@daily.service -f
-```
+- timers: `aemo-generator-credit-daily.timer`, `aemo-generator-credit-reference.timer`,
+  `aemo-generator-credit-mlf.timer`, plus the `aemo-generator-credit@.service`
+  template;
+- layout: `/opt/aemo-generator-credit-dashboard` (checkout + virtualenv),
+  `/srv/aemo-generator-credit/data` (optional bounded raw cache),
+  `/etc/aemo-generator-credit/*.env` (per-lane settings); `data/` was
+  gitignored and symlinked from `/srv` when a larger volume was wanted;
+- the `.service`/`.timer` unit files and `env.*.example` files remain in
+  `deploy/` for reference only. The QNAP scheduled tasks are the live
+  scheduler.
