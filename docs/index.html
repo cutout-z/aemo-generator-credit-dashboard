@@ -735,7 +735,8 @@
                 <h3>Spot Price Exposure</h3>
                 <div class="chart-tooltip">
                     <div class="tooltip-title">Methodology</div>
-                    Distribution of generation volume across spot price buckets ($/MWh). Shows what proportion of energy was dispatched during negative, low, moderate, or high price periods.
+                    <div class="tooltip-formula">Bin share = Σ bin energy (MWh) / Σ generation (MWh) over all months with output</div>
+                    Distribution of generation volume across spot price buckets ($/MWh). Shows what proportion of energy was dispatched during negative, low, moderate, or high price periods. Shares are generation-weighted across months: zero-output months carry no weight, and the histogram is omitted when the whole window has no output.
                     <div class="tooltip-caveat">High exposure to &lt;$0 indicates revenue erosion risk without a PPA floor.</div>
                 </div>
             </div>

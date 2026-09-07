@@ -53,7 +53,13 @@ def test_station_aggregation_includes_mechanical_and_constraints(tmp_path):
     with open(tmp_path / "generators" / "station_Two_Unit_Wind_Farm.json") as f:
         station = json.load(f)
 
-    assert station["monthly"]["curtailment_pct"] == [0.35]
+    assert station["monthly"]["curtailment_pct"] == [0.36]
+    # S3-04: station curtailment is the ratio of summed eligible energy, not a
+    # capacity-weighted mean of unit percentages. This legacy fixture (no
+    # curtailment_potential_mwh columns) recovers potential as
+    # generation/(1 − pct): GEN_A 1000/(1−0.2)=1250, GEN_B 3000/(1−0.4)=5000 →
+    # 1 − (1000+3000)/(1250+5000) = 0.36. The old capacity-weighted mean gave
+    # (0.2·100 + 0.4·300)/400 = 0.35.
     # S3-01: proxy only — no causal split columns; version travels with the metric
     assert station["monthly"]["curtailment_metric_version"] == "2.0-proxy"
     assert "grid_curtailment_pct" not in station["monthly"]

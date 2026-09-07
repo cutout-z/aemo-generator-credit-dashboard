@@ -7,6 +7,7 @@ import logging
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from . import config
@@ -232,6 +233,111 @@ def _sanitize(obj):
     return obj
 
 
+def _curtailment_energy_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Resolve eligible (actual, potential) MWh for monthly aggregate rows.
+
+    S3-04: station/FY curtailment rollups must sum numerators and denominators
+    (eligible actual / availability potential energy), not average monthly
+    percentages — a fully-curtailed month has zero actual generation, so
+    generation-weighting gave it no weight, and nameplate capacity is not the
+    available resource in a given month.
+
+    Rows carrying the v3 aggregate columns (curtailment_actual_mwh /
+    curtailment_potential_mwh) use them directly. Legacy rows (cached before
+    S3-04 columns exist — normal while NAS runs are incremental) recover
+    potential as generation/(1 − pct), exact when availability coverage is
+    complete. A fully-curtailed legacy month (pct == 1, no generation) has no
+    derivable potential and contributes nothing to either sum; it is still
+    counted in months_covered by callers.
+
+    Returns a DataFrame indexed like df with two float columns:
+    _potential_mwh and _eligible_actual_mwh (NaN where not derivable).
+    """
+    out = pd.DataFrame(index=df.index)
+    out["_potential_mwh"] = np.nan
+    out["_eligible_actual_mwh"] = np.nan
+    pct = df["curtailment_pct"]
+
+    has_new = "curtailment_potential_mwh" in df.columns
+    if has_new:
+        pot = df["curtailment_potential_mwh"]
+        ok = pot.notna() & (pot > 0) & pct.notna()
+        out.loc[ok, "_potential_mwh"] = pot[ok]
+        if "curtailment_actual_mwh" in df.columns:
+            act = df["curtailment_actual_mwh"]
+            out.loc[ok, "_eligible_actual_mwh"] = act[ok].fillna(0.0)
+        else:
+            out.loc[ok, "_eligible_actual_mwh"] = pot[ok] * (1.0 - pct[ok])
+
+    # Legacy rows: recover potential from generation & the proxy.
+    gen = df["generation_mwh"]
+    legacy_ok = (
+        out["_potential_mwh"].isna()
+        & pct.notna()
+        & (pct < 1.0)
+        & gen.notna()
+        & (gen > 0)
+    )
+    if legacy_ok.any():
+        out.loc[legacy_ok, "_potential_mwh"] = gen[legacy_ok] / (1.0 - pct[legacy_ok])
+        out.loc[legacy_ok, "_eligible_actual_mwh"] = gen[legacy_ok]
+    return out
+
+
+def _aggregate_price_distribution(monthly: pd.DataFrame) -> dict | None:
+    """Generation-weighted spot-price distribution across a unit's months.
+
+    S3-04: the previous equal mean over monthly histograms let zero-generation
+    months dilute every bin (RUBICON's published histogram summed to 41.55%)
+    and gave low-output months the same weight as high-output ones (CGBESS01's
+    negative-price exposure was 29.94% vs 7.52% once correctly weighted).
+
+    Per-bin energy is the first-class field: when the monthly rows carry the
+    v3 price_mwh_* columns the totals are exact sums of those; legacy rows
+    contribute generation × share (exact when price coverage is complete).
+    Zero-generation months contribute nothing automatically. Returns None
+    (unknown) when the whole window has no priced generation.
+    """
+    if monthly is None or monthly.empty or "generation_mwh" not in monthly.columns:
+        return None
+    pairs = [
+        (lab, f"price_dist_{lab}", f"price_mwh_{lab}")
+        for lab in config.PRICE_BIN_LABELS
+        if f"price_dist_{lab}" in monthly.columns
+    ]
+    if not pairs:
+        return None
+
+    gen = monthly["generation_mwh"].fillna(0.0)
+    has_mwh = all(mwh_col in monthly.columns for _, _, mwh_col in pairs)
+    share_frame = monthly[[d for _, d, _ in pairs]].fillna(0.0)
+
+    if has_mwh:
+        mwh_frame = monthly[[m for _, _, m in pairs]].fillna(0.0)
+        bin_tot = mwh_frame.sum(axis=0)
+        # Legacy rows within a mixed frame (columns exist but row is NaN
+        # pre-S3-04) fall back to share × generation.
+        row_new = monthly[[m for _, _, m in pairs]].notna().any(axis=1)
+        leg = ~row_new
+        if leg.any():
+            eligible = leg & (gen > 0) & (share_frame.sum(axis=1) > 0)
+            leg_energy = share_frame.mul(gen.where(eligible, 0.0), axis=0)
+            leg_energy.columns = [m for _, _, m in pairs]  # re-label to mwh names
+            bin_tot = bin_tot + leg_energy.sum(axis=0)
+    else:
+        eligible = (gen > 0) & (share_frame.sum(axis=1) > 0)
+        bin_tot = share_frame.mul(gen.where(eligible, 0.0), axis=0).sum(axis=0)
+
+    total = float(bin_tot.sum())
+    if not math.isfinite(total) or total <= 0:
+        return None
+    return {
+        "bins": [lab for lab, _, _ in pairs],
+        "generation_share": [round(float(v) / total, 4) for v in bin_tot],
+        "mwh": [round(float(v), 1) for v in bin_tot],
+    }
+
+
 def write_curtailment_by_fy(
     monthly_aggregates: pd.DataFrame,
     output_dir: str | None = None,
@@ -239,8 +345,12 @@ def write_curtailment_by_fy(
     """Publish consolidated per-DUID per-FY curtailment to docs/data/curtailment_by_fy.csv.
 
     Consumed by the renewable generator dashboard, which needs FY-aggregated
-    curtailment for its cross-sectional table. Aggregation is generation-weighted
-    across months within each FY so months with more production carry more weight.
+    curtailment for its cross-sectional table. S3-04: each FY row is the ratio
+    of summed eligible energy — 1 − Σ eligible actual MWh / Σ potential MWh
+    across that FY's months (the same actual/potential pair behind each
+    monthly proxy, see _curtailment_energy_columns). Averaging monthly
+    percentages by generation hid exactly the worst months (a fully curtailed
+    month has no generation to carry its weight).
     """
     out_dir = Path(output_dir or config.DOCS_DATA_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -261,18 +371,17 @@ def write_curtailment_by_fy(
     months = df["month"].str.split("-", expand=True).astype(int)
     df["fy_start"] = months[0].where(months[1] >= 7, months[0] - 1)
 
-    def _weighted(group: pd.DataFrame, col: str) -> float | None:
-        valid = group.dropna(subset=[col])
-        total_gen = valid["generation_mwh"].sum()
-        if valid.empty or total_gen <= 0:
-            return None
-        return float((valid[col] * valid["generation_mwh"]).sum() / total_gen)
+    energy = _curtailment_energy_columns(df)
+    df["_potential_mwh"] = energy["_potential_mwh"]
+    df["_eligible_actual_mwh"] = energy["_eligible_actual_mwh"]
 
     rows = []
     for (duid, fy_start), group in df.groupby(["duid", "fy_start"]):
-        curt = _weighted(group, "curtailment_pct")
-        if curt is None:
+        pot_sum = float(group["_potential_mwh"].sum())
+        if not math.isfinite(pot_sum) or pot_sum <= 0:
             continue
+        act_sum = float(group["_eligible_actual_mwh"].sum())
+        curt = max(0.0, 1.0 - act_sum / pot_sum)
         # S3-01: metric_version travels with the CSV so the downstream
         # consumer (AEMO Renewable Generator Dashboard) can tell which
         # methodology produced each row. grid_curtailment_pct is no longer
@@ -287,6 +396,16 @@ def write_curtailment_by_fy(
             "months_covered": int(len(group)),
         })
 
+    if not rows:
+        # Nothing derivable in this window (e.g. only legacy fully-curtailed
+        # months with no recoverable potential) → publish an empty file, not a
+        # crash and not a stale last-good one (unknown ≠ previous value).
+        logger.warning("No derivable curtailment energy — writing empty curtailment_by_fy.csv")
+        pd.DataFrame(columns=[
+            "duid", "fy_start", "fy_label", "curtailment_pct",
+            "metric_version", "generation_mwh", "months_covered",
+        ]).to_csv(out_path, index=False)
+        return out_path
     result = pd.DataFrame(rows).sort_values(["duid", "fy_start"])
     result.to_csv(out_path, index=False)
     logger.info(f"Wrote curtailment_by_fy.csv: {len(result)} DUID×FY rows")
@@ -353,19 +472,11 @@ def generate_all(
                     "values": mlf_rows["mlf"].round(6).tolist(),
                 }
 
-        # Compute aggregate price distribution from monthly data
-        price_dist = None
-        if monthly is not None:
-            dist_cols = [c for c in monthly.columns if c.startswith("price_dist_")]
-            if dist_cols:
-                # Average across months (weighted by generation would be better but this is simpler)
-                avg_dist = monthly[dist_cols].mean()
-                total = avg_dist.sum()
-                if total > 0:
-                    price_dist = {
-                        "bins": config.PRICE_BIN_LABELS,
-                        "generation_share": [round(float(avg_dist[c]), 4) for c in dist_cols],
-                    }
+        # Compute aggregate price distribution from monthly data.
+        # S3-04: generation-weighted across months with output; zero-generation
+        # months cannot dilute the histogram, and the whole window being empty
+        # yields unknown (block omitted). Per-bin MWh travels alongside.
+        price_dist = _aggregate_price_distribution(monthly) if monthly is not None else None
 
         # Draft MLF for this DUID
         d_mlf = draft_mlfs.get(duid) if draft_mlfs else None
@@ -650,6 +761,13 @@ def _aggregate_station_monthly(
     has_price = "captured_price" in station_monthly.columns
 
     def weighted_pct(month_data: pd.DataFrame, col: str) -> float | None:
+        """Capacity-weighted mean of a per-unit percentage (nameplate weights).
+
+        S3-04: no longer used for curtailment — station curtailment sums the
+        member units' eligible actual/potential energy instead (nameplate is
+        not the available resource in a given month). Kept for the economic
+        curtailment estimate, which has no first-class energy fields.
+        """
         valid = month_data.dropna(subset=[col])
         if valid.empty:
             return None
@@ -661,6 +779,17 @@ def _aggregate_station_monthly(
         else:
             value = valid[col].mean()
         return round(float(value), 4)
+
+    def station_curtailment(month_data: pd.DataFrame) -> float | None:
+        """S3-04 station-month curtailment = 1 − Σ eligible actual / Σ potential
+        across the member units present that month (per-unit availability
+        energy denominators, never nameplate or actual-generation weights)."""
+        energy = _curtailment_energy_columns(month_data)
+        pot_sum = float(energy["_potential_mwh"].sum())
+        if not math.isfinite(pot_sum) or pot_sum <= 0:
+            return None
+        act_sum = float(energy["_eligible_actual_mwh"].sum())
+        return round(max(0.0, 1.0 - act_sum / pot_sum), 4)
 
     for m in months:
         month_data = grouped.get_group(m)
@@ -677,7 +806,7 @@ def _aggregate_station_monthly(
             cap_factor.append(None)
 
         if has_curtailment:
-            curtailment.append(weighted_pct(month_data, "curtailment_pct"))
+            curtailment.append(station_curtailment(month_data))
 
         if has_econ_curt:
             econ_curtailment.append(weighted_pct(month_data, "econ_curtailment_pct"))

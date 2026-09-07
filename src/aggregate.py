@@ -47,7 +47,10 @@ def aggregate_month(
         DataFrame with one row per DUID that had SCADA data this month.
         Columns: duid, month, generation_mwh, revenue_aud, capacity_factor,
                  curtailment_pct, captured_price, avg_rrp, price_capture_ratio,
-                 price_dist_* columns
+                 price_dist_* columns, and (S3-04) the first-class energy
+                 denominators: curtailment_actual_mwh / curtailment_potential_mwh
+                 (eligible actual and availability energy behind the shortfall
+                 proxy) and price_mwh_* per-bin energy behind each share.
     """
     if scada.empty:
         return pd.DataFrame()
@@ -114,11 +117,19 @@ def aggregate_month(
         # telemetry agreement, not why output was limited.
         curtailment = None
         econ_curtailment = None
+        curt_actual_mwh = None
+        curt_potential_mwh = None
         if fuel in config.CURTAILMENT_FUEL_TYPES:
             avail_valid = group.dropna(subset=["AVAILABILITY"])
             if not avail_valid.empty:
                 total_actual = avail_valid["SCADAVALUE"].clip(lower=0).sum()
                 total_avail = avail_valid["AVAILABILITY"].clip(lower=0).sum()
+                # S3-04: keep the eligible actual/potential energy as
+                # first-class fields so station/FY rollups can sum numerators
+                # and denominators instead of averaging monthly percentages
+                # (nameplate and actual generation are not the right weights).
+                curt_actual_mwh = round(float(total_actual) / 12.0, 1)
+                curt_potential_mwh = round(float(total_avail) / 12.0, 1)
                 if total_avail > 0:
                     curtailment = max(0.0, 1.0 - total_actual / total_avail)
 
@@ -158,14 +169,20 @@ def aggregate_month(
             "revenue_aud": round(revenue, 0),
             "capacity_factor": round(cap_factor, 4) if cap_factor is not None else None,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
+            "curtailment_actual_mwh": curt_actual_mwh,
+            "curtailment_potential_mwh": curt_potential_mwh,
             "econ_curtailment_pct": round(econ_curtailment, 4) if econ_curtailment is not None else None,
             "captured_price": round(captured, 2) if captured is not None else None,
             "avg_rrp": round(avg_rrp, 2) if avg_rrp is not None else None,
             "price_capture_ratio": round(pcr, 4) if pcr is not None else None,
         }
-        # Add price distribution
-        for label, share in zip(config.PRICE_BIN_LABELS, dist):
+        # Price distribution: per-month shares AND the per-bin energy behind
+        # them (S3-04 — aggregated windows must be derivable from summed MWh,
+        # not from an average of monthly histograms).
+        dist, bin_mwh = _price_distribution(group_valid, config.PRICE_BINS, config.PRICE_BIN_LABELS)
+        for label, share, mwh_bin in zip(config.PRICE_BIN_LABELS, dist, bin_mwh):
             row[f"price_dist_{label}"] = round(share, 4)
+            row[f"price_mwh_{label}"] = round(mwh_bin, 1)
 
         rows.append(row)
 
@@ -178,25 +195,27 @@ def _price_distribution(
     df: pd.DataFrame,
     bins: list[float],
     labels: list[str],
-) -> list[float]:
+) -> tuple[list[float], list[float]]:
     """Compute generation-weighted price distribution across bins.
 
-    Returns list of shares (summing to ~1.0) for each bin.
+    Returns (shares, bin_mwh) — per-bin share of priced generation and the
+    per-bin 5-minute energy in MWh. Shares sum to ~1.0 for a month with any
+    priced generation; both are all-zero when there is no priced output.
     """
+    n = len(labels)
     if df.empty or "RRP" not in df.columns:
-        return [0.0] * len(labels)
+        return [0.0] * n, [0.0] * n
 
     gen = df["SCADAVALUE"].clip(lower=0)
     total = gen.sum()
     if total == 0:
-        return [0.0] * len(labels)
+        return [0.0] * n, [0.0] * n
 
     bin_indices = np.digitize(df["RRP"].values, bins[1:-1])  # bins without -inf/inf
-    shares = []
-    for i in range(len(labels)):
-        mask = bin_indices == i
-        shares.append(float(gen[mask].sum() / total))
-    return shares
+    bin_mw = [float(gen[bin_indices == i].sum()) for i in range(n)]
+    shares = [mw / total for mw in bin_mw]
+    bin_mwh = [mw / 12.0 for mw in bin_mw]  # 5-minute intervals → MWh
+    return shares, bin_mwh
 
 
 def aggregate_month_daily(
