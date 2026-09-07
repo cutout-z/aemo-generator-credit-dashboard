@@ -17,29 +17,29 @@ All figures are OFFER-BASED ESTIMATES: intent expressed to the market, not
 dispatch outcomes. Enablement/settlement remain participant-only.
 
 Cache note: nemosis caches one parquet per (table, month) holding only the
-columns previously requested. The volumes fetch requires BANDAVAIL1-10, so on
-first run it rebuilds the month's parquet "fat" (one-time re-download). The
-FCAS lane reads a subset and never rewrites (rebuild=False), so the fat cache
-persists and both lanes share one download per month.
+columns previously requested. A thin cached parquet (written by an older
+narrow fetch) is healed ONCE by re-downloading it "fat" — the column set is
+inspected from the parquet SCHEMA ONLY (no row decode). See
+src/download_bids.py for the S3-12 single-decode contract: one compiler call
+per table/month serves the FCAS lane, offer-factor lane AND the monthly +
+daily curve builders.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
 import pandas as pd
 
+from .download_bids import fetch_bidperoffer_union
 from .interval_days import interval_calendar_day, interval_month
+from .semantic_publish import write_json_if_facts_changed
 
 logger = logging.getLogger(__name__)
 
 BAND_AVAIL_COLS = [f"BANDAVAIL{i}" for i in range(1, 11)]
 BAND_PRICE_COLS = [f"PRICEBAND{i}" for i in range(1, 11)]
-VOLUME_SELECT = (
-    ["INTERVAL_DATETIME", "DUID", "BIDTYPE", "VERSIONNO"] + BAND_AVAIL_COLS
-)
 PRICE_SELECT = (
     ["SETTLEMENTDATE", "DUID", "BIDTYPE", "OFFERDATE", "VERSIONNO"]
     + BAND_PRICE_COLS
@@ -123,35 +123,41 @@ def fetch_energy_prices(year: int, month: int, cache_dir: str, rebuild: bool = F
     return prices.dropna(subset=BAND_PRICE_COLS, how="all")
 
 
-def fetch_energy_volumes(year: int, month: int, cache_dir: str, rebuild: bool | None = None) -> pd.DataFrame:
-    """Per-interval ENERGY offered volumes per DUID (latest version only).
+def energy_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+    """ENERGY volume rows sliced from a raw BIDPEROFFER_D frame (S3-12).
 
-    rebuild=None: auto-detect a thin cached parquet (no BANDAVAIL columns,
-    written by an older narrow fetch) and rebuild it fat once.
+    Applies the same post-processing as the historical
+    ``fetch_energy_volumes`` / ``_fetch_bid_table`` path — ENERGY-only filter,
+    latest-offer-version dedupe, band numeric coercion — but to the run's ONE
+    decoded frame, so no consumer re-invokes the nemosis compiler for a month
+    the run already fetched.
     """
-    if rebuild is None:
-        parquet = (
-            Path(cache_dir) / "nemosis_cache"
-            / f"PUBLIC_ARCHIVE#BIDPEROFFER_D#FILE01#{year}{month:02d}010000.parquet"
-        )
-        if parquet.exists():
-            try:
-                cached_cols = set(pd.read_parquet(parquet).columns)
-            except Exception:
-                cached_cols = set()
-            rebuild = not set(BAND_AVAIL_COLS).issubset(cached_cols)
-            if rebuild:
-                logger.info(
-                    f"BIDPEROFFER_D {year}-{month:02d}: cached parquet lacks band "
-                    "columns — rebuilding fat (one-time)"
-                )
-        else:
-            rebuild = False
-    volumes = _fetch_bid_table(
-        "BIDPEROFFER_D", year, month, cache_dir, VOLUME_SELECT, rebuild=rebuild
-    )
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    missing = {"DUID", "BIDTYPE"} - set(raw.columns)
+    if missing:
+        logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: missing {sorted(missing)} — skipping")
+        return pd.DataFrame()
+    volumes = raw[raw["BIDTYPE"] == "ENERGY"].copy()
     if volumes.empty:
-        return volumes
+        logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no ENERGY rows")
+        return pd.DataFrame()
+    if "VERSIONNO" in volumes.columns:
+        # Latest offer version wins (rebids); OFFERDATE breaks ties.
+        volumes["VERSIONNO"] = pd.to_numeric(volumes["VERSIONNO"], errors="coerce")
+        sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in volumes.columns else [])
+        volumes = volumes.sort_values(sort_cols).drop_duplicates(
+            subset=["DUID", "INTERVAL_DATETIME"], keep="last"
+        )
+    else:
+        # Monthly BIDPEROFFER_D archive CSVs lack VERSIONNO (daily files have
+        # it). Rows appear in version order, so keep the last row per
+        # (DUID, interval) — same no-guarantee caveat as the FCAS lane.
+        logger.warning(
+            f"BIDPEROFFER_D {year}-{month:02d}: VERSIONNO absent — deduping by file "
+            "order (last row per DUID/interval)"
+        )
+        volumes = volumes.drop_duplicates(subset=["DUID", "INTERVAL_DATETIME"], keep="last")
     for col in BAND_AVAIL_COLS:
         if col not in volumes.columns:
             logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: {col} missing — fat rebuild required")
@@ -159,6 +165,19 @@ def fetch_energy_volumes(year: int, month: int, cache_dir: str, rebuild: bool | 
         volumes[col] = pd.to_numeric(volumes[col], errors="coerce")
     volumes["INTERVAL_DATETIME"] = pd.to_datetime(volumes["INTERVAL_DATETIME"])
     return volumes
+
+
+def fetch_energy_volumes(year: int, month: int, cache_dir: str, rebuild: bool | None = None) -> pd.DataFrame:
+    """Per-interval ENERGY offered volumes per DUID (latest version only).
+
+    S3-12: never a second decode — this slices the ENERGY rows out of the
+    run's single BIDPEROFFER_D union fetch (download_bids).
+
+    rebuild=None: auto-detect a thin cached parquet (missing required
+    columns) from its SCHEMA ONLY and rebuild it fat once.
+    """
+    raw = fetch_bidperoffer_union(year, month, cache_dir, rebuild=rebuild)
+    return energy_volumes_from_raw(raw, year, month)
 
 
 def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.DataFrame:
@@ -451,31 +470,28 @@ def build_offer_curves(
     empty frame means no daily stacks were computable this run.
     """
     frames: list[pd.DataFrame] = []
+    daily_frames: list[pd.DataFrame] = []
     for year, month in months:
         try:
+            # S3-12: fetch each table ONCE for this month; both the monthly
+            # curve and the daily stack derive from the same resident frames
+            # (no second decode — the old per-phase re-fetch is gone).
             prices = fetch_energy_prices(year, month, cache_dir)
             volumes = fetch_energy_volumes(year, month, cache_dir)
-            curves = compute_offer_curves(prices, volumes, f"{year}-{month:02d}")
+            month_label = f"{year}-{month:02d}"
+            curves = compute_offer_curves(prices, volumes, month_label)
             if not curves.empty:
                 frames.append(curves)
                 n = curves["duid"].nunique()
                 logger.info(f"Offer curves {year}-{month:02d}: {n} DUIDs")
+            daily = compute_offer_curves_daily(prices, volumes, month_label)
+            if not daily.empty:
+                daily_frames.append(daily)
         except Exception as e:
             logger.warning(f"Offer curves {year}-{month:02d} failed: {e}")
     monthly = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     logger.info("Computed %d monthly offer-curve rows", len(monthly))
 
-    # Daily stacks: reuse the same fetched frames, no extra downloads
-    daily_frames = []
-    for year, month in months:
-        try:
-            prices = fetch_energy_prices(year, month, cache_dir)
-            volumes = fetch_energy_volumes(year, month, cache_dir)
-            d = compute_offer_curves_daily(prices, volumes, f"{year}-{month:02d}")
-            if not d.empty:
-                daily_frames.append(d)
-        except Exception as e:
-            logger.warning(f"Daily offer curves {year}-{month:02d} failed: {e}")
     daily = pd.concat(daily_frames, ignore_index=True) if daily_frames else pd.DataFrame()
     logger.info("Computed %d daily offer-curve rows", len(daily))
     return monthly, daily
@@ -572,12 +588,20 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
 
 
 def write_offer_curve_files(curves: pd.DataFrame, docs_data_dir: str) -> int:
-    """Write compact per-DUID day-stack JSONs: docs/data/offer_curves/{DUID}.json."""
+    """Write compact per-DUID day-stack JSONs: docs/data/offer_curves/{DUID}.json.
+
+    S3-12 semantic-diff publish gate: each file is written only when its facts
+    (the day stacks) changed — the ``updated`` date stamps data-as-of, not the
+    run attempt, so a no-change run never bumps it and never manufactures a
+    publishable diff. Returns the number of files actually written.
+    """
     if curves is None or curves.empty:
         return 0
     out_dir = Path(docs_data_dir) / "offer_curves"
     out_dir.mkdir(parents=True, exist_ok=True)
     n = 0
+    unchanged = 0
+    stamp = pd.Timestamp.utcnow().strftime("%Y-%m-%d")
     for duid, grp in curves.sort_values(["date", "price"]).groupby("duid"):
         # Sanitize path-hostile characters (some DUIDs contain '/' or '#')
         safe = str(duid).replace("/", "_")
@@ -587,11 +611,16 @@ def write_offer_curve_files(curves: pd.DataFrame, docs_data_dir: str) -> int:
                 "date": date,
                 "stack": [[float(r["price"]), float(r["cum_mw"])] for _, r in dgrp.iterrows()],
             })
-        (out_dir / f"{safe}.json").write_text(json.dumps({
-            "scope": "offer_based_estimate",
-            "updated": pd.Timestamp.utcnow().strftime("%Y-%m-%d"),
-            "days": days,
-        }, separators=(",", ":")))
-        n += 1
-    logger.info(f"Wrote {n} per-DUID offer-curve files to {out_dir}")
+        if write_json_if_facts_changed(
+            out_dir / f"{safe}.json",
+            {"scope": "offer_based_estimate", "updated": stamp, "days": days},
+            stamp_keys=("updated",),
+        ):
+            n += 1
+        else:
+            unchanged += 1
+    logger.info(
+        "Wrote %d per-DUID offer-curve file(s) to %s (%d unchanged — stamp not bumped)",
+        n, out_dir, unchanged,
+    )
     return n

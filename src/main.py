@@ -31,9 +31,20 @@ from .market_factors import (
     build_market_factors, build_quarterly_summary, check_qed_divergence,
     QED_NEM_SPREAD_AUD_MWH,
 )
-from .download_bids import fetch_fcas_bids_month
+from .download_bids import fcas_bids_from_raw, fetch_bidperoffer_union
 from .fcas_factor import compute_fcas_factors
 from .factor_cache import merge_month_rows
+from .offer_curves import (
+    OFFER_CURVES_CACHE,
+    OFFER_CURVES_DAILY_CACHE,
+    OFFER_FACTORS_CACHE,
+    compute_offer_curves,
+    compute_offer_curves_daily,
+    compute_offer_features,
+    energy_volumes_from_raw,
+    fetch_energy_prices,
+    write_offer_curve_files,
+)
 from .freshness import check_monthly_freshness, check_daily_freshness
 from .generate_market_json import publish_market_json
 from .run_status import (
@@ -150,153 +161,267 @@ def _skip_lane_retained(
     return lane.frame
 
 
-def _run_fcas_factor_lane(
-    data_dir: Path,
-    months: list[tuple[int, int]],
+def _finalize_factor_lane(
+    lane: LaneRun,
+    cache_path: Path,
+    frames: list[pd.DataFrame],
+    errors: list[str],
     *,
-    skip: bool,
     full_refresh: bool,
-) -> tuple[pd.DataFrame, LaneRun]:
-    """Per-DUID FCAS participation factors (BIDPEROFFER_D offers), Step 3e."""
-    lane = LaneRun(source="fcas_factors", block="fcas_participation")
-    cache_path = data_dir / "fcas_factors.feather"
-    if skip:
-        return _skip_lane_retained(lane, cache_path, "explicit --skip-fcas-factors"), lane
+    label: str,
+    no_rows_error: str,
+    no_rows_note: str,
+    cold_start_error: str,
+) -> pd.DataFrame:
+    """Persist one lane's fresh per-month facts, or retain the last-known-good.
 
-    lane.attempted_months = len(months)
-    frames: list[pd.DataFrame] = []
-    errors: list[str] = []
-    for year, month in months:
-        month_label = f"{year}-{month:02d}"
-        try:
-            bids = fetch_fcas_bids_month(year, month, str(data_dir), rebuild=full_refresh)
-            if bids is None or bids.empty:
-                continue  # month not published / no rows — not a failure
-            facts = compute_fcas_factors(bids, year, month)
-            if not facts.empty:
-                frames.append(facts)
-        except Exception as e:
-            errors.append(f"{month_label}: {e}")
-            logger.warning("FCAS factor computation failed for %s: %s", month_label, e)
-
+    S3-08 lane semantics shared by the FCAS / offer-factor / offer-curve
+    lanes: ``frames`` = freshly computed per-month fact frames, ``errors`` =
+    per-month failures. With facts, the lane merges them into its cache
+    through the single persistence owner (S3-07 merge_month_rows) and stays
+    ok unless some months failed (then degraded, errors surfaced). Without
+    facts the last-known-good history is retained from the cache (degraded —
+    blocks kept and stamped retained-stale); with neither facts nor cache the
+    lane errors (cold start).
+    """
     if frames:
         new = pd.concat(frames, ignore_index=True)
         lane.months_with_data = int(new["month"].nunique())
-        # S3-07: single persistence owner — merge reads existing history FIRST
-        # and writes once; out-of-window months are preserved.
         merged = merge_month_rows(
-            cache_path, new, full_refresh=full_refresh, label="FCAS factor",
+            cache_path, new, full_refresh=full_refresh, label=label,
         )
         lane.frame = merged
         if errors:
             lane.status = STATUS_DEGRADED
             lane.error = "; ".join(errors)
-        return lane.frame, lane
-
-    # No fresh facts at all → retain the last-known-good history.
+        return merged
     retained = read_last_good(cache_path)
     if not retained.empty:
         lane.retained = True
         lane.frame = retained
         lane.status = STATUS_DEGRADED
-        lane.error = "; ".join(errors) if errors else "no source rows for any attempted month"
+        lane.error = "; ".join(errors) if errors else no_rows_error
         if not errors:
-            lane.note = "source returned no rows (unpublished months?) — last-known-good retained"
-        return lane.frame, lane
+            lane.note = no_rows_note
+        return retained
     lane.status = STATUS_ERROR
     lane.frame = pd.DataFrame()
-    lane.error = "; ".join(errors) if errors else "no source rows and no cache to retain (cold start)"
-    return lane.frame, lane
+    lane.error = "; ".join(errors) if errors else cold_start_error
+    return lane.frame
 
 
-def _run_offer_factor_lane(
+def _run_optional_factor_lanes(
     data_dir: Path,
     months: list[tuple[int, int]],
     *,
-    skip: bool,
+    skip_fcas_factors: bool,
+    skip_offer_factors: bool,
     full_refresh: bool,
-) -> tuple[pd.DataFrame, LaneRun]:
-    """Per-DUID energy offer-curve factors (BIDDAYOFFER/BIDPEROFFER), Step 3e2."""
-    from .offer_curves import OFFER_FACTORS_CACHE, build_offer_factors
+) -> tuple[
+    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame | None,
+    LaneRun, LaneRun, LaneRun,
+]:
+    """Steps 3e/3e2/3e3 — per-DUID optional-source factor facts (S3-12).
 
-    lane = LaneRun(source="offer_factors", block="offers")
-    cache_path = data_dir / OFFER_FACTORS_CACHE
-    if skip:
-        return _skip_lane_retained(lane, cache_path, "explicit --skip-offer-factors"), lane
+    Month-outer single-decode driver: for each (year, month) the run fetches
+    BIDPEROFFER_D and BIDDAYOFFER_D AT MOST ONCE (1+1 nemosis compiler calls
+    per month, down from 4+3 spread across the FCAS lane, the offer-factor
+    lane and the monthly + daily curve builders) and derives every metric from
+    the month's resident frames — FCAS factors (BIDPEROFFER_D FCAS rows),
+    offer factors, monthly offer curves and the bounded daily stacks
+    (BIDDAYOFFER_D prices + BIDPEROFFER_D ENERGY volumes). Frames are released
+    before the next month, so memory stays bounded to one month at a time.
+    A thin cached parquet is healed once from its SCHEMA ONLY (no row decode).
 
-    lane.attempted_months = len(months)
-    try:
-        # S3-07: pure builder returns facts; the caller owns persistence.
-        new = build_offer_factors(months, str(data_dir))
-        if not new.empty:
-            lane.months_with_data = int(new["month"].nunique())
-            merged = merge_month_rows(
-                cache_path, new, full_refresh=full_refresh, label="offer factor",
-            )
-            lane.frame = merged
-            return lane.frame, lane
-    except Exception as e:
-        logger.warning("Offer factor computation failed: %s", e)
-        lane.error = str(e)
+    S3-08 per-lane semantics are preserved: explicit ``--skip-*`` retains the
+    cache; a total source failure retains the last-known-good history
+    (degraded, stamped retained-stale); a partial failure merges the fresh
+    months and degrades with the failures surfaced; a cold-start failure
+    errors. Each lane's facts are persisted by the single owner
+    (merge_month_rows); the returned LaneRuns feed the continuity guard and
+    the run-status manifest.
 
-    retained = read_last_good(cache_path)
-    if not retained.empty:
-        lane.retained = True
-        lane.frame = retained
-        lane.status = STATUS_DEGRADED
-        lane.error = lane.error or "no offer rows for any attempted month"
-        if not lane.error or lane.error.startswith("no offer"):
-            lane.note = "no offer rows (unpublished months?) — last-known-good retained"
-        return lane.frame, lane
-    lane.status = STATUS_ERROR
-    lane.frame = pd.DataFrame()
-    lane.error = lane.error or "no offer rows and no cache to retain (cold start)"
-    return lane.frame, lane
+    Returns ``(fcas_factors, offer_factors, offer_curves, offer_curves_daily,
+    fcas_lane, offer_lane, curve_lane)`` — ``offer_curves_daily`` is None when
+    no daily stacks were computed (skipped lane or failed month), so the
+    caller leaves the published per-DUID day files untouched.
+    """
+    fcas_cache = data_dir / "fcas_factors.feather"
+    offer_cache = data_dir / OFFER_FACTORS_CACHE
+    curve_cache = data_dir / OFFER_CURVES_CACHE
 
+    fcas_lane = LaneRun(source="fcas_factors", block="fcas_participation")
+    offer_lane = LaneRun(source="offer_factors", block="offers")
+    curve_lane = LaneRun(source="offer_curves", block="offer_curve")
 
-def _run_offer_curve_lane(
-    data_dir: Path,
-    months: list[tuple[int, int]],
-    *,
-    skip: bool,
-    full_refresh: bool,
-) -> tuple[pd.DataFrame, pd.DataFrame | None, LaneRun]:
-    """Per-DUID 10-band offer curves (monthly block + bounded daily window), Step 3e3."""
-    from .offer_curves import OFFER_CURVES_CACHE, build_offer_curves
+    fcas_factors = pd.DataFrame()
+    offer_factors = pd.DataFrame()
+    offer_curves = pd.DataFrame()
+    offer_curves_daily: pd.DataFrame | None = None
 
-    lane = LaneRun(source="offer_curves", block="offer_curve")
-    cache_path = data_dir / OFFER_CURVES_CACHE
-    if skip:
-        retained = _skip_lane_retained(lane, cache_path, "explicit --skip-offer-factors")
-        return retained, None, lane
+    if skip_fcas_factors:
+        fcas_factors = _skip_lane_retained(
+            fcas_lane, fcas_cache, "explicit --skip-fcas-factors",
+        )
+    if skip_offer_factors:
+        offer_factors = _skip_lane_retained(
+            offer_lane, offer_cache, "explicit --skip-offer-factors",
+        )
+        offer_curves = _skip_lane_retained(
+            curve_lane, curve_cache, "explicit --skip-offer-factors",
+        )
+    if skip_fcas_factors and skip_offer_factors:
+        return (fcas_factors, offer_factors, offer_curves, None,
+                fcas_lane, offer_lane, curve_lane)
 
-    lane.attempted_months = len(months)
-    try:
-        oc_monthly, oc_daily = build_offer_curves(months, str(data_dir))
-        if oc_monthly is not None and not oc_monthly.empty:
-            lane.months_with_data = int(oc_monthly["month"].nunique())
-            merged = merge_month_rows(
-                cache_path, oc_monthly, full_refresh=full_refresh, label="offer curve",
-            )
-            lane.frame = merged
-            return lane.frame, oc_daily, lane
-    except Exception as e:
-        logger.warning("Offer curve computation failed: %s", e)
-        lane.error = str(e)
+    want_fcas = not skip_fcas_factors
+    want_offer = not skip_offer_factors
+    cache_dir = str(data_dir)
+    # None = auto-heal: inspect the cached parquet's schema and re-download
+    # once when it lacks required columns; True = full-refresh re-download.
+    rebuild = True if full_refresh else None
+    attempted = len(months)
 
-    retained = read_last_good(cache_path)
-    if not retained.empty:
-        lane.retained = True
-        lane.frame = retained
-        lane.status = STATUS_DEGRADED
-        lane.error = lane.error or "no offer-curve rows for any attempted month"
-        if not lane.error or lane.error.startswith("no offer-curve"):
-            lane.note = "no offer-curve rows (unpublished months?) — last-known-good retained"
-        return lane.frame, None, lane
-    lane.status = STATUS_ERROR
-    lane.frame = pd.DataFrame()
-    lane.error = lane.error or "no offer-curve rows and no cache to retain (cold start)"
-    return lane.frame, None, lane
+    fcas_frames: list[pd.DataFrame] = []
+    offer_frames: list[pd.DataFrame] = []
+    curve_frames: list[pd.DataFrame] = []
+    daily_frames: list[pd.DataFrame] = []
+    fcas_errors: list[str] = []
+    offer_errors: list[str] = []
+    curve_errors: list[str] = []
+
+    for year, month in months:
+        month_label = f"{year}-{month:02d}"
+        # ONE BIDPEROFFER_D fetch/decode per month, shared by every consumer.
+        try:
+            raw = fetch_bidperoffer_union(year, month, cache_dir, rebuild=rebuild)
+        except Exception as e:
+            msg = f"{month_label}: {e}"
+            logger.warning("Bid fetch failed for %s: %s", month_label, e)
+            if want_fcas:
+                fcas_errors.append(msg)
+            if want_offer:
+                offer_errors.append(msg)
+                curve_errors.append(msg)
+            continue
+        if raw is None or raw.empty:
+            continue  # unpublished month / no rows — not a lane failure
+
+        if want_fcas:
+            try:
+                bids = fcas_bids_from_raw(raw, year, month)
+                if bids is not None and not bids.empty:
+                    facts = compute_fcas_factors(bids, year, month)
+                    if not facts.empty:
+                        fcas_frames.append(facts)
+            except Exception as e:
+                fcas_errors.append(f"{month_label}: {e}")
+                logger.warning(
+                    "FCAS factor computation failed for %s: %s", month_label, e,
+                )
+
+        if want_offer:
+            # ONE BIDDAYOFFER_D fetch/decode per month; the ENERGY volumes are
+            # sliced from the resident BIDPEROFFER_D frame above — never a
+            # second decode of the volume table. A fetch failure for the
+            # shared source degrades both offer lanes; compute failures after
+            # that degrade only the lane that failed.
+            try:
+                prices = fetch_energy_prices(year, month, cache_dir)
+                if prices is None or prices.empty:
+                    logger.warning(
+                        f"BIDDAYOFFER_D {month_label}: no price rows — "
+                        "offer lanes skip this month"
+                    )
+                    continue
+                volumes = energy_volumes_from_raw(raw, year, month)
+                if volumes is None or volumes.empty:
+                    logger.warning(
+                        f"Offers {month_label}: prices without volumes — "
+                        "offer lanes skip this month"
+                    )
+                    continue
+            except Exception as e:
+                msg = f"{month_label}: {e}"
+                logger.warning("Bid fetch failed for %s: %s", month_label, e)
+                offer_errors.append(msg)
+                curve_errors.append(msg)
+                continue
+            try:  # offer-factor lane
+                feats = compute_offer_features(prices, volumes)
+                if not feats.empty:
+                    logger.info(
+                        f"Offer factors {month_label}: {feats['duid'].nunique()} DUIDs"
+                    )
+                    offer_frames.append(feats)
+            except Exception as e:
+                offer_errors.append(f"{month_label}: {e}")
+                logger.warning(
+                    "Offer factor computation failed for %s: %s", month_label, e,
+                )
+            try:  # offer-curve lane: monthly + daily share the resident frames
+                # in ONE guard — a failed month must not advance the daily
+                # window while its monthly curve could not be derived.
+                curves = compute_offer_curves(prices, volumes, month_label)
+                if not curves.empty:
+                    curve_frames.append(curves)
+                    logger.info(
+                        f"Offer curves {month_label}: {curves['duid'].nunique()} DUIDs"
+                    )
+                daily = compute_offer_curves_daily(prices, volumes, month_label)
+                if not daily.empty:
+                    daily_frames.append(daily)
+            except Exception as e:
+                curve_errors.append(f"{month_label}: {e}")
+                logger.warning(
+                    "Offer curve computation failed for %s: %s", month_label, e,
+                )
+
+    # S3-05 offer-factor note: adjacent-month fetches can each contribute a
+    # row for the same (duid, month) — the next month's first trading day
+    # rides in the prior month's inclusive-end window. Frames append in
+    # ascending month order, so keep the LAST row per (duid, month): the
+    # fuller copy wins (matches the pure builder's contract).
+    if len(offer_frames) > 1:
+        merged_feats = pd.concat(offer_frames, ignore_index=True)
+        merged_feats = merged_feats.drop_duplicates(
+            subset=["duid", "month"], keep="last",
+        )
+        offer_frames = [merged_feats]
+
+    if want_fcas:
+        fcas_lane.attempted_months = attempted
+        fcas_factors = _finalize_factor_lane(
+            fcas_lane, fcas_cache, fcas_frames, fcas_errors,
+            full_refresh=full_refresh, label="FCAS factor",
+            no_rows_error="no source rows for any attempted month",
+            no_rows_note="source returned no rows (unpublished months?) — "
+                         "last-known-good retained",
+            cold_start_error="no source rows and no cache to retain (cold start)",
+        )
+    if want_offer:
+        offer_lane.attempted_months = attempted
+        curve_lane.attempted_months = attempted
+        offer_factors = _finalize_factor_lane(
+            offer_lane, offer_cache, offer_frames, offer_errors,
+            full_refresh=full_refresh, label="offer factor",
+            no_rows_error="no offer rows for any attempted month",
+            no_rows_note="no offer rows (unpublished months?) — last-known-good retained",
+            cold_start_error="no offer rows and no cache to retain (cold start)",
+        )
+        offer_curves = _finalize_factor_lane(
+            curve_lane, curve_cache, curve_frames, curve_errors,
+            full_refresh=full_refresh, label="offer curve",
+            no_rows_error="no offer-curve rows for any attempted month",
+            no_rows_note="no offer-curve rows (unpublished months?) — "
+                         "last-known-good retained",
+            cold_start_error="no offer-curve rows and no cache to retain (cold start)",
+        )
+        if daily_frames:
+            offer_curves_daily = pd.concat(daily_frames, ignore_index=True)
+
+    return (fcas_factors, offer_factors, offer_curves, offer_curves_daily,
+            fcas_lane, offer_lane, curve_lane)
 
 
 def _factor_source_status_map(lanes: list[LaneRun]) -> dict:
@@ -732,51 +857,42 @@ def main():
         market_quarterly = pd.DataFrame()
     market_lane.frame = market_factors
 
-    # Steps 3e/3e2/3e3: per-DUID optional-source factor lanes.
-    # S3-08: each lane runs through a recorder that retains the last-known-good
-    # factor history from its cache when the source fails or delivers nothing
-    # new — a failure may never erase populated panels from the published
-    # generator docs. The factor-block continuity guard (Step 3g) rejects the
-    # publish outright when a populated block would still vanish, and the
-    # machine-readable run-status manifest (written at the end) carries each
-    # lane's success/coverage/as-of/error state to the operator channel.
+    # Step 3e/3e2/3e3: Per-DUID optional-source factor facts.
+    # S3-12: the month-outer driver fetches BIDPEROFFER_D + BIDDAYOFFER_D once
+    # per (table, month) and derives the FCAS participation factors, energy
+    # offer-curve factors, monthly offer curves and the bounded daily stacks
+    # from the same resident frames (1+1 compiler calls per month, was 4+3).
+    # S3-08: each lane still records its run state and retains the
+    # last-known-good factor history from its cache when the source fails or
+    # delivers nothing new — a failure may never erase populated panels from
+    # the published generator docs. The factor-block continuity guard (Step
+    # 3g) rejects the publish outright when a populated block would still
+    # vanish, and the machine-readable run-status manifest (written at the
+    # end) carries each lane's success/coverage/as-of/error state to the
+    # operator channel.
     factor_months = _months_to_process(args.months_back, args.full_refresh)
-
-    # Step 3e: Per-DUID FCAS participation factors (BIDPEROFFER_D offers).
-    # These are generator-specific, unlike the regional FCAS price averages.
-    logger.info("=== Step 3e: FCAS participation factors ===")
-    fcas_factors, fcas_lane = _run_fcas_factor_lane(
-        data_dir, factor_months,
-        skip=args.skip_fcas_factors, full_refresh=args.full_refresh,
+    logger.info(
+        "=== Steps 3e/3e2/3e3: FCAS + offer factors and offer curves "
+        "(%d month(s), one fetch per table/month) ===", len(factor_months),
     )
-
-    # Step 3e2: Per-DUID energy offer-curve factors (BIDDAYOFFER_D prices +
-    # BIDPEROFFER_D ENERGY volumes). Offer-based estimates of bid behaviour.
-    logger.info("=== Step 3e2: Energy offer-curve factors ===")
-    offer_factors, offer_lane = _run_offer_factor_lane(
+    (fcas_factors, offer_factors, offer_curves, offer_curves_daily,
+     fcas_lane, offer_lane, curve_lane) = _run_optional_factor_lanes(
         data_dir, factor_months,
-        skip=args.skip_offer_factors, full_refresh=args.full_refresh,
-    )
-
-    # Step 3e3: per-DUID 10-band offer curves (chart data; monthly block +
-    # bounded latest-window daily stacks).
-    logger.info("=== Step 3e3: Per-DUID offer curves ===")
-    offer_curves, offer_curves_daily, curve_lane = _run_offer_curve_lane(
-        data_dir, factor_months,
-        skip=args.skip_offer_factors, full_refresh=args.full_refresh,
+        skip_fcas_factors=args.skip_fcas_factors,
+        skip_offer_factors=args.skip_offer_factors,
+        full_refresh=args.full_refresh,
     )
     if offer_curves_daily is not None and not offer_curves_daily.empty:
-        from .offer_curves import (
-            OFFER_CURVES_DAILY_CACHE, write_offer_curve_files,
-        )
         # Daily stacks are an explicitly BOUNDED latest-window cache
         # (S3-07): recomputed each run for the processed window only,
         # never accumulated into five years of per-day history, and never
         # part of the durable processed-cache snapshot. The published
         # docs/data/offer_curves/{DUID}.json day files are rewritten from
-        # this window each run. On a failed lane the old day files are left
-        # untouched (last-known-good) and the manifest records the lane as
-        # degraded — they are never rewritten from stale frames.
+        # this window each run through the semantic-diff publish gate
+        # (S3-12: unchanged stacks leave the file — and its updated date —
+        # untouched). On a failed lane the old day files are left untouched
+        # (last-known-good) and the manifest records the lane as degraded —
+        # they are never rewritten from stale frames.
         offer_curves_daily.to_feather(data_dir / OFFER_CURVES_DAILY_CACHE)
         write_offer_curve_files(offer_curves_daily, str(docs_data_dir))
 

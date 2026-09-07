@@ -10,7 +10,6 @@ Schema (per region):
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 from datetime import datetime, timezone
@@ -22,6 +21,7 @@ from .market_factors import (
     quarter_label,
     build_quarterly_summary as quarterly_spreads,
 )
+from .semantic_publish import write_json_if_facts_changed
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,10 @@ def publish_market_json(
     }
 
     out = Path(out_dir) / "market_daily.json"
-    out.write_text(json.dumps(payload, separators=(",", ":")))
-    logger.info("Wrote %s (%d regions, %d quarters)", out, len(regions), len(quarterly))
+    # S3-12 semantic-diff publish gate: updated_utc stamps data-as-of, not the
+    # run attempt — identical facts at a later clock must not rewrite the file
+    # (and manufacture a publishable diff) just to advance the clock.
+    if write_json_if_facts_changed(out, payload, stamp_keys=("updated_utc",)):
+        logger.info("Wrote %s (%d regions, %d quarters)", out, len(regions), len(quarterly))
 
 

@@ -17,11 +17,7 @@ import pytest
 
 from src import freshness
 from src.generate_json import generate_all
-from src.main import (
-    _run_fcas_factor_lane,
-    _run_offer_curve_lane,
-    _run_offer_factor_lane,
-)
+from src.main import _run_optional_factor_lanes
 from src.run_status import (
     LaneRun,
     build_manifest,
@@ -112,8 +108,55 @@ def _write_published_unit(gen_dir, duid: str, blocks: dict) -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Lane retention: FCAS factors (Step 3e)
+# Optional-factor lanes (Steps 3e/3e2/3e3 — S3-12 month-outer driver)
 # ────────────────────────────────────────────────────────────────────────
+
+def _run_factor_lanes(data_dir, months, *, skip_fcas=False, skip_offer=False,
+                      full_refresh=False):
+    """Drive the S3-12 single-decode factor driver; unpack its 7-tuple."""
+    return _run_optional_factor_lanes(
+        data_dir, months,
+        skip_fcas_factors=skip_fcas, skip_offer_factors=skip_offer,
+        full_refresh=full_refresh,
+    )
+
+
+def _fcas_raw(year=2026, month=7, duid="GEN1"):
+    """One FCAS offer row for a month (passes download_bids.fcas_bids_from_raw)."""
+    row = {
+        "INTERVAL_DATETIME": pd.to_datetime([f"{year}-{month:02d}-15 12:00:00"]),
+        "DUID": [duid], "BIDTYPE": ["RAISE6SEC"],
+        "MAXAVAIL": [5.0], "ENABLEMENTMIN": [0.0], "ENABLEMENTMAX": [5.0],
+        "VERSIONNO": [1],
+    }
+    for i in range(1, 11):
+        row[f"BANDAVAIL{i}"] = [0.0]
+    return pd.DataFrame(row)
+
+
+def _energy_raw(year=2026, month=7, duid="GEN1"):
+    """One ENERGY volume row for a month (passes energy_volumes_from_raw).
+
+    Stamped 01 00:05 (interval END) → calendar day 01, matching the price day.
+    """
+    row = {
+        "INTERVAL_DATETIME": pd.to_datetime([f"{year}-{month:02d}-01 00:05:00"]),
+        "DUID": [duid], "BIDTYPE": ["ENERGY"],
+        "MAXAVAIL": [0.0], "ENABLEMENTMIN": [0.0], "ENABLEMENTMAX": [0.0],
+        "VERSIONNO": [1],
+    }
+    for i in range(1, 11):
+        row[f"BANDAVAIL{i}"] = [10.0 if i == 1 else 0.0]
+    return pd.DataFrame(row)
+
+
+def _prices_frame(year=2026, month=7, duid="GEN1"):
+    """One trading day of BIDDAYOFFER price bands for a month."""
+    row = {"DUID": [duid], "SETTLEMENTDATE": pd.to_datetime([f"{year}-{month:02d}-01"])}
+    for i in range(1, 11):
+        row[f"PRICEBAND{i}"] = [float(i * 10)]
+    return pd.DataFrame(row)
+
 
 class TestFcasLaneRetention:
     def test_total_failure_retains_last_good(self, tmp_path, monkeypatch):
@@ -123,21 +166,21 @@ class TestFcasLaneRetention:
         def boom(*a, **k):
             raise RuntimeError("NEMWEB timeout")
 
-        monkeypatch.setattr("src.main.fetch_fcas_bids_month", boom)
-        frame, lane = _run_fcas_factor_lane(
-            tmp_path, _months((2026, 7), (2026, 8)),
-            skip=False, full_refresh=False,
+        monkeypatch.setattr("src.main.fetch_bidperoffer_union", boom)
+        fcas, _offer, _curves, daily, lane, _ol, _cl = _run_factor_lanes(
+            tmp_path, _months((2026, 7), (2026, 8)), skip_offer=True,
         )
         # The S3-08 core: a whole-lane failure keeps the last-known-good history.
-        assert not frame.empty
-        assert set(frame["month"]) == {"2026-04", "2026-05", "2026-06", "2026-07"}
-        assert len(frame) == 8  # 2 DUIDs × 4 months — nothing vanished
+        assert not fcas.empty
+        assert set(fcas["month"]) == {"2026-04", "2026-05", "2026-06", "2026-07"}
+        assert len(fcas) == 8  # 2 DUIDs × 4 months — nothing vanished
         assert lane.status == STATUS_DEGRADED
         assert lane.retained is True
         assert lane.attempted_months == 2
         assert lane.months_with_data == 0
         assert "NEMWEB timeout" in (lane.error or "")
         assert lane.asof_month() == "2026-07"
+        assert daily is None  # offer lanes skipped — no daily window
         # cache untouched by the failure path
         on_disk = pd.read_feather(cache)
         assert len(on_disk) == 8
@@ -146,22 +189,21 @@ class TestFcasLaneRetention:
         cache = tmp_path / "fcas_factors.feather"
         _fcas_history(["2026-05", "2026-07"]).to_feather(cache)
 
-        def fake_fetch(year, month, data_dir, rebuild=False):
+        def fake_fetch(year, month, cache_dir, rebuild=None):
             if (year, month) == (2026, 7):
                 raise RuntimeError("archive 500")
-            return pd.DataFrame({"ok": [1]})  # non-empty bids trigger compute
+            return _fcas_raw(year, month)
 
         def fake_compute(bids, year, month):
             return _fcas_history([f"{year}-{month:02d}"])  # fresh facts
 
-        monkeypatch.setattr("src.main.fetch_fcas_bids_month", fake_fetch)
+        monkeypatch.setattr("src.main.fetch_bidperoffer_union", fake_fetch)
         monkeypatch.setattr("src.main.compute_fcas_factors", fake_compute)
-        frame, lane = _run_fcas_factor_lane(
-            tmp_path, _months((2026, 6), (2026, 7)),
-            skip=False, full_refresh=False,
+        fcas, _offer, _curves, _daily, lane, _ol, _cl = _run_factor_lanes(
+            tmp_path, _months((2026, 6), (2026, 7)), skip_offer=True,
         )
         # June computed fresh; July failed → its old cached rows survive.
-        assert set(frame["month"]) == {"2026-05", "2026-06", "2026-07"}
+        assert set(fcas["month"]) == {"2026-05", "2026-06", "2026-07"}
         assert lane.status == STATUS_DEGRADED  # partial failure surfaced, never hidden
         assert lane.retained is False
         assert lane.months_with_data == 1
@@ -169,40 +211,42 @@ class TestFcasLaneRetention:
 
     def test_total_failure_no_cache_is_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "src.main.fetch_fcas_bids_month",
+            "src.main.fetch_bidperoffer_union",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")),
         )
-        frame, lane = _run_fcas_factor_lane(
-            tmp_path, _months((2026, 7), (2026, 8)),
-            skip=False, full_refresh=False,
+        fcas, _offer, _curves, _daily, lane, _ol, _cl = _run_factor_lanes(
+            tmp_path, _months((2026, 7), (2026, 8)), skip_offer=True,
         )
-        assert frame.empty
+        assert fcas.empty
         assert lane.status == STATUS_ERROR
         assert lane.retained is False
 
     def test_skip_with_cache_retains(self, tmp_path):
         cache = tmp_path / "fcas_factors.feather"
         _fcas_history(["2026-06", "2026-07"]).to_feather(cache)
-        frame, lane = _run_fcas_factor_lane(
+        fcas, offer, curves, daily, lane, ol, cl = _run_factor_lanes(
             tmp_path, _months((2026, 7), (2026, 8)),
-            skip=True, full_refresh=False,
+            skip_fcas=True, skip_offer=True,
         )
-        assert set(frame["month"]) == {"2026-06", "2026-07"}
+        assert set(fcas["month"]) == {"2026-06", "2026-07"}
         assert lane.status == STATUS_SKIPPED
         assert lane.retained is True
+        # offer lanes skipped too — no caches, nothing retained, no daily window
+        assert offer.empty and curves.empty and daily is None
+        assert ol.status == STATUS_SKIPPED and ol.retained is False
+        assert cl.status == STATUS_SKIPPED and cl.retained is False
 
     def test_all_months_empty_retains(self, tmp_path, monkeypatch):
         cache = tmp_path / "fcas_factors.feather"
         _fcas_history(["2026-06", "2026-07"]).to_feather(cache)
         monkeypatch.setattr(
-            "src.main.fetch_fcas_bids_month",
+            "src.main.fetch_bidperoffer_union",
             lambda *a, **k: pd.DataFrame(),  # source reachable but no rows
         )
-        frame, lane = _run_fcas_factor_lane(
-            tmp_path, _months((2026, 7), (2026, 8)),
-            skip=False, full_refresh=False,
+        fcas, _offer, _curves, _daily, lane, _ol, _cl = _run_factor_lanes(
+            tmp_path, _months((2026, 7), (2026, 8)), skip_offer=True,
         )
-        assert not frame.empty  # retained — absence never becomes "zero"
+        assert not fcas.empty  # retained — absence never becomes "zero"
         assert lane.status == STATUS_DEGRADED
         assert lane.retained is True
         assert lane.asof_month() == "2026-07"
@@ -213,46 +257,71 @@ class TestFcasLaneRetention:
 # ────────────────────────────────────────────────────────────────────────
 
 class TestOfferLanesRetention:
-    def test_offer_factor_builder_failure_retains(self, tmp_path, monkeypatch):
+    def test_offer_factor_compute_failure_retains(self, tmp_path, monkeypatch):
         cache = tmp_path / "offer_factors.feather"
         _offer_history(["2026-07"]).to_feather(cache)
         monkeypatch.setattr(
-            "src.offer_curves.build_offer_factors",
+            "src.main.fetch_bidperoffer_union",
+            lambda year, month, cache_dir, rebuild=None: _energy_raw(year, month),
+        )
+        monkeypatch.setattr(
+            "src.main.fetch_energy_prices",
+            lambda year, month, cache_dir, rebuild=False: _prices_frame(year, month),
+        )
+        monkeypatch.setattr(
+            "src.main.compute_offer_features",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offer down")),
         )
-        frame, lane = _run_offer_factor_lane(
-            tmp_path, _months((2026, 7), (2026, 8)),
-            skip=False, full_refresh=False,
+        _fcas, offer, _curves, daily, _fl, ol, cl = _run_factor_lanes(
+            tmp_path, _months((2026, 7), (2026, 8)), skip_fcas=True,
         )
-        assert set(frame["month"]) == {"2026-07"}
-        assert lane.status == STATUS_DEGRADED
-        assert lane.retained is True
-        assert "offer down" in (lane.error or "")
+        assert not offer.empty
+        assert set(offer["month"]) == {"2026-07"}
+        assert ol.status == STATUS_DEGRADED
+        assert ol.retained is True
+        assert "offer down" in (ol.error or "")
+        # the curve lane is independent: it computed fresh from the same frames
+        assert cl.status == STATUS_OK
+        assert cl.months_with_data == 2
+        assert daily is not None
 
-    def test_offer_curve_builder_failure_retains_monthly_no_daily(self, tmp_path, monkeypatch):
+    def test_offer_curve_failure_retains_monthly_no_daily(self, tmp_path, monkeypatch):
         cache = tmp_path / "offer_curves.feather"
         _curve_history("2026-07").to_feather(cache)
         monkeypatch.setattr(
-            "src.offer_curves.build_offer_curves",
+            "src.main.fetch_bidperoffer_union",
+            lambda year, month, cache_dir, rebuild=None: _energy_raw(year, month),
+        )
+        monkeypatch.setattr(
+            "src.main.fetch_energy_prices",
+            lambda year, month, cache_dir, rebuild=False: _prices_frame(year, month),
+        )
+        monkeypatch.setattr(
+            "src.main.compute_offer_curves",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("curves down")),
         )
-        frame, daily, lane = _run_offer_curve_lane(
-            tmp_path, _months((2026, 7), (2026, 8)),
-            skip=False, full_refresh=False,
+        _fcas, _offer, curves, daily, _fl, ol, cl = _run_factor_lanes(
+            tmp_path, _months((2026, 7), (2026, 8)), skip_fcas=True,
         )
-        assert set(frame["month"]) == {"2026-07"}
-        assert daily is None  # old per-day files stay untouched (last-known-good)
-        assert lane.status == STATUS_DEGRADED
-        assert lane.retained is True
+        assert not curves.empty
+        assert set(curves["month"]) == {"2026-07"}
+        assert daily is None  # failed month must not advance the daily window
+        assert cl.status == STATUS_DEGRADED
+        assert cl.retained is True
+        assert "curves down" in (cl.error or "")
+        # offer-factor lane unaffected by the curve-lane failure
+        assert ol.status == STATUS_OK
+        assert ol.months_with_data == 2
 
     def test_offer_curve_skip_no_cache_empty(self, tmp_path):
-        frame, daily, lane = _run_offer_curve_lane(
+        fcas, offer, curves, daily, fl, ol, cl = _run_factor_lanes(
             tmp_path, _months((2026, 7), (2026, 8)),
-            skip=True, full_refresh=False,
+            skip_fcas=True, skip_offer=True,
         )
-        assert frame.empty and daily is None
-        assert lane.status == STATUS_SKIPPED
-        assert lane.retained is False
+        assert fcas.empty and offer.empty and curves.empty and daily is None
+        assert fl.status == STATUS_SKIPPED and fl.retained is False
+        assert ol.status == STATUS_SKIPPED and ol.retained is False
+        assert cl.status == STATUS_SKIPPED and cl.retained is False
 
 
 # ────────────────────────────────────────────────────────────────────────
