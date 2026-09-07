@@ -20,6 +20,27 @@ def _safe_filename(duid: str) -> str:
     return duid.replace("/", "_").replace("#", "_").replace("\\", "_")
 
 
+def _text(value, default: str = "") -> str:
+    """Stringify a metadata cell for JSON — never emit the literal 'nan'.
+
+    NaN/None/empty become ``default`` ('' unless overridden), so missing
+    metadata serializes as null/empty rather than the string "nan"
+    (S3-06: GENSETID-era appends leaked 'nan' region/station/technology
+    values into index.json and the dashboard region filter).
+    """
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    text = str(value)
+    if text.strip().lower() == "nan":
+        return default
+    return text
+
+
 def _add_daily_coverage(daily_doc: dict, daily_rows: pd.DataFrame) -> None:
     """Publish per-day observed/expected interval counts into a doc['daily'] block.
 
@@ -60,17 +81,17 @@ def generate_index(
 
     new_entries = []
     for _, row in generators.iterrows():
-        duid = str(row.get("DUID", ""))
+        duid = _text(row.get("DUID", ""))
         entry = {
             "duid": duid,
             "file": _safe_filename(duid),
-            "station_name": str(row.get("STATION_NAME", "")),
-            "region": str(row.get("REGION", "")),
-            "fuel_category": str(row.get("FUEL_CATEGORY", "")),
+            "station_name": _text(row.get("STATION_NAME", "")),
+            "region": _text(row.get("REGION", "")),
+            "fuel_category": _text(row.get("FUEL_CATEGORY", "")),
             "capacity_mw": round(float(row["CAPACITY_MW"]), 1) if pd.notna(row.get("CAPACITY_MW")) else None,
-            "technology": str(row.get("TECHNOLOGY", "")),
-            "connection_point": str(row.get("CONNECTION_POINT", "")),
-            "market": str(row.get("MARKET", market)),
+            "technology": _text(row.get("TECHNOLOGY", "")),
+            "connection_point": _text(row.get("CONNECTION_POINT", "")),
+            "market": _text(row.get("MARKET", market)),
         }
         new_entries.append(entry)
 
@@ -470,13 +491,13 @@ def generate_all(
     for _, row in generators.iterrows():
         duid = str(row["DUID"])
         metadata = {
-            "station_name": str(row.get("STATION_NAME", "")),
-            "region": str(row.get("REGION", "")),
-            "fuel_category": str(row.get("FUEL_CATEGORY", "")),
+            "station_name": _text(row.get("STATION_NAME", "")),
+            "region": _text(row.get("REGION", "")),
+            "fuel_category": _text(row.get("FUEL_CATEGORY", "")),
             "capacity_mw": round(float(row["CAPACITY_MW"]), 1) if pd.notna(row.get("CAPACITY_MW")) else None,
-            "technology": str(row.get("TECHNOLOGY", "")),
-            "connection_point": str(row.get("CONNECTION_POINT", "")),
-            "market": str(row.get("MARKET", market)),
+            "technology": _text(row.get("TECHNOLOGY", "")),
+            "connection_point": _text(row.get("CONNECTION_POINT", "")),
+            "market": _text(row.get("MARKET", market)),
         }
 
         # Extract this generator's monthly data if available
@@ -507,7 +528,7 @@ def generate_all(
 
         # Build FCAS monthly data for this generator's region
         fcas_monthly = None
-        region = str(row.get("REGION", ""))
+        region = _text(row.get("REGION", ""))
         if fcas_data and region and monthly is not None and not monthly.empty:
             months_list = monthly["month"].tolist()
             fcas_months = []
@@ -619,9 +640,9 @@ def _generate_station_files(
     for station_name, group in multi_duid.items():
         duids = group["DUID"].tolist()
         total_capacity = group["CAPACITY_MW"].sum() if "CAPACITY_MW" in group.columns else 0
-        region = group["REGION"].iloc[0]
-        fuel = group["FUEL_CATEGORY"].iloc[0]
-        technology = group["TECHNOLOGY"].iloc[0]
+        region = _text(group["REGION"].iloc[0])
+        fuel = _text(group["FUEL_CATEGORY"].iloc[0])
+        technology = _text(group["TECHNOLOGY"].iloc[0])
         connection_points = group.get("CONNECTION_POINT", pd.Series()).tolist()
         capacity_by_duid = group.set_index("DUID")["CAPACITY_MW"].to_dict()
 
@@ -635,7 +656,7 @@ def _generate_station_files(
             "fuel_category": fuel,
             "capacity_mw": round(float(total_capacity), 1) if total_capacity else None,
             "technology": technology,
-            "connection_points": [cp for cp in connection_points if cp],
+            "connection_points": [_text(cp) for cp in connection_points if _text(cp)],
             "lgc_eligible": fuel in config.LGC_ELIGIBLE_FUEL_TYPES,
         }
 
@@ -738,7 +759,7 @@ def _generate_station_files(
             "fuel_category": fuel,
             "capacity_mw": round(float(total_capacity), 1) if total_capacity else None,
             "technology": technology,
-            "connection_point": ", ".join(cp for cp in connection_points if cp),
+            "connection_point": ", ".join(_text(cp) for cp in connection_points if _text(cp)),
             "type": "station",
             "duid_count": len(duids),
             "market": market,
