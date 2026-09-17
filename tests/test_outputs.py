@@ -21,6 +21,21 @@ DATA_DIR = ROOT / "data"
 DOCS_DATA_DIR = ROOT / "docs" / "data"
 GENERATORS_DIR = DOCS_DATA_DIR / "generators"
 
+
+def _published_or_local(name: str):
+    """Prefer the committed published processed-cache (the vintage the dashboard
+    serves and the Mac-side freshness gate reads); fall back to the working-tree
+    ``data/`` dir when no publish exists.
+
+    Drift context: on machines that don't run the pipeline (the Mac clone),
+    ``data/`` lags the published vintage by months — two vintages in one repo
+    produced confusing stale-vintage failures. Published data is the artifact
+    of record; the in-lane NAS run still asserts the freshly published cache
+    before committing.
+    """
+    published = DOCS_DATA_DIR / "processed-cache" / name
+    return published if published.exists() else DATA_DIR / name
+
 EXPECTED_REGIONS = {"NSW1", "QLD1", "VIC1", "SA1", "TAS1"}
 EXPECTED_AGGREGATES_COLS = {
     "duid", "month", "generation_mwh", "revenue_aud",
@@ -391,13 +406,14 @@ class TestValueBounds:
         3+ months) plus manual CAPACITY_OVERRIDES review - a hard bound there
         would fail every run without a confirmed registration correction.
         """
-        path = DATA_DIR / "daily_aggregates.feather"
+        path = _published_or_local("daily_aggregates.feather")
         if not path.exists():
             pytest.skip("daily_aggregates.feather not present")
         daily = pd.read_feather(path)
         cf = daily["daily_capacity_factor"].dropna()
         assert (cf >= 0).all(), "Negative daily capacity factors found"
-        fuel = self.gen.set_index("DUID")["FUEL_CATEGORY"]
+        gen = pd.read_feather(_published_or_local("generators.feather"))
+        fuel = gen.set_index("DUID")["FUEL_CATEGORY"]
         kind = daily["duid"].map(fuel).fillna("Other")
         is_hydro = kind == "Hydro"
         for label, mask, bound in (("non-hydro", ~is_hydro, 1.10), ("hydro", is_hydro, 1.25)):
@@ -474,12 +490,12 @@ class TestMlfLiveFrame:
 
 class TestFreshness:
     def test_monthly_data_is_current(self):
-        agg = pd.read_feather(DATA_DIR / "monthly_aggregates.feather")
+        agg = pd.read_feather(_published_or_local("monthly_aggregates.feather"))
         # Raises RuntimeError when the latest month is too far behind
         check_monthly_freshness(agg, now=datetime.now())
 
     def test_daily_data_is_current(self):
-        path = DATA_DIR / "daily_aggregates.feather"
+        path = _published_or_local("daily_aggregates.feather")
         if not path.exists():
             pytest.skip("daily_aggregates.feather not present")
         daily = pd.read_feather(path)
