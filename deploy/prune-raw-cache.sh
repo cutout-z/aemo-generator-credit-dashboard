@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/opt/aemo-generator-credit-dashboard}"
+APP_DIR="${APP_DIR:-/workspace/repos/aemo-generator-credit-dashboard}"
 CACHE_ROOT="${CACHE_ROOT:-${APP_DIR}/data}"
 NEMOSIS_CACHE_DIR="${NEMOSIS_CACHE_DIR:-${CACHE_ROOT}/nemosis_cache}"
 RAW_CACHE_RETENTION_DAYS="${RAW_CACHE_RETENTION_DAYS:-120}"

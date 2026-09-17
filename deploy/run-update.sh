@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/opt/aemo-generator-credit-dashboard}"
+APP_DIR="${APP_DIR:-/workspace/repos/aemo-generator-credit-dashboard}"
 PYTHON="${PYTHON:-${APP_DIR}/.venv/bin/python}"
 PIPELINE_ARGS="${PIPELINE_ARGS:---months-back 2 --refresh-mlf}"
 RUN_TESTS="${RUN_TESTS:-1}"
@@ -13,7 +13,14 @@ cd "${APP_DIR}"
 
 git fetch origin main
 git checkout main
-git pull --ff-only origin main
+# Self-heal: this clone only ever holds regeneratable pipeline data commits, so
+# when GitHub main has been rewritten (force-push/rebase) a fast-forward becomes
+# impossible. Reset onto the fetched remote instead of aborting — a bare
+# `git pull --ff-only` under `set -e` exits 128 and stalls the lane.
+if ! git pull --ff-only origin main; then
+  echo "origin/main is not fast-forwardable (rewritten?) — resetting onto it."
+  git reset --hard origin/main
+fi
 
 "${PYTHON}" -m src.main ${PIPELINE_ARGS}
 
@@ -36,8 +43,8 @@ if git diff --cached --quiet; then
   exit 0
 fi
 
-git config user.name "${GIT_AUTHOR_NAME:-aemo-vps-bot}"
-git config user.email "${GIT_AUTHOR_EMAIL:-aemo-vps-bot@users.noreply.github.com}"
+git config user.name "${GIT_AUTHOR_NAME:-aemo-nas-bot}"
+git config user.email "${GIT_AUTHOR_EMAIL:-aemo-nas-bot@users.noreply.github.com}"
 git commit -m "${COMMIT_MESSAGE_PREFIX} $(date -u +%Y-%m-%d)"
 
 if [[ "${PUSH_CHANGES}" == "1" ]]; then

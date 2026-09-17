@@ -15,7 +15,7 @@ authoritative overview):
 ## Update Lanes
 
 QNAP scheduled tasks invoke `nas-job aemo-generator-credit-*`, which runs
-this repo's `deploy/run-vps-update.sh` (the shared entry script) with
+this repo's `deploy/run-update.sh` (the shared entry script) with
 per-lane `PIPELINE_ARGS`:
 
 | Lane | `PIPELINE_ARGS` | Purpose |
@@ -25,10 +25,12 @@ per-lane `PIPELINE_ARGS`:
 | Annual MLF lane | `--skip-scada --skip-constraints --refresh-mlf` | Force a lightweight MLF refresh around annual final MLF publication without touching SCADA or constraints. |
 
 The lane registry, cadence windows and report paths live in
-`tools/nas-runner/configs/brain-ops.nas.toml` (the NAS runner tooling). The
-`run-vps-update.sh` name is retained from the retired VPS era for
-compatibility — it is a NAS lane now. Each lane runs the full test suite and
-commits/pushes only when `docs/data` changed.
+`tools/nas-runner/configs/brain-ops.nas.toml` (the NAS runner tooling).
+`deploy/run-update.sh` is the NAS-native entry script (renamed from the
+retired VPS-era `run-vps-update.sh` in the 2026-09 cleanup). Each lane runs the
+full test suite and commits/pushes only when `docs/data` changed, and the
+script self-heals a rewritten `main`: if `git pull --ff-only` is impossible it
+resets onto the fetched remote instead of exiting 128.
 
 ## Raw Cache Retention
 
@@ -53,6 +55,10 @@ setup is **historical** — do not reinstall it:
   `/srv/aemo-generator-credit/data` (optional bounded raw cache),
   `/etc/aemo-generator-credit/*.env` (per-lane settings); `data/` was
   gitignored and symlinked from `/srv` when a larger volume was wanted;
-- the `.service`/`.timer` unit files and `env.*.example` files remain in
-  `deploy/` for reference only. The QNAP scheduled tasks are the live
-  scheduler.
+- the retired `.service`/`.timer` unit files were deleted in the 2026-09 NAS
+  cleanup; `env.*.example` remain as NAS-path templates. The QNAP scheduled
+  tasks are the live scheduler;
+- ⚠ the write-enabled GitHub deploy key `hetzner-aemo-vps-2026-05-11`
+  (created 2026-05-11) is a VPS-era leftover. The NAS lanes do not use it —
+  they push over HTTPS with a stored token — so it should be revoked in
+  Settings → Deploy keys.
