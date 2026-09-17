@@ -17,7 +17,7 @@
     },
     {
       "name": "fcas_factors.feather",
-      "sha256": "d6d0df50e7e075d0a3a7f5299e0a8604279b8593500074bc9be32ced50898955",
+      "sha256": "38fd1288fd9220fd592b35f952924977f95d45d2c02a365400a6dbd6cfa7a34f",
       "size_bytes": 55570
     },
     {
@@ -77,12 +77,12 @@
     },
     {
       "name": "offer_curves.feather",
-      "sha256": "1ec4f03998f1aa660e473720a2e99049231fb25fe1f67456670a1c130157a2bb",
+      "sha256": "53b87ffa1eb7d38e3b58fed1e8e02c0a8695efb1809b0e07389d5765429aba0c",
       "size_bytes": 243274
     },
     {
       "name": "offer_factors.feather",
-      "sha256": "cef3bc61000175cbdd4899c1be5ca1aef08221816577901a03af623d9732d8d9",
+      "sha256": "145116e22295256a4f045d7ea03d12f28caaf210ca2d1dce68423cf52593eb57",
       "size_bytes": 47746
     }
   ],
