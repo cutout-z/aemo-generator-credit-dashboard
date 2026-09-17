@@ -1,0 +1,57 @@
+{
+ "guards": {
+  "daily_freshness": "pass",
+  "monthly_freshness": "pass"
+ },
+ "outputs": {
+  "generator_files": 565,
+  "processed_cache_snapshot": true
+ },
+ "run": {
+  "finished_utc": "2026-09-17T10:20:17Z",
+  "mode": "incremental",
+  "months_back": 2,
+  "problems": [],
+  "result": "ok",
+  "started_utc": "2026-09-17T09:59:51Z"
+ },
+ "schema_version": 1,
+ "sources": {
+  "fcas_factors": {
+   "asof_month": "2026-08",
+   "attempted_months": 3,
+   "error": null,
+   "months_with_data": 3,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
+  },
+  "market_factors": {
+   "asof_month": null,
+   "attempted_months": 0,
+   "error": null,
+   "months_with_data": 0,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
+  },
+  "offer_curves": {
+   "asof_month": "2026-08",
+   "attempted_months": 3,
+   "error": null,
+   "months_with_data": 3,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
+  },
+  "offer_factors": {
+   "asof_month": "2026-08",
+   "attempted_months": 3,
+   "error": null,
+   "months_with_data": 4,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
+  }
+ }
+}
