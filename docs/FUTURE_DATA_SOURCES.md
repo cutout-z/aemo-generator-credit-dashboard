@@ -23,6 +23,18 @@ re-doing the access research (all URLs below were live-verified 3 Sep 2026).
   crashes its parquet writer). Cached parquets hold only previously-requested
   columns — the volumes fetch rebuilds the month's parquet fat once; the
   FCAS lane (narrow columns) then shares the same fat cache.
+- **Panel visibility**: the offers summary and the daily bid stack are
+  UNIT-level blocks and live in their own panel (`#panelOffers` in
+  `docs/index.html`), never inside the regional FCAS panel. Gating them on
+  the FCAS block hid real payloads: `renderCharts()` hides `#panelFCAS` for
+  units whose FCAS history is thin (<3 non-null monthly points), which left
+  the offers blocks `display:block` behind a `display:none` ancestor — seen
+  with the newly-registered batteries PLBESS1 (Pine Lodge BESS) and ERB02
+  (Eraring BESS 2). A DUID with no `docs/data/offer_curves/{DUID}.json` has
+  no panel by design, not by a CSS condition: retired units such as ADPBA1G
+  (Adelaide Desalination Plant genset, MLF tracker status *Retired*, no
+  current registration-list row) are not published at all after S3-06, so
+  the dashboard never offers them and no offer file is written.
 
 ### FCAS participation factors (Aug 2026)
 Per-DUID offer behaviour from `BIDPEROFFER_D` FCAS rows — see

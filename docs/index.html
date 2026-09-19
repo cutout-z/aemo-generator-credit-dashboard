@@ -742,6 +742,24 @@
             </div>
             <div id="chartPriceDistribution"><div class="placeholder">No data yet</div></div>
         </div>
+        <div class="chart-panel" id="panelOffers" style="display:none;">
+            <div class="chart-title-wrap">
+                <h3>Energy offers — this unit</h3>
+                <div class="chart-tooltip">
+                    <div class="tooltip-title">Methodology</div>
+                    This unit's energy offer behaviour from BIDDAYOFFER_D (daily 10-band offer prices, latest rebid version) and BIDPEROFFER_D ENERGY volumes (10-band availability). A day's stack is the day's mean offered MW per band; BANDAVAIL tranches are incremental, so the curve is cumulative offered MW as price rises.
+                    <div class="tooltip-caveat">Offers are intent, not dispatch outcomes or settled revenue (offer_based_estimate). Unit-level block: shown whenever this unit's offer data exists, independently of the regional FCAS block (thin or absent FCAS history must not hide it).</div>
+                </div>
+            </div>
+            <div id="offersBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
+            <div id="offerCurveWrap" style="display:none;margin-bottom:6px;">
+                <div style="font-size:13px;font-weight:600;margin:4px 0 2px;">Offer curve — daily bid stack
+                    <select id="offerCurveDay" style="margin-left:8px;background:#1a1d27;color:var(--text,#e8e8e8);border:1px solid #2d3140;border-radius:6px;padding:2px 6px;font-size:12px;"></select>
+                    <span id="offerCurveNote" style="font-weight:400;opacity:.7"></span>
+                </div>
+                <div id="offerCurveChart" style="height:360px;"><div class="placeholder">No data yet</div></div>
+            </div>
+        </div>
         <div class="chart-panel" id="panelFCAS" style="display:none;">
             <div class="chart-title-wrap">
                 <h3>Regional FCAS Prices</h3>
@@ -752,14 +770,6 @@
                 </div>
             </div>
             <div id="fcasParticipationBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
-            <div id="offersBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
-            <div id="offerCurveWrap" style="display:none;margin-bottom:6px;">
-                <div style="font-size:13px;font-weight:600;margin:4px 0 2px;">Offer curve — daily bid stack
-                    <select id="offerCurveDay" style="margin-left:8px;background:#1a1d27;color:var(--text,#e8e8e8);border:1px solid #2d3140;border-radius:6px;padding:2px 6px;font-size:12px;"></select>
-                    <span id="offerCurveNote" style="font-weight:400;opacity:.7"></span>
-                </div>
-                <div id="offerCurveChart" style="height:360px;"><div class="placeholder">No data yet</div></div>
-            </div>
             <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
         </div>
         <div class="chart-panel" id="panelMarketSpread" style="display:none;">
@@ -1009,6 +1019,14 @@ function purgeChartsAndState() {
         const el = document.getElementById(id);
         if (el) Plotly.purge(el);
     }
+    // Unit-level offer blocks (see syncOffersPanel): reset to the no-data
+    // state so an earlier unit's offers can never underlap the new selection;
+    // renderCharts re-shows them from the accepted payload.
+    for (const id of ['offersBox', 'offerCurveWrap']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    }
+    syncOffersPanel();
     setPeriodLabel('chartGeneration', []);
     setPeriodLabel('chartPriceDistribution', []);
     currentData = null;
@@ -1215,6 +1233,24 @@ function makeRollingTrace(fmtMonths, values, color) {
         hovertemplate: '%{x}<br>12M Avg: %{y:,.0f}<extra></extra>',
         showlegend: true,
     };
+}
+
+// The unit-level energy-offers blocks (#offersBox, #offerCurveWrap) live in
+// their own panel, #panelOffers — NEVER inside #panelFCAS. The regional FCAS
+// panel is hidden whenever a unit's FCAS block is thin (<3 non-null monthly
+// points) or absent, and nesting the offers blocks inside it left them
+// display:block behind a display:none ancestor: the payload existed but the
+// panel never reached the screen (observed with the newly-registered
+// batteries PLBESS1 / ERB02). Each child owns its own display state; the
+// panel is visible when either child is.
+function syncOffersPanel() {
+    const panel = document.getElementById('panelOffers');
+    if (!panel) return;
+    const childVisible = (id) => {
+        const el = document.getElementById(id);
+        return !!(el && el.style.display !== 'none');
+    };
+    panel.style.display = (childVisible('offersBox') || childVisible('offerCurveWrap')) ? 'block' : 'none';
 }
 
 function renderCharts(data) {
@@ -1536,7 +1572,10 @@ function renderCharts(data) {
         }
     }
 
-    // Per-DUID energy offer curve (BIDDAYOFFER_D prices + BIDPEROFFER_D volumes) — summary box
+    // Per-DUID energy offers (BIDDAYOFFER_D prices + BIDPEROFFER_D volumes) —
+    // summary box. Unit-level block: it lives in #panelOffers (NOT #panelFCAS;
+    // see syncOffersPanel), so a thin/absent regional FCAS block cannot hide
+    // a unit's own offer summary. The panel title carries the block name.
     const ofBox = document.getElementById('offersBox');
     if (ofBox) {
         if (data.offers) {
@@ -1546,7 +1585,7 @@ function renderCharts(data) {
             const dol = (v) => v != null ? (v < 0 ? '-$' + Math.abs(v).toFixed(0) : '$' + v.toFixed(0)) : 'n/a';
             const asof = of.price_asof_month ? ' (prices as of ' + of.price_asof_month + ')' : '';
             ofBox.style.display = 'block';
-            ofBox.innerHTML = '<b>Energy offers — this unit</b> (' + of.month + '): ' +
+            ofBox.innerHTML = '<b>' + of.month + '</b>: ' +
                 'avg ' + mw(of.avg_offered_mw) + ' offered (p95 ' + mw(of.offered_mw_p95) + ')' +
                 ' · band-1 avg ' + dol(of.price_band_min_avg) +
                 ' · band-10 avg ' + dol(of.price_band_max_avg) +
@@ -1556,8 +1595,11 @@ function renderCharts(data) {
             ofBox.style.display = 'none';
         }
     }
+    syncOffersPanel();
 
-    // Per-DUID daily bid stack (docs/data/offer_curves/{DUID}.json) — day selector
+    // Per-DUID daily bid stack (docs/data/offer_curves/{DUID}.json) — day selector.
+    // Unit-level block inside #panelOffers: every display switch below re-syncs
+    // the panel so the curve shows even when the unit has no regional FCAS block.
     const ocWrap = document.getElementById('offerCurveWrap');
     const ocChart = document.getElementById('offerCurveChart');
     const ocDay = document.getElementById('offerCurveDay');
@@ -1589,8 +1631,11 @@ function renderCharts(data) {
                 .then((doc) => {
                     if (ocToken !== selectionToken) return; // superseded selection
                     const days = (doc.days || []).slice().sort((a, b) => b.date.localeCompare(a.date));
-                    if (!days.length) { ocWrap.style.display = 'none'; return; }
+                    if (!days.length) { ocWrap.style.display = 'none'; syncOffersPanel(); return; }
                     ocWrap.style.display = 'block';
+                    // Show the panel (and let it take layout) BEFORE the first
+                    // Plotly.newPlot, or the plot renders into a 0-height box.
+                    syncOffersPanel();
                     ocDay.innerHTML = days.map((d) => '<option value="' + d.date + '">' + d.date + '</option>').join('');
                     ocDay.value = days[0].date;
                     const draw = () => {
@@ -1600,9 +1645,10 @@ function renderCharts(data) {
                     ocDay.onchange = draw;
                     draw();
                 })
-                .catch(() => { if (ocToken === selectionToken) ocWrap.style.display = 'none'; });
+                .catch(() => { if (ocToken === selectionToken) { ocWrap.style.display = 'none'; syncOffersPanel(); } });
         } else {
             ocWrap.style.display = 'none';
+            syncOffersPanel();
         }
     }
 
