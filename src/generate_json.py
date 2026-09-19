@@ -183,6 +183,8 @@ def generate_generator_json(
 
     offer_factor_rows=None,
     offer_curve_rows=None,
+    gen_info_rows=None,
+    gen_info_events: dict | None = None,
     factor_source_status: dict | None = None,
 ) -> Path:
     """Write a single generator's JSON file with all dashboard data.
@@ -276,6 +278,12 @@ def generate_generator_json(
     from .offer_curves import attach_offer_curve_doc
     attach_offer_curve_doc(doc, offer_curve_rows)
 
+    # AEMO Generation Information (quarterly project register) — commitment
+    # status for this DUID's register rows, plus this edition's diff event when
+    # the unit moved (new commitment / withdrawal / de-commitment / energised).
+    from .geninfo import attach_geninfo_doc
+    attach_geninfo_doc(doc, gen_info_rows, gen_info_events)
+
     # S3-08: when an optional source failed and its blocks were carried over
     # from the last-known-good cache (retained=True), stamp them so consumers
     # can tell retained-stale values from freshly computed ones. The block's
@@ -286,6 +294,7 @@ def generate_generator_json(
             ("fcas_participation", "fcas_factors"),
             ("offers", "offer_factors"),
             ("offer_curve", "offer_curves"),
+            ("gen_info", "geninfo"),
         ):
             lane = factor_source_status.get(src)
             if lane and lane.get("retained") and key in doc and doc[key]:
@@ -546,6 +555,8 @@ def generate_all(
     fcas_factors: pd.DataFrame | None = None,
     offer_factors: pd.DataFrame | None = None,
     offer_curves: pd.DataFrame | None = None,
+    gen_info: pd.DataFrame | None = None,
+    gen_info_events: dict | None = None,
     factor_source_status: dict | None = None,
     market: str = "NEM",
 ) -> int:
@@ -655,6 +666,14 @@ def generate_all(
             if duid_offers.empty:
                 duid_offers = None
 
+        # GenInfo register rows for this DUID (blank DUID on ~62% of register
+        # rows means many units legitimately have no block).
+        duid_geninfo = None
+        if gen_info is not None and not gen_info.empty:
+            duid_geninfo = gen_info[gen_info["duid"] == duid].copy()
+            if duid_geninfo.empty:
+                duid_geninfo = None
+
         generate_generator_json(
             duid, metadata, monthly, mlf, price_dist,
             draft_mlf=d_mlf, draft_fy_label=draft_fy_label,
@@ -663,6 +682,8 @@ def generate_all(
             fcas_factor_rows=duid_fcas_factors,
             offer_factor_rows=duid_offers,
             offer_curve_rows=duid_curves,
+            gen_info_rows=duid_geninfo,
+            gen_info_events=gen_info_events,
             factor_source_status=factor_source_status,
             output_dir=gen_dir,
         )

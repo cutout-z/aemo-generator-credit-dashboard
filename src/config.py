@@ -89,6 +89,15 @@ DUDETAILSUMMARY_URL_TEMPLATE = (
 # NEMWEB base for probing available months
 NEMWEB_BASE_URL = "https://nemweb.com.au/Data_Archive/Wholesale_Electricity/MMSDM/"
 
+# AEMO Generation Information (quarterly project register xlsx). The landing
+# page hrefs carry a per-publication ?rev=<hash> query; the module scrapes them
+# and falls back to probing the deterministic media URL (see src/geninfo.py).
+GENINFO_LANDING_URL = (
+    "https://www.aemo.com.au/energy-systems/electricity/"
+    "national-electricity-market-nem/nem-forecasting-and-planning/"
+    "forecasting-and-planning-data/generation-information"
+)
+
 # ─── Paths (relative to project root) ──────────────────────────────────────
 
 DATA_DIR = "data"

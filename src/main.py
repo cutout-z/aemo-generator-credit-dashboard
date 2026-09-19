@@ -47,6 +47,7 @@ from .offer_curves import (
 )
 from .freshness import check_monthly_freshness, check_daily_freshness
 from .generate_market_json import publish_market_json
+from .geninfo import run_geninfo_lane
 from .run_status import (
     LaneRun,
     build_manifest,
@@ -456,6 +457,9 @@ def main():
                         help="Skip per-DUID energy offer-curve factors")
     parser.add_argument("--skip-fcas-factors", action="store_true",
                         help="Skip per-DUID FCAS participation factors (BIDPEROFFER_D download)")
+    parser.add_argument("--skip-geninfo", action="store_true",
+                        help="Skip the AEMO Generation Information quarterly lane "
+                             "(last-known-good register snapshot retained)")
     args = parser.parse_args()
     if args.fcas_rebuild:
         args.skip_scada = True
@@ -900,6 +904,49 @@ def main():
         fcas_lane, offer_lane, curve_lane,
     ]
 
+    # Step 3h: AEMO Generation Information (quarterly project register).
+    # Fetch the current edition, diff Commitment Status against the stored
+    # edition (new commitments / de-commitments / announced withdrawals) and
+    # publish docs/data/gen_info.json. Cheap when nothing was republished (the
+    # rev/size check skips the download) and never fatal: a blocked AEMO
+    # endpoint degrades the lane and retains the last-known-good snapshot, so
+    # published gen_info blocks never vanish from an otherwise-good run.
+    logger.info("=== Step 3h: AEMO Generation Information (quarterly) ===")
+    geninfo_lane = LaneRun(source="geninfo", block="gen_info")
+    gen_info_rows = pd.DataFrame()
+    gen_info_events: dict = {}
+    geninfo_snapshot_path = data_dir / "geninfo" / "geninfo_snapshot.feather"
+    if args.skip_geninfo:
+        gen_info_rows = _skip_lane_retained(
+            geninfo_lane, geninfo_snapshot_path, "explicit --skip-geninfo",
+        )
+    else:
+        try:
+            gi_result = run_geninfo_lane(
+                data_dir, docs_data_dir, force=args.full_refresh,
+            )
+            gen_info_rows = gi_result.snapshot
+            gen_info_events = gi_result.events_by_duid or {}
+            geninfo_lane.status = gi_result.status
+            geninfo_lane.retained = gi_result.retained
+            geninfo_lane.error = gi_result.error
+            geninfo_lane.note = gi_result.note
+            if not gen_info_rows.empty:
+                geninfo_lane.attempted_months = 1
+                geninfo_lane.months_with_data = 1
+        except Exception as e:  # defensive: the lane itself reports degradation
+            logger.error("GenInfo lane failed: %s", e)
+            retained = read_last_good(geninfo_snapshot_path)
+            geninfo_lane.error = str(e)
+            if not retained.empty:
+                gen_info_rows = retained
+                geninfo_lane.status = STATUS_DEGRADED
+                geninfo_lane.retained = True
+            else:
+                geninfo_lane.status = STATUS_ERROR
+        geninfo_lane.frame = gen_info_rows
+    factor_lanes.append(geninfo_lane)
+
     # Step 3f: Freshness guards — fail BEFORE publishing stale data.
     # The daily commit is not a freshness signal: the pipeline re-processes the
     # most recent archive months, so a total download failure still "succeeds".
@@ -934,6 +981,8 @@ def main():
                          fcas_factors=fcas_factors if not fcas_factors.empty else None,
                          offer_factors=offer_factors if not offer_factors.empty else None,
                          offer_curves=offer_curves if offer_curves is not None and not offer_curves.empty else None,
+                         gen_info=gen_info_rows if not gen_info_rows.empty else None,
+                         gen_info_events=gen_info_events or None,
                          factor_source_status=_factor_source_status_map(factor_lanes))
     publish_market_json(
         market_factors, market_quarterly, str(docs_data_dir),

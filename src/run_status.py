@@ -60,6 +60,7 @@ FACTOR_LANES = {
     "fcas_participation": "fcas_factors",
     "offers": "offer_factors",
     "offer_curve": "offer_curves",
+    "gen_info": "geninfo",
 }
 
 # A lane that is not 'ok' cannot attest that a unit's absence is real (the
@@ -98,14 +99,24 @@ class LaneRun:
         self.status = STATUS_OK
 
     def asof_month(self) -> str | None:
-        """Newest month present in the attach frame (the data's as-of)."""
+        """Newest period present in the attach frame (the data's as-of).
+
+        Month-keyed factor lanes carry 'month'; the GenInfo register lane is
+        edition-keyed and carries 'edition' (same YYYY-MM shape).
+        """
         df = self.frame
-        if df is None or df.empty or "month" not in df.columns:
+        if df is None or df.empty:
             return None
-        months = pd.unique(df["month"])
-        if not len(months):
-            return None
-        return str(sorted(str(m) for m in months)[-1])
+        for col in ("month", "edition"):
+            if col not in df.columns:
+                continue
+            values = sorted(
+                str(v) for v in pd.unique(df[col])
+                if v is not None and not pd.isna(v)
+            )
+            if values:
+                return values[-1]
+        return None
 
     def manifest_record(self) -> dict:
         return {
