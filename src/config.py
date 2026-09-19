@@ -125,6 +125,119 @@ NETWORK_OUTAGE_PROBE_MONTHS_BACK = 4
 # and flagged rather than dropped.
 NETWORK_OUTAGE_STANDING_YEAR = 2090
 
+# ─── AER market-statistics QA lane (Tier-2 lane 3) ──────────────────────────
+# The AER re-publishes a quarterly CSV suite ~6-8 weeks after quarter end. The
+# lane cross-checks our own derived aggregates against the regulator's published
+# picture and records pass/warn per series. This is a QA PROCESS ONLY — no
+# dashboard panel, chart or index.html change consumes it (owner decision
+# 2026-09-19).
+#
+# Live-probed 2026-09-19: the chart pages below all answer HTTP 200 with a ~2.4 KB
+# bot-management interstitial ("bm-verify" refresh stub) from this network, while
+# the static /sites/default/files/... CSVs serve fine — hence the two-step route
+# (scrape the page's "Download CSV" href, then GET the static file) plus the
+# last-verified seed URLs, and why a walled page is a recorded route note rather
+# than a lane failure.
+AER_BASE_URL = "https://www.aer.gov.au"
+
+AER_QA_SERIES = {
+    "vwap_region_quarter": {
+        "page": "/industry/registers/charts/"
+                "quarterly-volume-weighted-average-spot-prices-regions",
+        "csv_match": ("vwa spot prices", "data"),
+        "scope": "regional",
+        "unit": "AUD/MWh",
+        "what": "quarterly demand-weighted average spot price per region",
+    },
+    "neg_price_count": {
+        "page": "/industry/registers/charts/"
+                "quarterly-count-30-minute-prices-below-0mwh",
+        "csv_match": ("below", "$0", "data"),
+        "scope": "regional_count",
+        "unit": "30-minute trading intervals",
+        "what": "count of 30-minute settlement periods below $0/MWh per region",
+    },
+    "high_price_count_5000": {
+        "page": "/industry/registers/charts/"
+                "quarterly-count-30-minute-prices-above-5000mwh",
+        "csv_match": ("above", "$5000", "data"),
+        "scope": "regional_count",
+        "unit": "30-minute trading intervals",
+        "what": "count of 30-minute settlement periods above $5,000/MWh per region",
+    },
+    "fcas_total_cost": {
+        "page": "/industry/registers/charts/"
+                "quarterly-fcas-total-costs-global-and-local",
+        "csv_match": ("fcas costs",),
+        "scope": "nem_total",
+        "unit": "$m",
+        "what": "NEM-wide FCAS cost per quarter (recorded for reference)",
+    },
+}
+
+# Last-verified static CSV URLs (AER 2026-08 edition, live-fetched 2026-09-19 —
+# each returned HTTP 200 / application/octet-stream / 1.4-2.9 KB with a plain
+# quarterly CSV body). Used ONLY when the CMS page is bot-walled, and always
+# edition-stamped: the lane publishes the latest quarter the edition actually
+# covers and reports "awaiting_edition" rather than comparing against old data.
+# Refresh the folder date (e.g. 2026-11) when a new edition lands.
+AER_QA_SEED_URLS = {
+    "vwap_region_quarter": (
+        "https://www.aer.gov.au/sites/default/files/2026-08/"
+        "AER_Spot%20prices_Quarterly%20VWA%20spot%20prices%20DATA_2_20260807084204.CSV"
+    ),
+    "neg_price_count": (
+        "https://www.aer.gov.au/sites/default/files/2026-08/"
+        "AER_Spot%20prices_Quarterly%20count%20of%20spot%20prices%20below%20%240"
+        "%20DATA_2_20260807084210.CSV"
+    ),
+    "high_price_count_5000": (
+        "https://www.aer.gov.au/sites/default/files/2026-08/"
+        "AER_Spot%20prices_Quarterly%20count%20of%20spot%20prices%20above%20%245000"
+        "%20DATA_2_20260807084208.CSV"
+    ),
+    "fcas_total_cost": (
+        "https://www.aer.gov.au/sites/default/files/2026-08/Total%20FCAS%20Costs.csv"
+    ),
+}
+
+# Warn-bands (QED-style: a divergence is an investigate flag, never a run
+# failure). comparator=None means "ingest and publish as reference, we have no
+# counterpart column" — the reason is published, never a silent pass.
+AER_QA_BANDS = {
+    "vwap_region_quarter": {
+        "comparator": "band_contains",
+        # Proportional slack on our derived [avg_vwap_low, avg_vwap_high] band.
+        "tolerance_ratio": 0.15,
+    },
+    "neg_price_count": {
+        "comparator": "share_ratio",
+        # Different denominators by construction (AER: 30-minute trading
+        # intervals; ours: 5-minute dispatch intervals) — wide band, gross
+        # divergence only.
+        "ratio_min": 0.5,
+        "ratio_max": 2.0,
+        # A quarter with a handful of negative intervals cannot support a ratio.
+        "noise_floor": 50,
+    },
+    "high_price_count_5000": {
+        "comparator": None,
+        "reason": "market_quarterly.json carries no >$5,000 interval count",
+    },
+    "fcas_total_cost": {
+        "comparator": None,
+        "reason": "our quarterly artifact carries no NEM-wide FCAS cost total",
+    },
+}
+
+# Suite publication lag: quarter end + this many weeks is when the AER edition
+# covering it is expected. Used to tell "not published yet" (awaiting_edition,
+# never a warn) apart from a stale seed URL.
+AER_QA_PUBLISH_LAG_WEEKS = 8
+# Trading intervals (30-minute settlement periods) per day — the denominator when
+# converting an AER interval count into a share of the quarter.
+AER_QA_TRADING_INTERVALS_PER_DAY = 48
+
 # AEMO Generation Information (quarterly project register xlsx). The landing
 # page hrefs carry a per-publication ?rev=<hash> query; the module scrapes them
 # and falls back to probing the deterministic media URL (see src/geninfo.py).
