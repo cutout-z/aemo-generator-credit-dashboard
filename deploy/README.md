@@ -58,7 +58,6 @@ setup is **historical** — do not reinstall it:
 - the retired `.service`/`.timer` unit files were deleted in the 2026-09 NAS
   cleanup; `env.*.example` remain as NAS-path templates. The QNAP scheduled
   tasks are the live scheduler;
-- ⚠ the write-enabled GitHub deploy key `hetzner-aemo-vps-2026-05-11`
-  (created 2026-05-11) is a VPS-era leftover. The NAS lanes do not use it —
-  they push over HTTPS with a stored token — so it should be revoked in
-  Settings → Deploy keys.
+- ✅ the write-enabled GitHub deploy key `hetzner-aemo-vps-2026-05-11` (created
+  2026-05-11) was a VPS-era leftover and has been **revoked** (2026-09-19). The
+  NAS lanes push over HTTPS with a stored token; no deploy key is in use.
