@@ -46,7 +46,7 @@ The target production model is frequency-driven scheduled automation on the NAS.
 
 ### Future data sources
 
-`docs/FUTURE_DATA_SOURCES.md` tracks not-yet-built sources: BIDDAYOFFER energy offer curves, AER market-statistics QA (built as a QA cross-check, not a chart), ASX electricity futures, ST/MT PASA forecasts, FPP-era data, and the participant-only prudential data gap. AEMO Generation Information (quarterly) and network outages have shipped — see that document's **Built** sections.
+`docs/FUTURE_DATA_SOURCES.md` tracks not-yet-built sources: BIDDAYOFFER energy offer curves, ASX electricity futures, ST/MT PASA forecasts, FPP-era data, and the participant-only prudential data gap. AEMO Generation Information (quarterly), network outages and the AER market-statistics QA cross-check have shipped — see that document's **Built** sections.
 
 ---
 
@@ -127,6 +127,26 @@ The network-outage lane slices AEMO's monthly transmission outage register into 
 - **Outage-days** = the days of a window's *submitted* start/end that fall inside the processed month (an open or far-future end runs to month end). Windows withdrawn by the participant (`WDRAWN`, `WD REQ`) are kept in the local snapshot but excluded from the metric.
 - **Region and voltage are not in the outage table.** Region is joined from `NETWORK_RATING` (exact equipment key, then substation majority) and `NETWORK_SUBSTATIONDETAIL` (substation-level region); voltage from `NETWORK_EQUIPMENTDETAIL` (latest `VALIDFROM`), bucketed into 500/330/275/220/110–132/33–66/<33 kV. Rows that join nowhere are dropped from the rollup and counted in `summary.unjoined_region_windows` — never assigned a guessed region.
 - **Read it as planned exposure**: a long-dated maintenance window counts for every month it spans, which is the point — it is the leading indicator for MLF drift and curtailment on the units behind that element, and it complements the binding-constraints panel. This lane publishes data only (no dashboard panel) because network outages are element-level network context, not a per-generator attribute.
+
+### AER market-statistics QA cross-check (quarterly CSV suite)
+
+The AER re-publishes a small quarterly CSV suite ~6–8 weeks after quarter end (VWA spot prices per region, counts of 30-minute prices below $0 and above $5,000, total FCAS costs). `src/aer_qa.py` ingests it and cross-checks the regulator's published picture against the aggregates we derived ourselves in `docs/data/market_quarterly.json`, using the same warn-band philosophy as the QED benchmark: a divergence is an **investigate flag, never a run failure**.
+
+**This is a QA process, not a dashboard feature** — per the owner's decision, nothing in `docs/index.html` reads `docs/data/aer_qa.json`. There is no chart, no panel and no UI change: the value is catching a derivation drift against an independent publisher.
+
+| AER series | Compared against | Band |
+|---|---|---|
+| Quarterly regional VWA spot price | our derived quarterly band `[avg_vwap_low, avg_vwap_high]` | the published price must land inside the band, ±15 % of band width |
+| Count of 30-min prices below $0 | our `neg_price_share` (share of 5-min intervals) | ratio 0.5–2.0; a quarter with <50 intervals on both sides is `below_noise_floor`, not a warn |
+| Count of 30-min prices above $5,000 | no counterpart column in our artifact | ingested and published as **reference only** (`not_comparable` + reason) |
+| NEM total FCAS cost ($m) | no counterpart (we track FCAS *price* factors, not cost totals) | reference only |
+
+- **Denominators differ by construction** for the negative-price check: the AER counts 30-minute *trading* intervals (48/day → 4,368 a quarter), ours is the share of 5-minute *dispatch* intervals. The band is wide on purpose — a hit means gross divergence, not an equality assertion.
+- **Publication lag is not a data problem.** `AER_QA_PUBLISH_LAG_WEEKS = 8` gives the quarter the AER should have published by now; a quarter the edition does not yet cover reports `awaiting_edition` (never a warn), so "not published yet" can never be misread as a data-quality alarm.
+- **Access is two-step and recorded.** The chart pages link the CSVs, but they sit behind a bot-management interstitial (live-probed 2026-09-19: HTTP 200 with a ~2.4 KB `bm-verify` stub from this network, for every slug), while the static `/sites/default/files/<edition>/…CSV` assets serve clean quarterly CSVs (1.4–2.9 KB, HTTP 200). The lane therefore scrapes the page href when it can and falls back to the last-verified seed URL in `config.AER_QA_SEED_URLS`, publishing which route (**`page_scrape` / `seed_url`**) produced each series. Refresh the seed folder date (e.g. `2026-11`) when a new edition lands; a stale seed is detected by edition stamping, never compared blindly.
+- **Edition stamping**: `edition.content_sha256` per series + the latest quarter the edition covers. An unchanged edition is not re-fetched and a re-run leaves the artifact byte-identical (S3-12 semantic-diff publish gate).
+- **Outputs**: `docs/data/aer_qa.json` (pass/warn counts, per-check detail, bounded recent reference values, warn `findings`) and the `aer_qa` lane record in `docs/data/run_status.json`. Parsed reference values are cached machine-locally under `data/aer_qa/` (never committed). A failed fetch retains the last-known-good edition and reports the lane **degraded**; `--skip-aer-qa` skips the lane entirely.
+- **First live run** (AER 2026-08 edition, 2026-09-19): 27 pass / 1 warn / 2 reference-only across 4 series. The single warn is TAS1 2025Q4 negative-price share — ours 3.00 % vs the AER's 8.04 % (ratio 0.37) — logged as a divergence to investigate, not a pipeline failure.
 
 ### Binding network constraints — credit translation
 

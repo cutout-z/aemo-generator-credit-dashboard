@@ -95,6 +95,41 @@ Per-DUID offer behaviour from `BIDPEROFFER_D` FCAS rows — see
 Duration-parameterized capture-window VWAPs (1h/2h/4h/8h + decile legacy
 proxy benchmarked against AEMO QED) — see README methodology.
 
+### AER market-statistics QA cross-check (quarterly CSV suite, Sep 2026)
+- **What**: The AER's quarterly market-statistics CSV suite — regional VWA spot
+  prices, counts of 30-minute prices below $0 and above $5,000, and NEM total FCAS
+  costs — ingested and cross-checked against our own derived
+  `docs/data/market_quarterly.json` with QED-style warn-bands. **QA process only:
+  no chart, no panel, no `index.html` change** (owner decision 2026-09-19).
+  Outputs `docs/data/aer_qa.json` + an `aer_qa` lane record in
+  `docs/data/run_status.json`; see `src/aer_qa.py`.
+- **Checks**: AER's published regional VWA must land inside our derived quarterly
+  band `[avg_vwap_low, avg_vwap_high]` (±15% of band width); AER's below-$0
+  interval count, converted to a share of the quarter's 4,368 trading intervals,
+  is ratio-banded 0.5–2.0 against our `neg_price_share` (5-minute denominator —
+  wide band, gross-divergence alarm only, and counts under 50 intervals on both
+  sides are `below_noise_floor`, not warns). Above-$5,000 counts and FCAS cost
+  totals have no counterpart column in our artifact: they are ingested and
+  published as reference values marked `not_comparable` with the reason — never
+  dropped, never faked into a pass. Warns never fail the run.
+- **Gotchas**: the chart pages are behind a bot-management interstitial
+  (live-probed 2026-09-19: all four slugs answer HTTP 200 with a ~2.4 KB
+  `bm-verify` refresh stub — the slug exists, the content does not), while the
+  static `/sites/default/files/<edition>/…CSV` assets serve plain quarterly CSVs
+  (HTTP 200, 1.4–2.9 KB). Hence the two-step route (scrape the page href → GET the
+  static file) with the last-verified seed URLs in `config.AER_QA_SEED_URLS` as
+  fallback, and the published `routes` map (`page_scrape` / `seed_url`) so it is
+  always visible which path produced the numbers. Editions land ~6–8 weeks after
+  quarter end: `AER_QA_PUBLISH_LAG_WEEKS = 8` separates "not published yet"
+  (`awaiting_edition`, never a warn) from a stale seed, and per-series
+  `content_sha256` means an unchanged edition is not re-fetched. Refresh the seed
+  folder date (e.g. `2026-11`) when a new edition lands.
+- **First live run** (AER 2026-08 edition covering through 2026Q2, 2026-09-19):
+  27 pass / 1 warn / 2 reference-only. The warn is a real finding, not a lane
+  bug: TAS1 2025Q4 negative-price share — ours 3.00% of 5-minute intervals vs the
+  AER's 8.04% of 30-minute trading intervals (ratio 0.37). Worth investigating
+  whether our negative-price capture under-counts TAS through that quarter.
+
 ## Future — Tier 2 (situational value)
 
 ### AEMO Generation Information (quarterly xlsx) — BUILT (see "Built" above)
@@ -133,7 +168,13 @@ access research is not re-done. The two corrections that mattered: the monthly
 route is available well before `MMSDM_2026_07`, and `NETWORK_SUBSTATIONDETAIL`
 is needed on top of `NETWORK_RATING` to join the majority of substations.
 
-### AER market-statistics QA lane — access verified, planned as QA (not charted)
+### AER market-statistics QA lane — BUILT (see "Built → AER market-statistics QA cross-check")
+The quarterly CSV cross-check is implemented in `src/aer_qa.py`; this section is
+retained as a pointer. Two things the build settled that the research could not:
+the "Download CSV" pages are bot-walled but the static edition files serve fine
+(so the lane uses a scrape-then-seed route and records which one it used), and the
+suite's coverage is ~6–8 weeks after quarter end, which is what makes
+`awaiting_edition` (a lag) distinguishable from a divergence (a finding).
 - **What**: AER quarterly market-statistics CSV suite (refreshed ~6–8 weeks
   after quarter end, e.g. re-published 2026-04-07 and 2026-08-07) plus the
   biennial WEMPR (2022/2024/2026) and annual State of the Energy Market
@@ -141,13 +182,8 @@ is needed on top of `NETWORK_RATING` to join the majority of substations.
   series (WEMPR/SOM are one-off workbook editions).
 - **QA value (per Zalen: QA process, not dashboard charts)**: cross-check
   our derived aggregates against the regulator's published picture.
-  Checkable series: quarterly volume-weighted average spot prices per
-  region; negative-price interval counts; price-threshold interval counts
-  (>$300/$5000/$20000); FCAS cost totals. Divergence beyond tolerance =
-  data-quality alarm (same pattern as the QED divergence check).
-- **Build sketch**: fetch the suite each quarter, extract per-region
-  quarterlies, compare against `market_quarterly.json` values, log
-  pass/warn/fail in the daily run (warn-band approach like QED).
+  Divergence beyond tolerance = data-quality alarm (same pattern as the QED
+  divergence check).
 
 ### ASX electricity futures (base / cap / peak settlement)
 - Forward hedge benchmark per region. Historical settlements + open interest

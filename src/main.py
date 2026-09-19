@@ -49,6 +49,7 @@ from .freshness import check_monthly_freshness, check_daily_freshness
 from .generate_market_json import publish_market_json
 from .geninfo import run_geninfo_lane
 from .network_outages import run_network_outages_lane
+from .aer_qa import run_aer_qa_lane
 from .run_status import (
     LaneRun,
     build_manifest,
@@ -470,6 +471,9 @@ def main():
     parser.add_argument("--network-outage-backfill", type=int, default=0,
                         help="Also slice the last N months of outage history "
                              "(the MMSDM monthly route serves well before 2026_07)")
+    parser.add_argument("--skip-aer-qa", action="store_true",
+                        help="Skip the AER quarterly market-statistics QA cross-check "
+                             "(last-known-good AER edition retained; QA only, no chart)")
     args = parser.parse_args()
     if args.fcas_rebuild:
         args.skip_scada = True
@@ -1048,6 +1052,40 @@ def main():
         market_factors, market_quarterly, str(docs_data_dir),
         qed_benchmarks=QED_NEM_SPREAD_AUD_MWH,
     )
+
+    # Step 4b: AER quarterly market-statistics QA cross-check (QA ONLY).
+    # Runs AFTER publish_market_json so it compares the AER edition against the
+    # market_quarterly.json just written, not last run's copy. Findings land in
+    # docs/data/aer_qa.json and in this lane's manifest record — there is
+    # deliberately no dashboard panel or chart for it (owner decision
+    # 2026-09-19: QA process, not a chart). Warn-band findings never fail the
+    # run; a failed fetch retains the last-known-good edition from data/aer_qa/
+    # and reports the lane degraded so the operator channel sees it.
+    logger.info("=== Step 4b: AER quarterly market-statistics QA (QA only) ===")
+    aer_lane = LaneRun(source="aer_qa")
+    if args.skip_aer_qa:
+        aer_lane.status = STATUS_SKIPPED
+        aer_lane.note = "explicit --skip-aer-qa"
+    else:
+        try:
+            aer_result = run_aer_qa_lane(data_dir, docs_data_dir)
+            aer_lane.status = aer_result.status
+            aer_lane.retained = aer_result.retained
+            aer_lane.error = aer_result.error
+            aer_lane.note = aer_result.note
+            if aer_result.edition_quarter:
+                # Edition-keyed frame: LaneRun.asof_month() reports the AER
+                # edition the checks ran against (same YYYYQn shape as the
+                # quarter labels in market_quarterly.json).
+                aer_lane.frame = pd.DataFrame({"edition": [aer_result.edition_quarter]})
+                aer_lane.attempted_months = 1
+                aer_lane.months_with_data = 1
+        except Exception as e:  # defensive: the lane itself reports degradation
+            logger.error("AER QA lane failed: %s", e)
+            aer_lane.status = STATUS_ERROR
+            aer_lane.error = str(e)
+    factor_lanes.append(aer_lane)
+
     if not args.no_processed_cache_snapshot:
         publish_processed_cache(data_dir, docs_data_dir)
 
