@@ -36,6 +36,56 @@ re-doing the access research (all URLs below were live-verified 3 Sep 2026).
   current registration-list row) are not published at all after S3-06, so
   the dashboard never offers them and no offer file is written.
 
+### AEMO network outages (Sep 2026)
+- **What**: Transmission outage windows from the MMSDM monthly
+  `NETWORK_OUTAGEDETAIL` archive (LINE / CB / TRANS / BUS / CAP / SVC / REAC …)
+  with submitted and actual start/end and the AEMO status code (`WDRAWN`,
+  `COMPLETE`, `SUBMIT`/`UTP`/`MTLTP`/`PTP` …). Published as
+  `docs/data/network_outages.json`: per-region outage-days by voltage class for
+  the processed months, plus the active-window and standing-window lists.
+- **Metric**: *scheduled* outage-days — for each window overlapping a processed
+  month, the days of that overlap clipped to the month (an open or far-future
+  end runs to month end). Withdrawn windows (`WDRAWN`, `WD REQ`) are retained in
+  the local snapshot for audit but excluded from the metric: a withdrawn request
+  never took plant out of service. Outage-days below a voltage class are summed
+  per region, so a 500 kV interconnector transformer outage and a 66 kV line
+  outage are visible separately rather than blended.
+- **Region/voltage**: OUTAGEDETAIL carries neither. Region resolves in
+  priority order — rated-equipment exact match in `NETWORK_RATING` →
+  substation-majority region from `NETWORK_RATING` → substation-level
+  `REGIONID` from `NETWORK_SUBSTATIONDETAIL` (live probe: ~86% of window rows
+  join, mostly via the two fallbacks). Voltage comes from
+  `NETWORK_EQUIPMENTDETAIL` (latest `VALIDFROM` per key), bucketed into
+  500/330/275/220/110–132/33–66/<33 kV classes. Rows that join nowhere are
+  **dropped from the rollup and counted** (`summary.unjoined_region_windows`,
+  `source_status.join_warning`) — never assigned a guessed region or a
+  zero-filled voltage.
+- **Storage (parse-and-slice)**: the monthly zip is ~23 MB and extracts to a
+  **~205 MB full-history CSV** (2002 → present, ~896k rows), so the raw archive
+  is deleted the moment the target months are sliced; only the compact
+  window-month snapshot, the per-month slices and the standing-window file
+  remain under `data/network_outages/` (machine-local, never committed). A test
+  tripwire asserts no `.zip`/`.CSV` survives a run.
+- **Gotchas**: AEMO's standing/recurring windows start in 2098–2202 — real
+  register rows, kept and flagged, never treated as data errors. Availability
+  was live-probed 2026-09-19: the MMSDM monthly route serves well before
+  `MMSDM_2026_07` (checked back to 2024_06/2024_09/2025_03…2026_08), so the
+  earlier "exists only from 2026_07, no monthly backfill route" note was wrong
+  and `--network-outage-backfill N` now slices prior months. Scheduled (not
+  observed) days mean a long-dated maintenance window counts for every month it
+  spans — read it as planned exposure, which is the leading-indicator value for
+  MLF drift and curtailment.
+
+### AEMO Generation Information (quarterly xlsx)
+- **What**: Existing / committed / anticipated / withdrawn generation projects
+  (quarterly editions), diffed edition-to-edition for new commitments,
+  de-commitments and announced withdrawals — published as `docs/data/gen_info.json`
+  and attached per generator (`gen_info` block). See `src/geninfo.py`.
+- **Gotchas**: the landing-page link needs its per-publication `?rev=<hash>`
+  query, so the module scrapes the href and falls back to probing the
+  deterministic media URL; DUID is blank on ~62% of rows, so edition identity
+  keys on `Gen Info Unit ID`.
+
 ### FCAS participation factors (Aug 2026)
 Per-DUID offer behaviour from `BIDPEROFFER_D` FCAS rows — see
 `src/fcas_factor.py` and the README. Regional FCAS *prices* are labelled
@@ -47,7 +97,11 @@ proxy benchmarked against AEMO QED) — see README methodology.
 
 ## Future — Tier 2 (situational value)
 
-### AEMO Generation Information (quarterly xlsx) — access verified, not built
+### AEMO Generation Information (quarterly xlsx) — BUILT (see "Built" above)
+Retained here only for the access research (landing-page `?rev=` href, Oct-2025
+sheet restructure, blank-DUID caveat). Implemented in `src/geninfo.py`; the
+heading above was left saying "not built" for a few commits after the lane
+shipped.
 - **What**: Existing / committed / anticipated / withdrawn generation
   projects, quarterly (Jul 2026 current; series Jan/Apr/Jul/Oct).
 - **Verified access**: landing page
@@ -72,29 +126,12 @@ proxy benchmarked against AEMO QED) — see README methodology.
 - **Companion files** on the same page: Expected Closure Year xlsx (NER
   2.1B.3), KCI Datafile Compiled.
 
-### Network outages (`NETWORK_OUTAGEDETAIL`) — access verified, not built
-- **What**: transmission outage lifecycle records (LINE/CB/BUS/TRANS/...
-  with submitted/actual start-end, status codes WDRAWN/COMPLETE/UTP/...).
-- **Verified access (two routes)**:
-  1. MMSDM monthly: `PUBLIC_ARCHIVE%23NETWORK_OUTAGEDETAIL%23FILE01%23{YYYYMM}010000.zip`
-     under the standard MMSDM DATA path — **exists only from MMSDM_2026_07**
-     (older months 404; no monthly backfill route). Each file is a ~205MB
-     *full-history* CSV (890k rows, 2003→present), not a monthly slice.
-  2. NEMWEB weekly: `https://www.nemweb.com.au/Reports/ARCHIVE/Network/PUBLIC_NETWORK_{YYYYMMDD}.zip`
-     (Friday roll-ups, ~90MB, zips-within-zips per 30-min interval, MMS
-     format; Aug 2025→present, publish lag 2–3 weeks).
-- **Schema notes**: no REGION/VOLTAGE in OUTAGEDETAIL — join
-  `NETWORK_EQUIPMENTDETAIL` (VOLTAGE) / `NETWORK_RATING` (REGIONID) via
-  SUBSTATIONID+EQUIPMENTTYPE+EQUIPMENTID. Far-future dates (2099/2202) are
-  standing/recurring windows, not errors. `NETWORK_OUTAGECONSTRAINTSET`
-  (outage→constraint-set map) is monthly-archive-only.
-- **Credit-risk value**: leading indicator for MLF deterioration and
-  curtailment; complements the constraint lane. Build: monthly full-history
-  refresh, filter to ACTIVE windows overlapping the month, aggregate
-  per-region outage-days by voltage class.
-- **Practical warning**: the full-history pattern means storage grows
-  monotonically — parse and store the filtered slice, keep the raw zip only
-  for the current cycle.
+### Network outages — BUILT (see "Built → AEMO network outages" above)
+The MMSDM monthly route and the region/voltage joins are implemented in
+`src/network_outages.py`; this section is retained only as a pointer so the old
+access research is not re-done. The two corrections that mattered: the monthly
+route is available well before `MMSDM_2026_07`, and `NETWORK_SUBSTATIONDETAIL`
+is needed on top of `NETWORK_RATING` to join the majority of substations.
 
 ### AER market-statistics QA lane — access verified, planned as QA (not charted)
 - **What**: AER quarterly market-statistics CSV suite (refreshed ~6–8 weeks

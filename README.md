@@ -46,7 +46,7 @@ The target production model is frequency-driven scheduled automation on the NAS.
 
 ### Future data sources
 
-`docs/FUTURE_DATA_SOURCES.md` tracks not-yet-built sources: BIDDAYOFFER energy offer curves, AEMO Generation Information quarterly, AER wholesale performance and rebidding reports, ASX electricity futures, network outage data, ST/MT PASA forecasts, FPP-era data, and the participant-only prudential data gap.
+`docs/FUTURE_DATA_SOURCES.md` tracks not-yet-built sources: BIDDAYOFFER energy offer curves, AER market-statistics QA (built as a QA cross-check, not a chart), ASX electricity futures, ST/MT PASA forecasts, FPP-era data, and the participant-only prudential data gap. AEMO Generation Information (quarterly) and network outages have shipped — see that document's **Built** sections.
 
 ---
 
@@ -119,6 +119,14 @@ Per-DUID FCAS participation is derived from AEMO **BIDPEROFFER_D** daily offer d
 These appear as a summary box on the generator card. The regional FCAS price chart is explicitly labelled **scope: regional average** — it describes the market the generator operates in, not the generator's own FCAS behaviour or revenue. Actual enablement and FCAS revenue remain participant-only data.
 
 **Era note**: from **8 June 2025** the NEM is in the FPP (Frequency Performance Payments) era — AEMO's causer-pays global FCAS factors ceased — so participation semantics before and after mid-2025 are not directly comparable.
+
+### Network outages (MMSDM NETWORK_OUTAGEDETAIL)
+
+The network-outage lane slices AEMO's monthly transmission outage register into `docs/data/network_outages.json`: **scheduled outage-days per region by voltage class** for the processed months, plus the active/upcoming windows and AEMO's standing (2098–2202) windows.
+
+- **Outage-days** = the days of a window's *submitted* start/end that fall inside the processed month (an open or far-future end runs to month end). Windows withdrawn by the participant (`WDRAWN`, `WD REQ`) are kept in the local snapshot but excluded from the metric.
+- **Region and voltage are not in the outage table.** Region is joined from `NETWORK_RATING` (exact equipment key, then substation majority) and `NETWORK_SUBSTATIONDETAIL` (substation-level region); voltage from `NETWORK_EQUIPMENTDETAIL` (latest `VALIDFROM`), bucketed into 500/330/275/220/110–132/33–66/<33 kV. Rows that join nowhere are dropped from the rollup and counted in `summary.unjoined_region_windows` — never assigned a guessed region.
+- **Read it as planned exposure**: a long-dated maintenance window counts for every month it spans, which is the point — it is the leading indicator for MLF drift and curtailment on the units behind that element, and it complements the binding-constraints panel. This lane publishes data only (no dashboard panel) because network outages are element-level network context, not a per-generator attribute.
 
 ### Binding network constraints — credit translation
 

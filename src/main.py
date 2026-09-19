@@ -48,6 +48,7 @@ from .offer_curves import (
 from .freshness import check_monthly_freshness, check_daily_freshness
 from .generate_market_json import publish_market_json
 from .geninfo import run_geninfo_lane
+from .network_outages import run_network_outages_lane
 from .run_status import (
     LaneRun,
     build_manifest,
@@ -460,6 +461,15 @@ def main():
     parser.add_argument("--skip-geninfo", action="store_true",
                         help="Skip the AEMO Generation Information quarterly lane "
                              "(last-known-good register snapshot retained)")
+    parser.add_argument("--skip-network-outages", action="store_true",
+                        help="Skip the MMSDM NETWORK_OUTAGEDETAIL monthly outage lane "
+                             "(last-known-good outage snapshot retained)")
+    parser.add_argument("--network-outage-months-back", type=int, default=2,
+                        help="Months of outage windows to slice (default: 2 — current "
+                             "plus prior month for late status changes)")
+    parser.add_argument("--network-outage-backfill", type=int, default=0,
+                        help="Also slice the last N months of outage history "
+                             "(the MMSDM monthly route serves well before 2026_07)")
     args = parser.parse_args()
     if args.fcas_rebuild:
         args.skip_scada = True
@@ -946,6 +956,56 @@ def main():
                 geninfo_lane.status = STATUS_ERROR
         geninfo_lane.frame = gen_info_rows
     factor_lanes.append(geninfo_lane)
+
+    # Step 3i: AEMO MMSDM Network Outages (monthly, full-history archive).
+    # The monthly NETWORK_OUTAGEDETAIL file is a ~23 MB zip holding a ~205 MB
+    # full-history CSV (2002→present); the lane streams it, slices the windows
+    # overlapping the processed months, joins region/voltage from
+    # NETWORK_RATING / NETWORK_EQUIPMENTDETAIL / NETWORK_SUBSTATIONDETAIL and
+    # deletes the raw archive immediately (parse-and-slice). Published as
+    # docs/data/network_outages.json (regional outage-days by voltage class).
+    # Never fatal: a failed fetch retains the last-known-good snapshot and the
+    # lane's state lands in the run manifest.
+    logger.info("=== Step 3i: AEMO network outages (monthly) ===")
+    network_lane = LaneRun(source="network_outages")
+    network_facts = pd.DataFrame()
+    network_snapshot_path = data_dir / "network_outages" / "network_outage_snapshot.feather"
+    if args.skip_network_outages:
+        network_facts = _skip_lane_retained(
+            network_lane, network_snapshot_path, "explicit --skip-network-outages",
+        )
+    else:
+        try:
+            no_result = run_network_outages_lane(
+                data_dir, docs_data_dir,
+                months_back=args.network_outage_months_back,
+                backfill=args.network_outage_backfill,
+                force=args.full_refresh,
+            )
+            network_facts = no_result.frame
+            network_lane.status = no_result.status
+            network_lane.retained = no_result.retained
+            network_lane.error = no_result.error
+            network_lane.note = no_result.note
+            if not network_facts.empty:
+                network_lane.attempted_months = max(
+                    1, args.network_outage_months_back or 1,
+                )
+                network_lane.months_with_data = int(
+                    network_facts["month"].nunique()
+                ) if "month" in network_facts.columns else 0
+        except Exception as e:  # defensive: the lane itself reports degradation
+            logger.error("Network outage lane failed: %s", e)
+            retained = read_last_good(network_snapshot_path)
+            network_lane.error = str(e)
+            if not retained.empty:
+                network_facts = retained
+                network_lane.status = STATUS_DEGRADED
+                network_lane.retained = True
+            else:
+                network_lane.status = STATUS_ERROR
+        network_lane.frame = network_facts
+    factor_lanes.append(network_lane)
 
     # Step 3f: Freshness guards — fail BEFORE publishing stale data.
     # The daily commit is not a freshness signal: the pipeline re-processes the

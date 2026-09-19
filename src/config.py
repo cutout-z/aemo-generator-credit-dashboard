@@ -89,6 +89,42 @@ DUDETAILSUMMARY_URL_TEMPLATE = (
 # NEMWEB base for probing available months
 NEMWEB_BASE_URL = "https://nemweb.com.au/Data_Archive/Wholesale_Electricity/MMSDM/"
 
+# MMSDM monthly archive for the transmission outage lifecycle
+# (NETWORK_OUTAGEDETAIL). The monthly zip is ~23 MB and holds a ~205 MB
+# *full-history* CSV (2002 → present, ~896k rows), so the lane parses-and-slices:
+# the raw zip and its extracted CSV are deleted as soon as the target months'
+# windows are sliced out (see src/network_outages.py). Live-probed 2026-09-19:
+# the monthly route serves 2024_06 → 2026_08, i.e. well before MMSDM_2026_07
+# (the "exists only from 2026_07" note in the spec was wrong).
+NETWORK_OUTAGE_URL_TEMPLATE = (
+    MMSDM_BASE_URL
+    + "{year:04d}/MMSDM_{year:04d}_{month:02d}/"
+    "MMSDM_Historical_Data_SQLLoader/DATA/"
+    "PUBLIC_ARCHIVE%23NETWORK_OUTAGEDETAIL%23FILE01%23{year:04d}{month:02d}010000.zip"
+)
+
+# Supporting monthly tables carrying the region/voltage context that
+# OUTAGEDETAIL itself lacks. NETWORK_RATING gives REGIONID per
+# SUBSTATIONID+EQUIPMENTTYPE+EQUIPMENTID, NETWORK_EQUIPMENTDETAIL gives VOLTAGE
+# for the same key, and NETWORK_SUBSTATIONDETAIL is the substation-level
+# REGIONID fallback the live probe showed is needed (the rating table only
+# covers ~358 of the ~1023 substations that carry outages).
+NETWORK_SUPPORT_URL_TEMPLATE = (
+    MMSDM_BASE_URL
+    + "{year:04d}/MMSDM_{year:04d}_{month:02d}/"
+    "MMSDM_Historical_Data_SQLLoader/DATA/"
+    "PUBLIC_ARCHIVE%23{table}%23FILE01%23{year:04d}{month:02d}010000.zip"
+)
+
+# How many months back the outage discovery probes for the newest published file
+# (AEMO publishes the MMSDM monthly archive ~2 weeks after month-end).
+NETWORK_OUTAGE_PROBE_MONTHS_BACK = 4
+
+# Outage windows that start at/after this year are AEMO's standing/recurring
+# windows (observed 2098, 2099, 2100, 2202), never data errors: they are kept
+# and flagged rather than dropped.
+NETWORK_OUTAGE_STANDING_YEAR = 2090
+
 # AEMO Generation Information (quarterly project register xlsx). The landing
 # page hrefs carry a per-publication ?rev=<hash> query; the module scrapes them
 # and falls back to probing the deterministic media URL (see src/geninfo.py).
