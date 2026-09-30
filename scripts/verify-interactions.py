@@ -188,8 +188,31 @@ def main() -> int:
         o2 = pg.evaluate(order)
         check(o1 != o0 and o2 == o1, "drag-to-reorder (within a group only)", f"{o0[0][:2]} → {o1[0][:2]}")
 
+        # Theme: the toggle flips the page, redraws the charts from the light tokens, is remembered
+        def theme_state():
+            return pg.evaluate("""() => ({ theme: document.documentElement.getAttribute('data-theme') || 'dark',
+                body: getComputedStyle(document.body).backgroundColor,
+                bar: document.getElementById('chartGeneration').data[0].marker.color, token: ChartTokens.color('info'),
+                saved: (() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })() })""")
+        t0 = theme_state()
+        pg.click("#themeToggle")
+        pg.wait_for_timeout(2500)
+        t1 = theme_state()
+        pg.reload(wait_until="networkidle")
+        pg.wait_for_timeout(3000)
+        t2 = theme_state()
+        pg.click("#themeToggle")
+        pg.wait_for_timeout(2500)
+        t3 = theme_state()
+        check(t0["theme"] == "dark" and t1["theme"] == "light" and t1["body"] != t0["body"]
+              and t1["bar"] == t1["token"] != t0["bar"] and t2["theme"] == "light" and t2["bar"] == t1["bar"]
+              and t3["theme"] == "dark" and t3["bar"] == t0["bar"] and t3["saved"] == "dark",
+              "theme toggle (flip, chart redraw, remembered)", f"bar {t0['bar']} → {t1['bar']} → reload {t2['bar']} → {t3['bar']}")
+
         # Corner resize handle
         pnl = pg.locator("#panelMarketSpread")
+        pg.evaluate("document.getElementById('panelMarketSpread').scrollIntoView({block: 'center'})")
+        pg.wait_for_timeout(300)
         bb = pnl.bounding_box()
         pnl.hover()
         pg.mouse.move(bb["x"] + bb["width"] - 6, bb["y"] + bb["height"] - 6)

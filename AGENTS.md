@@ -35,6 +35,7 @@ work here is allowed to happen.
 | Presentation entry point | `docs/index.html` → `assets/css/tailwind.src.css` (tokens) → `docs/assets/app.css` (compiled) |
 | Chart colours | `assets/js/chart-tokens.js` (reads the CSS variables) → published to `docs/assets/js/chart-tokens.js` by `./scripts/build-css.sh` |
 | Deep links | selection is by URL hash: `#/<DUID>` — every one of the 630 units is directly addressable |
+| Themes | dark default; the app-bar toggle flips to light and is remembered per viewer (localStorage); `?theme=light` / `?theme=dark` forces one (screenshots, shared links). A flip redraws the charts from the tokens. `tests/test_design_assets.py` fails on any literal colour in the page |
 | Data lane | `deploy/run-update.sh` on the NAS writes **`docs/data/**` only** |
 | Export | CSV + XLSX are client-side (SheetJS). Keep them working; they are used. |
 

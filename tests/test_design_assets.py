@@ -21,3 +21,14 @@ def test_chart_tokens_published_copy_matches_source():
 def test_compiled_css_is_published():
     css = ROOT / "docs" / "assets" / "app.css"
     assert css.exists() and css.stat().st_size > 0, "docs/assets/app.css missing — run ./scripts/build-css.sh"
+
+
+def test_page_has_no_raw_colours():
+    """Rule 1 of design/design-tokens.md: colours come from the tokens, never literals in the page.
+    A literal colour is also exactly what breaks the light/dark flip."""
+    import re
+
+    html = (ROOT / "docs" / "index.html").read_text()
+    hexes = [m.group(0) for m in re.finditer(r"(?<![&\w])#[0-9a-fA-F]{3,8}\b", html)]
+    funcs = re.findall(r"\b(?:rgba?|hsla?)\(", html)
+    assert not hexes and not funcs, f"raw colours in docs/index.html: {hexes[:5]} {funcs[:5]}"

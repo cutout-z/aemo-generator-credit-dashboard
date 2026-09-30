@@ -6,6 +6,16 @@
     <title>AEMO Generator Credit Dashboard</title>
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script>
+        // Theme before first paint, so nothing flashes. ?theme=light|dark wins (deterministic
+        // screenshots and shareable links), then the viewer's saved choice; dark is the design default.
+        (function () {
+            var t = null;
+            try { t = new URLSearchParams(location.search).get('theme'); } catch (e) {}
+            if (t !== 'light' && t !== 'dark') { try { t = localStorage.getItem('theme'); } catch (e) {} }
+            if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        })();
+    </script>
     <link rel="stylesheet" href="assets/app.css">
     <script src="assets/js/chart-tokens.js"></script>
     <style>
@@ -192,6 +202,11 @@
             <span class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-bg" aria-hidden="true">GC</span>
             <h1 class="text-[13px] font-semibold leading-tight text-ink">AEMO Generator Credit<span class="block text-[12px] font-normal text-faint">Dashboard</span></h1>
         </div>
+        <button type="button" id="themeToggle" class="btn btn-ghost btn-icon ml-auto shrink-0 lg:order-last min-[1400px]:ml-0"
+                aria-label="Switch to light theme" title="Switch to light theme">
+            <svg class="size-4 [[data-theme=light]_&]:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+            <svg class="hidden size-4 [[data-theme=light]_&]:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
         <div class="w-full lg:relative lg:w-auto lg:min-w-[220px] lg:max-w-[480px] lg:flex-1">
             <span class="relative block">
                 <svg class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -571,6 +586,34 @@ const PLOTLY_CONFIG = {
     // both axes; wheel zooms at the cursor; double-click resets.
     scrollZoom: !COARSE_POINTER,
 };
+
+// ─── Theme ─────────────────────────────────────────────────────────────
+// Two themes, one code path: every colour is a CSS variable, so the page flips with one attribute.
+// Charts are the exception — Plotly takes literal colours, read from the tokens when a chart is
+// drawn (marks, reference lines, fills, the heatmap ramp, the constraint bars) — so a flip redraws
+// them from the payload already in memory. Zoom state is not kept across a flip.
+function currentTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function syncThemeToggle() {
+    const next = currentTheme() === 'light' ? 'dark' : 'light';
+    const btn = document.getElementById('themeToggle');
+    btn.setAttribute('aria-label', 'Switch to ' + next + ' theme');
+    btn.title = 'Switch to ' + next + ' theme';
+}
+
+function applyTheme(theme, persist) {
+    if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    else document.documentElement.removeAttribute('data-theme');
+    if (persist) { try { localStorage.setItem('theme', theme); } catch (e) { /* private mode: session only */ } }
+    syncThemeToggle();
+    if (currentData) renderCharts(currentData);
+}
+
+document.getElementById('themeToggle').addEventListener('click', () =>
+    applyTheme(currentTheme() === 'light' ? 'dark' : 'light', true));
+syncThemeToggle();
 
 // ─── Init ──────────────────────────────────────────────────────────────
 async function init() {
