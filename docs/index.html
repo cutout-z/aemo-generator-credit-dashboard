@@ -339,10 +339,35 @@
         <p class="mt-4 text-[12px] text-faint">Bookmark a generator with the URL hash — e.g. <span class="kbd">#CLRKCWF1</span></p>
     </div>
 
-    <!-- Identity card -->
+    <!-- Entity header: name + fuel, the unit's facts as one quiet line, then a KPI row computed from
+         the unit's own monthly series (trailing 12 published months; see renderKPIs). -->
     <section class="identity-card card mb-4" id="identityCard" aria-labelledby="genName">
         <div class="card-head flex-wrap">
-            <h2 id="genName" class="flex min-w-[200px] flex-1 flex-wrap items-center gap-2 text-[20px] font-semibold leading-7 text-ink"></h2>
+            <div class="min-w-[220px] flex-1">
+                <h2 id="genName" class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[22px] font-semibold leading-8 tracking-[-0.015em] text-ink"></h2>
+                <dl class="identity-meta mt-1.5 flex flex-wrap gap-x-5 gap-y-1 text-[13px] leading-5">
+                    <div class="meta-item flex items-baseline gap-1.5">
+                        <dt class="text-faint">DUID</dt>
+                        <dd class="font-mono text-[12px] text-ink" id="genDUID"></dd>
+                    </div>
+                    <div class="meta-item flex items-baseline gap-1.5">
+                        <dt class="text-faint">Region</dt>
+                        <dd class="text-ink" id="genRegion"></dd>
+                    </div>
+                    <div class="meta-item flex items-baseline gap-1.5">
+                        <dt class="text-faint">Technology</dt>
+                        <dd class="text-ink" id="genTech"></dd>
+                    </div>
+                    <div class="meta-item flex items-baseline gap-1.5">
+                        <dt class="text-faint">Nameplate</dt>
+                        <dd class="num text-ink" id="genCapacity"></dd>
+                    </div>
+                    <div class="meta-item flex min-w-0 items-baseline gap-1.5">
+                        <dt class="shrink-0 text-faint">Connection point</dt>
+                        <dd class="min-w-0 break-words font-mono text-[12px] text-ink" id="genConnection"></dd>
+                    </div>
+                </dl>
+            </div>
             <div class="download-buttons flex gap-2" id="downloadButtons" style="display:none;">
                 <button type="button" class="btn h-7 px-2.5 text-[12px]" onclick="downloadCSV()" title="Download monthly data as CSV">
                     <svg class="size-3.5 fill-current text-muted" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 3.5L18.5 8H14V3.5zM6 20V4h7v5h5v11H6z"/><path d="M8 15h8v1.5H8z"/><path d="M8 12h8v1.5H8z"/></svg>
@@ -354,35 +379,34 @@
                 </button>
             </div>
         </div>
-        <div class="card-body">
-            <dl class="identity-meta grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
-                <div class="meta-item min-w-0">
-                    <dt class="text-[12px] font-medium text-faint">DUID</dt>
-                    <dd class="mt-0.5 truncate font-mono text-[13px] text-ink" id="genDUID"></dd>
-                </div>
-                <div class="meta-item min-w-0">
-                    <dt class="text-[12px] font-medium text-faint">Region</dt>
-                    <dd class="mt-0.5 truncate text-[14px] text-ink" id="genRegion"></dd>
-                </div>
-                <div class="meta-item min-w-0">
-                    <dt class="text-[12px] font-medium text-faint">Fuel type</dt>
-                    <dd class="mt-0.5 truncate text-[14px] text-ink" id="genFuel"></dd>
-                </div>
-                <div class="meta-item min-w-0">
-                    <dt class="text-[12px] font-medium text-faint">Technology</dt>
-                    <dd class="mt-0.5 truncate text-[14px] text-ink" id="genTech"></dd>
-                </div>
-                <div class="meta-item min-w-0">
-                    <dt class="text-[12px] font-medium text-faint">Nameplate capacity</dt>
-                    <dd class="num mt-0.5 truncate text-[14px] text-ink" id="genCapacity"></dd>
-                </div>
-                <div class="meta-item min-w-0">
-                    <dt class="text-[12px] font-medium text-faint">Connection point</dt>
-                    <dd class="mt-0.5 truncate font-mono text-[13px] text-ink" id="genConnection"></dd>
-                </div>
-            </dl>
-            <div id="loadStatus" class="load-status mt-4 rounded-lg border border-line-soft bg-surface-2 px-3 py-2 text-[13px] text-muted data-[state=error]:border-transparent data-[state=error]:bg-bad-wash data-[state=error]:text-bad" role="status" style="display:none;"></div>
+
+        <div id="loadStatus" class="load-status mx-5 mt-4 rounded-lg border border-line-soft bg-surface-2 px-3 py-2 text-[13px] text-muted data-[state=error]:border-transparent data-[state=error]:bg-bad-wash data-[state=error]:text-bad" role="status" style="display:none;"></div>
+
+        <!-- KPI row. Tiles are separated by 1px gaps over the hairline colour; the row is hidden
+             until a payload with a monthly series is accepted. -->
+        <div id="kpiRow" class="mt-4 grid grid-cols-2 gap-px border-t border-line-soft bg-line-soft lg:grid-cols-4" hidden>
+            <div class="bg-surface px-5 py-4">
+                <div class="kpi-value" id="kpiGen"></div>
+                <div class="kpi-label">Generation</div>
+                <div class="mt-0.5 text-[12px] leading-4 text-faint" id="kpiGenSub"></div>
+            </div>
+            <div class="bg-surface px-5 py-4">
+                <div class="kpi-value" id="kpiRev"></div>
+                <div class="kpi-label">Spot energy revenue</div>
+                <div class="mt-0.5 text-[12px] leading-4 text-faint" id="kpiRevSub"></div>
+            </div>
+            <div class="bg-surface px-5 py-4">
+                <div class="kpi-value" id="kpiCF"></div>
+                <div class="kpi-label">Capacity factor</div>
+                <div class="mt-0.5 text-[12px] leading-4 text-faint" id="kpiCFSub"></div>
+            </div>
+            <div class="bg-surface px-5 py-4">
+                <div class="kpi-value" id="kpiMLF"></div>
+                <div class="kpi-label">Marginal loss factor</div>
+                <div class="mt-0.5 text-[12px] leading-4 text-faint" id="kpiMLFSub"></div>
+            </div>
         </div>
+        <div class="card-foot rounded-b-card border-line-soft" id="kpiFoot" hidden></div>
     </section>
 
     <!-- Time period selector -->
@@ -816,7 +840,145 @@ function purgeChartsAndState() {
     syncOffersPanel();
     setPeriodLabel('chartGeneration', []);
     setPeriodLabel('chartPriceDistribution', []);
+    renderKPIs(null);
     currentData = null;
+}
+
+// ─── Entity KPI row ────────────────────────────────────────────────────
+// Every figure is computed from the accepted payload's own monthly series, over its last
+// KPI_WINDOW published months — a fixed window, deliberately independent of the period filter
+// (the foot says so). A figure that cannot be computed shows a dash and says why; nothing is
+// estimated or filled.
+const KPI_WINDOW = 12;
+
+function kpiValueHTML(value, unit, tight) {
+    return value + (unit
+        ? `<span class="${tight ? 'ml-px' : 'ml-1'} text-[14px] font-medium leading-none tracking-normal text-muted">${unit}</span>`
+        : '');
+}
+
+function fmtEnergyParts(mwh) {
+    const a = Math.abs(mwh);
+    if (a >= 1e6) return [(mwh / 1e6).toFixed(2), 'TWh'];
+    if (a >= 1e4) return [(mwh / 1e3).toLocaleString('en-AU', { minimumFractionDigits: 1, maximumFractionDigits: 1 }), 'GWh'];
+    return [Math.round(mwh).toLocaleString('en-AU'), 'MWh'];
+}
+
+function fmtAUDParts(v) {
+    const a = Math.abs(v), sign = v < 0 ? '−' : '';
+    if (a >= 1e9) return [sign + '$' + (a / 1e9).toFixed(2), 'B'];
+    if (a >= 1e6) return [sign + '$' + (a / 1e6).toFixed(1), 'M'];
+    if (a >= 1e3) return [sign + '$' + Math.round(a / 1e3).toLocaleString('en-AU'), 'k'];
+    return [sign + '$' + Math.round(a).toLocaleString('en-AU'), ''];
+}
+
+function setKPI(id, valueHTML, subHTML) {
+    document.getElementById(id).innerHTML = valueHTML;
+    document.getElementById(id + 'Sub').innerHTML = subHTML || '';
+}
+
+const KPI_DASH = '<span class="text-faint">—</span>';
+
+function setKPIsLoading() {
+    document.getElementById('kpiRow').hidden = false;
+    document.getElementById('kpiFoot').hidden = true;
+    for (const id of ['kpiGen', 'kpiRev', 'kpiCF', 'kpiMLF']) {
+        setKPI(id, '<span class="skeleton inline-block h-6 w-24 align-middle"></span>', '');
+    }
+}
+
+function renderKPIs(data) {
+    const row = document.getElementById('kpiRow');
+    const foot = document.getElementById('kpiFoot');
+    const m = data && data.monthly;
+    if (!m || !m.months || !m.months.length) {
+        row.hidden = true;
+        foot.hidden = true;
+        return;
+    }
+    const total = m.months.length;
+    const n = Math.min(KPI_WINDOW, total);
+    const start = total - n;
+    const inWindow = key => (m[key] || []).slice(start, total);
+    const present = arr => arr.filter(v => v != null && !isNaN(v));
+    const monthsPhrase = n === 1 ? 'the one published month' : `the last ${n} months`;
+
+    // Generation: total over the window.
+    const gen = present(inWindow('generation_mwh'));
+    if (gen.length) {
+        const [v, u] = fmtEnergyParts(gen.reduce((a, b) => a + b, 0));
+        setKPI('kpiGen', kpiValueHTML(v, u),
+            gen.length === n ? 'Total' : `Total of ${gen.length} reported months in ${monthsPhrase}`);
+    } else {
+        setKPI('kpiGen', KPI_DASH, `No generation reported in ${monthsPhrase}`);
+    }
+
+    // Revenue: SCADA MWh × regional price × MLF. Months without a factor are unadjusted and
+    // provisional by contract (S3-11) — say so, with a word and not only a colour.
+    const rev = present(inWindow('revenue_aud'));
+    if (rev.length) {
+        const [v, u] = fmtAUDParts(rev.reduce((a, b) => a + b, 0));
+        const [revV, revU] = [v, u];
+        const status = inWindow('revenue_mlf_status');
+        const provisional = status.filter(st => st === 'unknown').length;
+        let sub;
+        if (provisional) {
+            sub = `<span class="pill pill-warn mr-1.5 align-middle"><span class="badge-dot"></span>Provisional</span>` +
+                  (provisional === n ? 'not MLF-adjusted' : `${provisional} of ${n} months not MLF-adjusted`);
+        } else if (status.length && status.every(st => st === 'exact' || st === 'prior-carry')) {
+            sub = 'MLF-adjusted · excl. FCAS and contracts';
+        } else {
+            sub = 'Excl. FCAS and contracts';
+        }
+        if (data.fuel_category === 'Battery') sub += ' · charging cost not netted';
+        setKPI('kpiRev', kpiValueHTML(revV, revU, true), sub);
+    } else {
+        setKPI('kpiRev', KPI_DASH, `No revenue reported in ${monthsPhrase}`);
+    }
+
+    // Capacity factor: mean of the published monthly values — the last point of the
+    // chart's 12-month average line.
+    const cf = present(inWindow('capacity_factor'));
+    if (cf.length) {
+        const mean = cf.reduce((a, b) => a + b, 0) / cf.length;
+        setKPI('kpiCF', kpiValueHTML((mean * 100).toFixed(1), '%'),
+            cf.length === n ? 'Mean of monthly values' : `Mean of ${cf.length} reported months`);
+    } else {
+        setKPI('kpiCF', KPI_DASH, 'Not published for this unit');
+    }
+
+    // MLF: latest final factor (unit), or the range of the units' latest finals (station).
+    if (data.mlf_by_duid && Object.keys(data.mlf_by_duid).length) {
+        const latest = Object.values(data.mlf_by_duid)
+            .filter(u => u.values && u.values.length)
+            .map(u => ({ fy: u.years[u.years.length - 1], v: u.values[u.values.length - 1] }));
+        if (latest.length) {
+            const vs = latest.map(x => x.v);
+            const lo = Math.min(...vs), hi = Math.max(...vs);
+            const fys = [...new Set(latest.map(x => x.fy))];
+            setKPI('kpiMLF', lo === hi ? lo.toFixed(4) : `${lo.toFixed(3)}–${hi.toFixed(3)}`,
+                `Latest final, ${latest.length} units` + (fys.length === 1 ? ` · ${fys[0]}` : ''));
+        } else {
+            setKPI('kpiMLF', KPI_DASH, 'No MLF published for these units');
+        }
+    } else if (data.mlf && data.mlf.values && data.mlf.values.length) {
+        const i = data.mlf.values.length - 1;
+        let sub = `${data.mlf.years[i]} final`;
+        if (data.mlf.draft_year && data.mlf.draft_value != null) {
+            sub += ` · draft ${data.mlf.draft_year}: ${Number(data.mlf.draft_value).toFixed(4)}`;
+        }
+        setKPI('kpiMLF', data.mlf.values[i].toFixed(4), sub);
+    } else {
+        setKPI('kpiMLF', KPI_DASH, 'No MLF published for this unit');
+    }
+
+    row.hidden = false;
+    foot.textContent = (n === 1
+            ? `Figures cover the one published month, ${fmtMonthLong(m.months[start])}`
+            : `Figures cover the last ${n} published months, ${fmtMonthLong(m.months[start])} – ${fmtMonthLong(m.months[total - 1])}`) +
+        (total < KPI_WINDOW ? ' (all the data there is for this unit)' : '') +
+        '. The period control below does not change them.';
+    foot.hidden = false;
 }
 
 async function selectGenerator(duid) {
@@ -836,6 +998,7 @@ async function selectGenerator(duid) {
     // Fresh identity + purged charts BEFORE fetching: the previous
     // generator's numbers must not stay on screen under the new name.
     purgeChartsAndState();
+    setKPIsLoading();
 
     // Show identity card and controls (downloads stay hidden until a
     // payload is accepted — see below)
@@ -848,15 +1011,14 @@ async function selectGenerator(duid) {
     const isStation = gen.type === 'station';
     document.getElementById('genName').innerHTML = `
         <span class="min-w-0">${gen.station_name}</span>
-        <span class="badge">${gen.fuel_category}</span>
+        <span class="badge text-[12px]">${gen.fuel_category}</span>
         ${isStation ? '<span class="badge">Station</span>' : ''}
     `;
     document.getElementById('genDUID').textContent = isStation ? `${gen.duid_count} DUIDs` : gen.duid;
     document.getElementById('genRegion').textContent = gen.region;
-    document.getElementById('genFuel').textContent = gen.fuel_category;
     document.getElementById('genTech').textContent = gen.technology;
     document.getElementById('genCapacity').textContent = gen.capacity_mw ? `${gen.capacity_mw} MW` : 'N/A';
-    document.getElementById('genConnection').textContent = gen.connection_point;
+    document.getElementById('genConnection').textContent = gen.connection_point || '—';
 
     // Hide curtailment panels for non-solar/wind
     const isSolarWind = gen.fuel_category === 'Solar' || gen.fuel_category === 'Wind';
@@ -877,6 +1039,7 @@ async function selectGenerator(duid) {
         const data = await resp.json();
         if (token !== selectionToken) return; // superseded while in flight
         renderCharts(data);
+        renderKPIs(data);
         // Download controls only for an accepted, rendered payload
         document.getElementById('downloadButtons').style.display = 'flex';
         statusEl.style.display = 'none';
