@@ -14,7 +14,7 @@ work here is allowed to happen.
    to fill (see the `state` pattern).
 4. **Verify in a browser, not by grep.** A change is done when a real browser renders it with real
    data: element present, height > 0, content non-empty. An HTTP 200 on the HTML file proves nothing.
-5. **Keep the tests green.** 18 test files at the repo root (`pytest -q`). Three of them parse
+5. **Keep the tests green.** 19 test files under `tests/` (`pytest -q`). Three of them parse
    `docs/index.html` and pin its DOM — see *Pitfalls*. If a change breaks one, the change or the test
    is wrong, deliberately: say which in the commit message.
 
@@ -33,7 +33,7 @@ work here is allowed to happen.
 | Stack | Plotly **2.35.2** (CDN), SheetJS **0.20.3** (CDN, XLSX export), Tailwind **v3.4.17 standalone** (compiled CSS, committed) |
 | Data | `docs/data/**` — 31 MB, 1,088 generator JSONs + market/quarterly/FCAS/outage/reference files |
 | Presentation entry point | `docs/index.html` → `assets/css/tailwind.src.css` (tokens) → `docs/assets/app.css` (compiled) |
-| Chart colours | `assets/js/chart-tokens.js` (reads the CSS variables) |
+| Chart colours | `assets/js/chart-tokens.js` (reads the CSS variables) → published to `docs/assets/js/chart-tokens.js` by `./scripts/build-css.sh` |
 | Deep links | selection is by URL hash: `#/<DUID>` — every one of the 630 units is directly addressable |
 | Data lane | `deploy/run-update.sh` on the NAS writes **`docs/data/**` only** |
 | Export | CSV + XLSX are client-side (SheetJS). Keep them working; they are used. |
@@ -67,6 +67,9 @@ Screenshot and verify with **Playwright** — cloud browsers cannot reach `127.0
 cd <repo> && /opt/anaconda3/bin/python3 scripts/verify-design.py --dashboard ADPBA1
 ```
 
+It writes nothing by default. Add `--screens` to write the evidence screenshots
+(`design/screens/tokens-proof-*.png`, `after-<DUID>-*.png`) — do that when you mean to commit them.
+
 It catches the three failures that are invisible in a diff — a component class Tailwind purged, a chart
 created inside a hidden panel (0px), a chart still on hard-coded colours instead of the tokens — plus
 theme-flip breakage. Exit code 1 means something is wrong; it must be 0 before you report.
@@ -83,7 +86,8 @@ theme-flip breakage. Exit code 1 means something is wrong; it must be 0 before y
   `tests/test_aer_qa.py` asserts the AER QA lane adds **no** panel or chart. Renaming those ids or
   adding an AER panel breaks the build, on purpose.
 - **Tailwind purges unused component classes.** After adding classes, run `./scripts/build-css.sh` and
-  commit `docs/assets/app.css`, or the styling silently does nothing.
+  commit `docs/assets/app.css`, or the styling silently does nothing. The same script republishes
+  `chart-tokens.js`; edit the source in `assets/js/`, never the copy in `docs/assets/js/`.
 - **Preflight is off** (`tailwind.config.js`) so the existing inline styles keep working. Forgetting to
   turn it on at the end means the page keeps two competing resets — the brief's step 1 covers this.
 
@@ -97,8 +101,10 @@ branch it is not. If you need a data file that does not exist, stop and say so �
 
 - [ ] Working tree clean; all work committed **on the branch**.
 - [ ] `pytest -q` run, result stated (counts, and any failure named).
-- [ ] `./scripts/build-css.sh` run after the last class change; `docs/assets/app.css` committed.
-- [ ] Screenshots for every surface you changed, at desktop and phone width, in `docs/screens/`.
+- [ ] `./scripts/build-css.sh` run after the last class change; `docs/assets/app.css` and
+      `docs/assets/js/chart-tokens.js` committed.
+- [ ] Screenshots for every surface you changed, at desktop and phone width, in `design/screens/`
+      (never `docs/` — that is the published site).
 - [ ] Presentation-only: `git diff --stat main` shows no `docs/data/**`, `src/**` or `deploy/**`.
 - [ ] A short report: surfaces changed of the ones that exist, what you did not get to, and anything
       you had to decide that the brief did not cover.

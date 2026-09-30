@@ -8,6 +8,10 @@
     # a dashboard generator view (needs the docs/ server on 9350)
     /opt/anaconda3/bin/python3 scripts/verify-design.py --dashboard ADPBA1
 
+    # ...and write the evidence screenshots into design/screens/ (off by default, so a routine
+    # check never dirties the tree)
+    /opt/anaconda3/bin/python3 scripts/verify-design.py --dashboard ADPBA1 --screens
+
 Why a script and not a screenshot-by-eye: "looks done" and "is done" diverge on this page in known
 ways — a component class that Tailwind purged, a chart created inside a hidden panel (0px), a chart
 still using hard-coded colours instead of the tokens. All three are invisible in a diff and obvious here.
@@ -40,7 +44,7 @@ def rgb(value: str) -> tuple[int, int, int]:
     return (-1, -1, -1)
 
 
-def check_proof_page(pg, failures: list[str]) -> None:
+def check_proof_page(pg, failures: list[str], shots: bool) -> None:
     pg.goto("http://127.0.0.1:9351/design/tokens.html", wait_until="networkidle", timeout=60000)
     pg.wait_for_timeout(2000)
 
@@ -67,7 +71,8 @@ def check_proof_page(pg, failures: list[str]) -> None:
     if charts and fill and fill.lower() != token.lower():
         failures.append(f"chart colour {fill} is not the token colour {token} — a hard-coded colour survived")
 
-    pg.screenshot(path=str(SCREENS / "tokens-proof-dark.png"), full_page=True)
+    if shots:
+        pg.screenshot(path=str(SCREENS / "tokens-proof-dark.png"), full_page=True)
     dark_card = pg.evaluate("getComputedStyle(document.querySelector('.card')).backgroundColor")
     pg.evaluate("document.documentElement.setAttribute('data-theme','light'); ChartTokens.restyle()")
     pg.wait_for_timeout(1000)
@@ -75,10 +80,11 @@ def check_proof_page(pg, failures: list[str]) -> None:
     print(f"  theme flip: card {dark_card} -> {light_card}")
     if rgb(dark_card) == rgb(light_card):
         failures.append("the theme flip changed nothing — the page is not using the token variables")
-    pg.screenshot(path=str(SCREENS / "tokens-proof-light.png"), full_page=True)
+    if shots:
+        pg.screenshot(path=str(SCREENS / "tokens-proof-light.png"), full_page=True)
 
 
-def check_dashboard(pg, duid: str, failures: list[str]) -> None:
+def check_dashboard(pg, duid: str, failures: list[str], shots: bool) -> None:
     pg.goto(f"http://127.0.0.1:9350/#{duid}", wait_until="networkidle", timeout=60000)
     pg.wait_for_timeout(1500)
     if pg.eval_on_selector_all(".js-plotly-plot", "e => e.length") == 0:
@@ -95,6 +101,8 @@ def check_dashboard(pg, duid: str, failures: list[str]) -> None:
     print(f"  {duid}: charts {charts}, zero-height {zero}, page {height}px")
     if zero:
         failures.append(f"{duid}: {zero} chart(s) at 0px")
+    if not shots:
+        return
     pg.screenshot(path=str(SCREENS / f"after-{duid}-top.png"))
     for frac, tag in ((0.3, "mid"), (0.6, "low"), (0.9, "foot")):
         pg.evaluate(f"window.scrollTo(0, Math.floor(document.body.scrollHeight * {frac}))")
@@ -105,8 +113,11 @@ def check_dashboard(pg, duid: str, failures: list[str]) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dashboard", metavar="DUID", help="also verify the dashboard at #<DUID> (server on 9350)")
+    ap.add_argument("--screens", action="store_true",
+                    help="write screenshots to design/screens/ (default: check only, write nothing)")
     args = ap.parse_args()
-    SCREENS.mkdir(parents=True, exist_ok=True)
+    if args.screens:
+        SCREENS.mkdir(parents=True, exist_ok=True)
     failures: list[str] = []
     with sync_playwright() as p:
         b = p.chromium.launch()
@@ -115,13 +126,13 @@ def main() -> int:
         pg.on("response", lambda r: failures.append(f"HTTP {r.status} {r.url[-50:]}") if r.status >= 400 else None)
         print("proof page (design/tokens.html on :9351)")
         try:
-            check_proof_page(pg, failures)
+            check_proof_page(pg, failures, args.screens)
         except Exception as exc:  # noqa: BLE001
             failures.append(f"proof page could not be checked: {type(exc).__name__}: {exc}")
         if args.dashboard:
             print(f"dashboard (#{args.dashboard} on :9350)")
             try:
-                check_dashboard(pg, args.dashboard, failures)
+                check_dashboard(pg, args.dashboard, failures, args.screens)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"dashboard could not be checked: {type(exc).__name__}: {exc}")
         b.close()

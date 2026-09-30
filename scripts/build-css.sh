@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Build docs/assets/app.css from the page sources. Run after ANY class-name change.
+# Build docs/assets/app.css from the page sources, and publish assets/js/chart-tokens.js to
+# docs/assets/js/. Run after ANY class-name change or any edit to chart-tokens.js.
 #
 # Tailwind v3 standalone binary — no Node, no npm, no package.json, no build server.
-# The compiled file is committed because GitHub Pages serves static files only:
-# there is no build step at deploy time.
+# Both outputs are committed because GitHub Pages serves static files only (docs/ on main):
+# there is no build step at deploy time. assets/ is the source; docs/assets/ is the published copy.
+# tests/test_design_assets.py fails if the published chart-tokens.js drifts from its source.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,4 +23,10 @@ fi
 
 "$BIN" -c tailwind.config.js -i assets/css/tailwind.src.css -o "$OUT" --minify
 echo "==> wrote $OUT ($(wc -c < "$OUT" | tr -d ' ') bytes)"
-echo "    remember to commit it: GitHub Pages serves the repo, not a build"
+
+JS_SRC="assets/js/chart-tokens.js"
+JS_OUT="docs/assets/js/chart-tokens.js"
+mkdir -p "$(dirname "$JS_OUT")"
+cp "$JS_SRC" "$JS_OUT"
+echo "==> published $JS_OUT"
+echo "    remember to commit both: GitHub Pages serves the repo, not a build"
