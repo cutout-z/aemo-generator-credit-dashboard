@@ -145,6 +145,17 @@
         .fullscreen-overlay { display: none; position: fixed; inset: 0; background: var(--scrim); z-index: 999; }
         .fullscreen-overlay.visible { display: block; }
 
+        /* Phone: every tap target at least 32px (the (i) button keeps its visual size; its hit
+           area grows into a negative margin). Resize handles are pointer-only affordances. */
+        @media (max-width: 639px) {
+            .seg-item, .btn, .input, .kbd[href] { height: 2rem; }
+            .seg-item { min-width: 2rem; justify-content: center; }
+            .info-btn { width: 32px; height: 32px; margin: -6px; }
+            .chart-expand-btn { width: 32px; height: 32px; top: 10px; right: 10px; }
+            .kbd[href] { padding: 0 10px; }
+            .chart-resize-handle, .chart-resize-bottom, .chart-resize-right { display: none; }
+        }
+
         /* Resize handles (corner, bottom edge, right edge) */
         .chart-resize-handle {
             position: absolute; bottom: 0; right: 0;
@@ -296,10 +307,10 @@
         <!-- Monthly performance: the five panels the period control governs. The control lives in
              this group's header (sticky while the group is on screen), not in a floating strip. -->
         <section class="panel-group w-full" aria-labelledby="grpMonthly">
-            <div class="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 bg-canvas px-1 py-3 lg:top-14">
+            <div class="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-1.5 bg-canvas px-1 py-2 sm:py-3 lg:top-14">
                 <div class="min-w-0">
                     <h2 id="grpMonthly" class="text-[15px] font-semibold leading-6 text-ink">Monthly performance</h2>
-                    <p class="text-[13px] leading-5 text-muted">The period applies to every chart in this group<span id="periodRange" class="num"></span></p>
+                    <p class="text-[13px] leading-5 text-muted"><span class="hidden sm:inline">The period applies to every chart in this group</span><span id="periodSep" class="hidden sm:inline" hidden> · </span><span id="periodRange" class="num"></span></p>
                 </div>
                 <div class="time-controls seg" id="timeControls" role="group" aria-label="Period shown in the monthly performance charts">
                     <button type="button" class="time-btn seg-item" data-months="3">3M</button>
@@ -530,9 +541,12 @@ function monthAxis(labels, chartId, reservedPx) {
 }
 
 // Box-drag on the plot zooms both axes; plain axis drags are handled by initAxisRangeDrag()
-// below (Plotly 2.x ignores them natively).
+// below (Plotly 2.x ignores them natively). On a touch screen a drag must scroll the page —
+// charts fill most of a phone screen, and drag-to-zoom made the page nearly unscrollable — so
+// touch gets no drag or wheel zoom; tapping a point still shows its values.
+const COARSE_POINTER = window.matchMedia('(pointer: coarse)').matches;
 function chartLayout(overrides) {
-    return ChartTokens.layout({ dragmode: 'zoom', ...overrides });
+    return ChartTokens.layout({ dragmode: COARSE_POINTER ? false : 'zoom', ...overrides });
 }
 
 // A horizontal reference line with its label written in place at the right edge.
@@ -555,7 +569,7 @@ const PLOTLY_CONFIG = {
     ...ChartTokens.config,
     // Drag on an axis = scale the visible range (initAxisRangeDrag); box-drag on the plot zooms
     // both axes; wheel zooms at the cursor; double-click resets.
-    scrollZoom: true,
+    scrollZoom: !COARSE_POINTER,
 };
 
 // ─── Init ──────────────────────────────────────────────────────────────
@@ -677,7 +691,7 @@ function renderDropdown(results) {
         item.dataset.index = i;
         const isStation = g.type === 'station';
         item.innerHTML = `
-            <span class="name min-w-0 flex-1 truncate font-medium text-ink">${highlightMatch(g.station_name, searchInput.value)}</span>
+            <span class="name min-w-0 flex-1 font-medium text-ink sm:truncate">${highlightMatch(g.station_name, searchInput.value)}</span>
             ${isStation ? '<span class="badge">Station</span>' : ''}
             <span class="duid w-[84px] shrink-0 truncate font-mono text-[12px] text-faint">${isStation ? g.duid_count + ' DUIDs' : g.duid}</span>
             <span class="flex w-12 shrink-0">${g.region ? `<span class="badge font-mono">${g.region}</span>` : ''}</span>
@@ -1138,11 +1152,12 @@ function syncPeriodControl(data) {
     if (total) {
         const shown = Math.min(selectedMonths, total);
         const months = data.monthly.months.slice(-shown);
-        range.textContent = ` · ${fmtMonthLong(months[0])} – ${fmtMonthLong(months[months.length - 1])}` +
+        range.textContent = `${fmtMonthLong(months[0])} – ${fmtMonthLong(months[months.length - 1])}` +
             (shown === total ? ` (all ${total} published months)` : '');
     } else {
         range.textContent = '';
     }
+    document.getElementById('periodSep').hidden = !range.textContent;
 }
 
 function sliceMonthly(data) {
