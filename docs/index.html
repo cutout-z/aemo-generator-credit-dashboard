@@ -7,20 +7,11 @@
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <link rel="stylesheet" href="assets/app.css">
+    <script src="assets/js/chart-tokens.js"></script>
     <style>
-        /* Legacy aliases. The panels not yet migrated (period strip, chart panels, tooltips) still
-           use the pre-token variable names; they now resolve to the design tokens in app.css.
-           Delete each alias when the last rule using it is migrated (BRIEF.md steps 3–4). */
-        :root {
-            --border: var(--line);
-            --text-dim: var(--muted);
-            --surface-hover: var(--surface-2);
-            --accent-dim: var(--accent-wash);
-            --green: var(--good);
-            --red: var(--bad);
-            --yellow: var(--warn);
-            --orange: var(--accent);
-        }
+        /* The hidden attribute always wins: a layout utility (grid, flex) on the same element would
+           otherwise override the base [hidden] rule and leave the element on screen. */
+        [hidden] { display: none !important; }
 
         /* Show/hide state only — the look of these lives in the markup (token utilities). */
         .search-dropdown { display: none; }
@@ -29,228 +20,150 @@
         .identity-card { display: none; }
         .identity-card.visible { display: block; }
 
-        /* Chart grid — flexbox for resizable widths */
-        .chart-grid {
-            display: none;
-            flex-wrap: wrap;
-            gap: 16px;
-        }
+        /* Chart grid — two panel groups (flex, so panels keep their resizable widths) */
+        .chart-grid { display: none; flex-wrap: wrap; gap: 16px; }
+        .chart-grid.visible { display: flex; }
 
-        .chart-grid.visible {
-            display: flex;
-        }
-
-        .chart-panel[draggable="true"] .chart-title-wrap { cursor: grab; }
-        .chart-panel.drag-over { border: 2px dashed var(--accent); }
-        .chart-panel.dragging { opacity: 0.4; }
-
+        /* Chart panel = a .card (tokens) + the behaviour below: drag, resize, fullscreen. */
         .chart-panel {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 16px;
-            min-height: 320px;
+            padding: 16px 20px 20px;
             min-width: 300px;
             position: relative;
-            overflow: hidden;
-            /* All tiles own their full row */
-            flex: 1 1 100%;
+            flex: 1 1 100%;            /* every panel owns its row until resized */
             max-width: 100%;
         }
+        .chart-panel[draggable="true"] .chart-title-wrap { cursor: grab; }
+        .chart-panel.drag-over { outline: 2px dashed var(--line-strong); outline-offset: 2px; }
+        .chart-panel.dragging { opacity: 0.4; }
 
-        /* Corner resize handle (bottom-right) */
-        .chart-resize-handle {
-            position: absolute;
-            bottom: 0;
-            right: 0;
-            width: 16px;
-            height: 16px;
-            cursor: nwse-resize;
-            z-index: 15;
-            opacity: 0;
-            transition: opacity 0.15s;
+        /* Panel head: title, window label, methodology trigger. The expand button sits top-right. */
+        .chart-title-wrap {
+            position: relative;
+            display: flex;
+            align-items: baseline;
+            gap: 4px 10px;
+            flex-wrap: wrap;
+            margin: 0 40px 8px 0;
         }
-        .chart-resize-handle::after {
-            content: '';
-            position: absolute;
-            bottom: 3px;
-            right: 3px;
-            width: 8px;
-            height: 8px;
-            border-right: 2px solid var(--text-dim);
-            border-bottom: 2px solid var(--text-dim);
-            border-radius: 0 0 4px 0;
-        }
-        .chart-panel:hover .chart-resize-handle { opacity: 1; }
-        .chart-resize-handle:hover::after,
-        .chart-resize-handle.active::after {
-            border-color: var(--accent);
-        }
+        .chart-panel h3 { font-size: 14px; font-weight: 600; line-height: 20px; color: var(--text); }
+        .chart-period { font-size: 12px; line-height: 20px; color: var(--faint); white-space: nowrap; }
 
-        /* Bottom edge resize (vertical only) */
-        .chart-resize-bottom {
+        .info-btn {
+            align-self: center;
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 20px; height: 20px; border-radius: 6px;
+            color: var(--faint); cursor: pointer;
+        }
+        .info-btn:hover, .info-btn:focus-visible { color: var(--text); background: var(--surface-2); }
+        .info-btn svg { width: 14px; height: 14px; }
+
+        /* Methodology popover: opened by the (i) button on hover or keyboard focus. */
+        .chart-tooltip {
+            display: none;
             position: absolute;
-            bottom: 0;
+            top: calc(100% + 6px);
             left: 0;
-            right: 16px;
-            height: 6px;
-            cursor: ns-resize;
-            z-index: 14;
+            z-index: 200;
+            width: min(380px, calc(100vw - 48px));
+            padding: 12px 14px;
+            border-radius: 10px;
+            background: var(--surface-2);
+            box-shadow: var(--shadow-pop);
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--muted);
+            cursor: auto;
         }
-
-        /* Right edge resize (horizontal only) */
-        .chart-resize-right {
-            position: absolute;
-            top: 0;
-            right: 0;
-            bottom: 16px;
-            width: 6px;
-            cursor: ew-resize;
-            z-index: 14;
+        .info-btn:hover ~ .chart-tooltip,
+        .info-btn:focus-visible ~ .chart-tooltip,
+        .chart-tooltip:hover { display: block; }
+        .chart-tooltip .tooltip-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+        .chart-tooltip .tooltip-formula {
+            margin: 8px 0;
+            padding: 6px 10px;
+            border-radius: 6px;
+            background: var(--canvas);
+            font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+            font-size: 12px;
+            color: var(--text);
         }
-
-        .chart-panel h3 {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 12px;
-            color: var(--text-dim);
+        .chart-tooltip .tooltip-caveat {
+            margin-top: 8px;
+            padding-left: 10px;
+            border-left: 2px solid var(--warn);
+            font-size: 12px;
         }
+        .chart-tooltip .tooltip-caveat::before { content: "Caveat — "; font-weight: 600; color: var(--text); }
 
+        /* Quiet absence: the chart's placeholder, and the state message renderCharts puts in it. */
         .chart-panel .placeholder {
             display: flex;
             align-items: center;
             justify-content: center;
-            height: 250px;
-            color: var(--text-dim);
-            font-size: 14px;
-            font-style: italic;
+            min-height: 160px;
+            color: var(--faint);
+            font-size: 13px;
         }
+        .chart-panel .placeholder .state { padding: 0; max-width: 60ch; }
+        .plot-container.plotly ~ .placeholder { display: none; }
 
-        /* Hide placeholder once Plotly has rendered in the same container */
-        .plot-container.plotly ~ .placeholder {
-            display: none;
-        }
-
-        /* Fullscreen expand button */
+        /* Fullscreen */
         .chart-expand-btn {
             position: absolute;
             top: 12px;
             right: 12px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text-dim);
-            width: 28px;
-            height: 28px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-            transition: all 0.15s;
             z-index: 10;
+            display: flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            background: var(--surface);
+            color: var(--muted);
+            cursor: pointer;
             opacity: 0;
+            transition: opacity .15s, color .15s, background-color .15s;
         }
-
-        .chart-panel:hover .chart-expand-btn { opacity: 1; }
-        .chart-expand-btn:hover { border-color: var(--accent); color: var(--text); }
+        .chart-expand-btn svg { width: 14px; height: 14px; }
+        .chart-panel:hover .chart-expand-btn,
+        .chart-expand-btn:focus-visible,
+        .chart-panel.fullscreen .chart-expand-btn { opacity: 1; }
+        @media (hover: none) { .chart-expand-btn { opacity: 1; } }
+        .chart-expand-btn:hover { background: var(--surface-2); color: var(--text); }
 
         .chart-panel.fullscreen {
             position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
+            inset: 0;
             z-index: 1000;
             border-radius: 0;
             margin: 0;
-            min-height: 100vh;
+            max-width: none;
+            width: auto !important;
+            height: auto !important;
             padding: 24px;
             overflow: auto;
         }
-
-        .chart-panel.fullscreen .chart-expand-btn { opacity: 1; }
-
-        .fullscreen-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: var(--scrim);
-            z-index: 999;
-        }
-
+        .fullscreen-overlay { display: none; position: fixed; inset: 0; background: var(--scrim); z-index: 999; }
         .fullscreen-overlay.visible { display: block; }
 
-        /* Chart title tooltips */
-        .chart-title-wrap {
-            position: relative;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
+        /* Resize handles (corner, bottom edge, right edge) */
+        .chart-resize-handle {
+            position: absolute; bottom: 0; right: 0;
+            width: 16px; height: 16px;
+            cursor: nwse-resize; z-index: 15;
+            opacity: 0; transition: opacity .15s;
         }
-
-        .chart-period {
-            font-size: 11px;
-            color: var(--text-dim);
-            font-weight: 400;
-            white-space: nowrap;
+        .chart-resize-handle::after {
+            content: '';
+            position: absolute; bottom: 4px; right: 4px;
+            width: 7px; height: 7px;
+            border-right: 1.5px solid var(--faint);
+            border-bottom: 1.5px solid var(--faint);
+            border-radius: 0 0 3px 0;
         }
-
-        .chart-panel h3 {
-            cursor: help;
-            border-bottom: 1px dotted var(--text-dim);
-            display: inline-block;
-        }
-
-        .chart-tooltip {
-            display: none;
-            position: absolute;
-            top: calc(100% + 8px);
-            left: 0;
-            z-index: 200;
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 12px 16px;
-            width: 340px;
-            box-shadow: var(--shadow-pop);
-            font-size: 13px;
-            font-weight: 400;
-            line-height: 1.5;
-            color: var(--text);
-        }
-
-        .chart-tooltip .tooltip-title {
-            font-weight: 600;
-            color: var(--accent);
-            margin-bottom: 6px;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .chart-tooltip .tooltip-formula {
-            font-family: monospace;
-            font-size: 12px;
-            background: var(--bg);
-            border-radius: 4px;
-            padding: 6px 10px;
-            margin: 8px 0;
-            color: var(--green);
-        }
-
-        .chart-tooltip .tooltip-caveat {
-            font-size: 12px;
-            color: var(--yellow);
-            margin-top: 8px;
-        }
-
-        .chart-title-wrap:hover .chart-tooltip {
-            display: block;
-        }
-
-        /* Responsive */
-        @media (max-width: 900px) {
-            .chart-grid { grid-template-columns: 1fr; }
-        }
+        .chart-panel:hover .chart-resize-handle { opacity: 1; }
+        .chart-resize-handle:hover::after, .chart-resize-handle.active::after { border-color: var(--text); }
+        .chart-resize-bottom { position: absolute; bottom: 0; left: 0; right: 16px; height: 6px; cursor: ns-resize; z-index: 14; }
+        .chart-resize-right { position: absolute; top: 0; right: 0; bottom: 16px; width: 6px; cursor: ew-resize; z-index: 14; }
     </style>
 </head>
 <body>
@@ -396,9 +309,9 @@
                 </div>
             </div>
             <div class="flex flex-wrap gap-4">
-            <div class="chart-panel">
+            <div class="chart-panel card">
                 <div class="chart-title-wrap">
-                    <h3>Generation</h3>
+                    <h3>Generation</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">MWh = Σ (SCADAVALUE / 12)</div>
@@ -408,9 +321,9 @@
                 </div>
                 <div id="chartGeneration"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel">
+            <div class="chart-panel card">
                 <div class="chart-title-wrap">
-                    <h3>Capacity Factor</h3>
+                    <h3>Capacity Factor</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">CF = MWh_actual / (MW_nameplate × hours_in_month)</div>
@@ -420,9 +333,9 @@
                 </div>
                 <div id="chartCapacity"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel" id="panelCurtailment">
+            <div class="chart-panel card" id="panelCurtailment">
                 <div class="chart-title-wrap">
-                    <h3>Curtailment Proxy</h3>
+                    <h3>Curtailment Proxy</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Shortfall % = 1 − (SCADA / AVAILABILITY)</div>
@@ -432,9 +345,9 @@
                 </div>
                 <div id="chartCurtailment"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel" id="panelEconCurtailment">
+            <div class="chart-panel card" id="panelEconCurtailment">
                 <div class="chart-title-wrap">
-                    <h3>Estimated Economic Curtailment</h3>
+                    <h3>Estimated Economic Curtailment</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Econ curtailment = forgone generation during RRP &lt; $0 / total UIGF</div>
@@ -444,9 +357,9 @@
                 </div>
                 <div id="chartEconCurtailment"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel">
+            <div class="chart-panel card">
                 <div class="chart-title-wrap">
-                    <h3>Price Capture</h3>
+                    <h3>Price Capture</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Captured = Σ(MWh × RRP) / Σ(MWh)</div>
@@ -465,21 +378,21 @@
                 <p class="text-[13px] leading-5 text-muted">Each panel shows its own window, labelled beside its title. The period control does not apply here.</p>
             </div>
             <div class="flex flex-wrap gap-4">
-            <div class="chart-panel" id="panelDailyCF">
+            <div class="chart-panel card" id="panelDailyCF">
                 <div class="chart-title-wrap">
-                    <h3>Generation (Last 12 Months)</h3>
+                    <h3>Generation (Last 12 Months)</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
-                        Bars show daily generation (MWh) colour-coded by capacity factor band: red (&lt;15%), orange (15-30%), yellow (30-50%), green (≥50%). The line overlay shows daily capacity factor (%) on the right axis.
+                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros.
                         <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
                     </div>
                 </div>
                 <div id="chartDailyCF"><div class="placeholder">No daily data yet — run pipeline to populate</div></div>
             </div>
-            <div class="chart-panel">
+            <div class="chart-panel card">
                 <div class="chart-title-wrap">
-                    <h3>MLF Trajectory (Annual)</h3>
+                    <h3>MLF Trajectory (Annual)</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">MLF from AEMO DUDETAILSUMMARY per financial year</div>
@@ -489,9 +402,9 @@
                 </div>
                 <div id="chartMLF"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel">
+            <div class="chart-panel card">
                 <div class="chart-title-wrap">
-                    <h3>Spot Price Exposure</h3>
+                    <h3>Spot Price Exposure</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Bin share = Σ bin energy (MWh) / Σ generation (MWh) over all months with output</div>
@@ -501,60 +414,68 @@
                 </div>
                 <div id="chartPriceDistribution"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel" id="panelOffers" style="display:none;">
+            <div class="chart-panel card" id="panelOffers" style="display:none;">
                 <div class="chart-title-wrap">
-                    <h3>Energy offers — this unit</h3>
+                    <h3>Energy offers — this unit</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         This unit's energy offer behaviour from BIDDAYOFFER_D (daily 10-band offer prices, latest rebid version) and BIDPEROFFER_D ENERGY volumes (10-band availability). A day's stack is the day's mean offered MW per band; BANDAVAIL tranches are incremental, so the curve is cumulative offered MW as price rises.
                         <div class="tooltip-caveat">Offers are intent, not dispatch outcomes or settled revenue (offer_based_estimate). Unit-level block: shown whenever this unit's offer data exists, independently of the regional FCAS block (thin or absent FCAS history must not hide it).</div>
                     </div>
                 </div>
-                <div id="offersBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
-                <div id="offerCurveWrap" style="display:none;margin-bottom:6px;">
-                    <div style="font-size:13px;font-weight:600;margin:4px 0 2px;">Offer curve — daily bid stack
-                        <select id="offerCurveDay" style="margin-left:8px;background:#1a1d27;color:var(--text,#e8e8e8);border:1px solid #2d3140;border-radius:6px;padding:2px 6px;font-size:12px;"></select>
-                        <span id="offerCurveNote" style="font-weight:400;opacity:.7"></span>
+                <div id="offersBox" class="note-box mb-3 rounded-lg border border-line-soft bg-surface-2 px-3.5 py-2.5 text-[13px] leading-5 text-muted [&_b]:font-medium [&_b]:text-ink" style="display:none;"></div>
+                <div id="offerCurveWrap" style="display:none;">
+                    <div class="mb-1 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[13px]">
+                        <span class="font-medium text-ink">Offer curve — daily bid stack</span>
+                        <span class="relative">
+                            <select id="offerCurveDay" class="input h-7 w-auto cursor-pointer appearance-none pr-7 font-mono text-[12px]" aria-label="Offer day"></select>
+                            <svg class="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                        </span>
+                        <span id="offerCurveNote" class="text-[12px] text-faint"></span>
                     </div>
-                    <div id="offerCurveChart" style="height:360px;"><div class="placeholder">No data yet</div></div>
+                    <div id="offerCurveChart"><div class="placeholder">No data yet</div></div>
                 </div>
             </div>
-            <div class="chart-panel" id="panelFCAS" style="display:none;">
+            <div class="chart-panel card" id="panelFCAS" style="display:none;">
                 <div class="chart-title-wrap">
-                    <h3>Regional FCAS Prices</h3>
+                    <h3>Regional FCAS Prices</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Context</div>
                         Monthly average FCAS (Frequency Control Ancillary Services) prices for this generator's NEM region. Shows the 8 FCAS markets: Raise/Lower × 6s/60s/5min/Regulation.
                         <div class="tooltip-caveat">Regional averages only — actual per-generator FCAS revenue requires participant-only enablement data.</div>
                     </div>
                 </div>
-                <div id="fcasParticipationBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
+                <div id="fcasParticipationBox" class="note-box mb-3 rounded-lg border border-line-soft bg-surface-2 px-3.5 py-2.5 text-[13px] leading-5 text-muted [&_b]:font-medium [&_b]:text-ink" style="display:none;"></div>
                 <div id="chartFCAS"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel" id="panelMarketSpread" style="display:none;">
+            <div class="chart-panel card" id="panelMarketSpread" style="display:none;">
                 <div class="chart-title-wrap">
-                    <h3>Regional Price Spreads (BESS Arbitrage)</h3>
+                    <h3>Regional Price Spreads (BESS Arbitrage)</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         Daily top/bottom capture-window VWAPs of 5-minute regional prices — the realisable discharge-value and charge-cost windows. The 1h/2h/4h/8h selector takes the top and bottom (duration × 12) five-minute intervals of each day, matching the cycling window of that battery duration; wider windows blend in mid-priced hours, so the realisable spread falls as duration grows. 'Decile' (fixed top/bottom 10% ≈ 2.4h) is the legacy 1–2h-battery proxy, kept for continuity with the AEMO QED benchmark. Market-level data: applies to every unit in the region.
                         <div class="tooltip-caveat">Derived from AEMO DISPATCHPRICE 5-minute data. Quarterly context: AEMO QED reported NEM fleet charge/discharge spreads of $121/MWh in Q1 2026 and $51/MWh in Q2 2026.</div>
                     </div>
                 </div>
-                <div id="spreadDuration" style="display:flex;gap:6px;margin:0 0 8px 0;flex-wrap:wrap;">
-                    <button data-dur="1h" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">1h</button><button data-dur="2h" style="background:#232838;border:1px solid #4a9eff;color:#ffffff;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">2h</button><button data-dur="4h" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">4h</button><button data-dur="8h" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">8h</button><button data-dur="decile" style="background:#232838;border:1px solid #2d3140;color:#9ca3af;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;">Decile (~2.4h)</button>
+                <div id="spreadDuration" class="seg mb-3" role="group" aria-label="Battery duration window">
+                    <button type="button" data-dur="1h" class="seg-item" aria-pressed="false">1h</button>
+                    <button type="button" data-dur="2h" class="seg-item seg-item-active" aria-pressed="true">2h</button>
+                    <button type="button" data-dur="4h" class="seg-item" aria-pressed="false">4h</button>
+                    <button type="button" data-dur="8h" class="seg-item" aria-pressed="false">8h</button>
+                    <button type="button" data-dur="decile" class="seg-item" aria-pressed="false">Decile (~2.4h)</button>
                 </div>
                 <div id="chartMarketSpread"><div class="placeholder">No data yet</div></div>
             </div>
-            <div class="chart-panel" id="panelConstraints" style="display:none;">
+            <div class="chart-panel card" id="panelConstraints" style="display:none;">
                 <div class="chart-title-wrap">
-                    <h3>Binding Network Constraints</h3>
+                    <h3>Binding Network Constraints</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         Maps generator connection point to network constraints via SPDCONNECTIONPOINTCONSTRAINT, then counts hours each constraint was binding (marginal value &gt; 0) from DISPATCHCONSTRAINT.
                         <div class="tooltip-caveat">~20% of generators lack connection point data. Constraint mapping is approximate.</div>
                     </div>
                 </div>
-                <div id="constraintSummaryBox" style="display:none;background:#232838;border:1px solid #2d3140;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;line-height:1.5;"></div>
+                <div id="constraintSummaryBox" class="note-box mb-3 rounded-lg border border-line-soft bg-surface-2 px-3.5 py-2.5 text-[13px] leading-5 text-muted [&_b]:font-medium [&_b]:text-ink" style="display:none;"></div>
                 <div id="chartConstraintsBar"><div class="placeholder">No constraint data</div></div>
                 <div id="chartConstraintsHeatmap" style="margin-top: 8px;"></div>
             </div>
@@ -578,24 +499,58 @@ fetch('data/market_daily.json').then(r => r.ok ? r.json() : null).then(d => {
     if (currentData) renderCharts(currentData);
 }).catch(() => {});
 
-const PLOTLY_LAYOUT_BASE = {
-    // Transparent: the card surface (a design token) shows through. Chart tokens proper: BRIEF step 4.
-    paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(0,0,0,0)',
-    font: { color: '#e1e4eb', size: 12 },
-    margin: { t: 10, r: 20, b: 60, l: 60 },
-    xaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140', tickangle: -45, tickfont: { size: 11 } },
-    yaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140' },
-    // Box-drag on the plot zooms both axes; plain y-axis drags are handled
-    // by initAxisRangeDrag() below (Plotly 2.x ignores them natively).
-    dragmode: 'zoom',
-};
+// ─── Chart conventions (BRIEF step 4) ──────────────────────────────────
+// Every chart goes through ChartTokens.layout() (docs/assets/js/chart-tokens.js): token colours
+// read from the CSS variables, one font, and an explicit height from ChartTokens.HEIGHTS.
+// Colour belongs to what a series measures, never to its position in the chart:
+//   this unit's own figures (output, CF, captured price, offers) ... info
+//   regional / market series ........................................ neutral
+//   12-month average ................................ neutral, dashed, legend "12-month average"
+//   reference lines .......... line-strong, dashed, labelled in place (never a legend entry)
+//   curtailment proxy ... warn        economic curtailment ... bad
+//   marginal loss factor ... accent   negative-price exposure ... bad (named in the legend)
+// Legend: one convention — top-left above the plot, shown whenever two or more named series
+// share a plot area; a single series is named by its panel title. Markers on monthly and annual
+// lines, none on daily lines. Month axes: horizontal labels, thinned — never rotated.
+const C = name => ChartTokens.color(name);
+const H = ChartTokens.HEIGHTS;
+// Month axis: horizontal labels at a whole-month step (1/2/3/6/12) chosen from the chart's width,
+// so labels never collide — Plotly's own thinning does not guarantee that on narrow screens.
+function monthAxis(labels, chartId, reservedPx) {
+    const el = document.getElementById(chartId);
+    const width = ((el && el.clientWidth) || 800) - (reservedPx || 0);
+    const fit = Math.max(2, Math.floor((width - 60) / 54));
+    const step = [1, 2, 3, 6, 12].find(s => Math.ceil(labels.length / s) <= fit) || 12;
+    const tickvals = labels.filter((_, i) => (labels.length - 1 - i) % step === 0);
+    return { type: 'category', tickangle: 0, tickmode: 'array', tickvals, ticktext: tickvals };
+}
+
+// Box-drag on the plot zooms both axes; plain axis drags are handled by initAxisRangeDrag()
+// below (Plotly 2.x ignores them natively).
+function chartLayout(overrides) {
+    return ChartTokens.layout({ dragmode: 'zoom', ...overrides });
+}
+
+// A horizontal reference line with its label written in place at the right edge.
+function referenceLine(y, label, yref) {
+    const ref = yref || 'y';
+    return {
+        shape: {
+            type: 'line', xref: 'paper', x0: 0, x1: 1, yref: ref, y0: y, y1: y, layer: 'below',
+            line: { color: C('line-strong'), width: 1, dash: 'dash' },
+        },
+        annotation: {
+            xref: 'paper', x: 1, xanchor: 'right', yref: ref, y, yanchor: 'bottom',
+            text: label, showarrow: false, font: { size: 11, color: C('muted') },
+            bgcolor: C('surface'), borderpad: 2,
+        },
+    };
+}
 
 const PLOTLY_CONFIG = {
-    responsive: true,
-    displayModeBar: false,
-    // Drag on the y-axis = scale/compress the visible y range (box-drag on the
-    // plot area zooms both axes; wheel zooms at cursor; double-click resets).
+    ...ChartTokens.config,
+    // Drag on an axis = scale the visible range (initAxisRangeDrag); box-drag on the plot zooms
+    // both axes; wheel zooms at the cursor; double-click resets.
     scrollZoom: true,
 };
 
@@ -828,8 +783,25 @@ function purgeChartsAndState() {
     setPeriodLabel('chartGeneration', []);
     setPeriodLabel('chartPriceDistribution', []);
     renderKPIs(null);
+    // A previous unit's "no data" message must not show while the next unit loads.
+    document.querySelectorAll('.chart-panel .placeholder').forEach(ph => { ph.innerHTML = ''; });
     currentData = null;
     syncPeriodControl(null);
+}
+
+// A panel with nothing to draw says why, in place (the `state` pattern). Plotly hides the
+// placeholder while a plot exists, so the message only shows when the chart is purged.
+function showChartState(chartId, title, body) {
+    const el = document.getElementById(chartId);
+    if (!el) return;
+    let ph = el.querySelector('.placeholder');
+    if (!ph) {
+        ph = document.createElement('div');
+        ph.className = 'placeholder';
+        el.appendChild(ph);
+    }
+    ph.innerHTML = '<div class="state"><svg class="state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg>' +
+        '<div><div class="state-title">' + title + '</div><div class="state-body">' + body + '</div></div></div>';
 }
 
 // ─── Entity KPI row ────────────────────────────────────────────────────
@@ -1189,7 +1161,7 @@ function rolling12(arr) {
 }
 
 // Add a 12-month rolling average trace (only when period >= 12 months)
-function makeRollingTrace(fmtMonths, values, color) {
+function makeRollingTrace(fmtMonths, values, valueFormat) {
     if (selectedMonths < 12) return null;
     const avg = rolling12(values);
     if (!avg) return null;
@@ -1198,10 +1170,9 @@ function makeRollingTrace(fmtMonths, values, color) {
         y: avg,
         type: 'scatter',
         mode: 'lines',
-        name: '12M Avg',
-        line: { color, width: 2, dash: 'dash' },
-        hovertemplate: '%{x}<br>12M Avg: %{y:,.0f}<extra></extra>',
-        showlegend: true,
+        name: '12-month average',
+        line: { color: C('neutral'), width: 1.5, dash: 'dash' },
+        hovertemplate: `12-month average: %{y:${valueFormat}}<extra></extra>`,
     };
 }
 
@@ -1228,108 +1199,88 @@ function renderCharts(data) {
     syncPeriodControl(data);
     const monthly = sliceMonthly(data);
     const fmtMonths = monthly && monthly.months ? monthly.months.map(fmtMonth) : [];
-    const catXaxis = { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' };
-    // Generation chart (MWh) — also shows LGC annotation for eligible generators
+    const monthLine = (y, name, color, fmt) => ({
+        x: fmtMonths, y, name, type: 'scatter', mode: 'lines+markers',
+        line: { color, width: 2 }, marker: { color, size: 5 },
+        hovertemplate: `${name}: %{y:${fmt}}<extra></extra>`,
+    });
+    const withLegend = traces => traces.filter(t => t.showlegend !== false).length > 1;
+
+    // Generation (MWh) — also shows LGC equivalence for eligible generators
     if (monthly && monthly.generation_mwh && monthly.generation_mwh.length > 0) {
-        const genYTitle = data.lgc_eligible ? 'MWh (≈ LGCs)' : 'MWh';
         const genTraces = [{
             x: fmtMonths,
             y: monthly.generation_mwh,
             type: 'bar',
-            marker: { color: '#22c55e' },
+            name: 'Monthly generation',
+            marker: { color: C('info') },
             hovertemplate: data.lgc_eligible
-                ? '%{x}<br>%{y:,.0f} MWh (≈ %{y:,.0f} LGCs)<extra></extra>'
-                : '%{x}<br>%{y:,.0f} MWh<extra></extra>',
-            name: 'Monthly Generation',
-            showlegend: false,
+                ? 'Generation: %{y:,.0f} MWh (≈ %{y:,.0f} LGCs)<extra></extra>'
+                : 'Generation: %{y:,.0f} MWh<extra></extra>',
         }];
-        const genRolling = makeRollingTrace(fmtMonths, monthly.generation_mwh, '#ffffff');
+        const genRolling = makeRollingTrace(fmtMonths, monthly.generation_mwh, ',.0f');
         if (genRolling) genTraces.push(genRolling);
-        Plotly.newPlot('chartGeneration', genTraces, {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: genYTitle, tickformat: ',.0s' },
-            showlegend: !!genRolling,
-            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
-        }, PLOTLY_CONFIG);
+        Plotly.newPlot('chartGeneration', genTraces, chartLayout({
+            height: H.lg,
+            xaxis: monthAxis(fmtMonths, 'chartGeneration'),
+            yaxis: { title: { text: data.lgc_eligible ? 'MWh (≈ LGCs)' : 'MWh' }, tickformat: '~s' },
+            showlegend: withLegend(genTraces),
+        }), PLOTLY_CONFIG);
     }
 
-    // Capacity factor chart
+    // Capacity factor, with the 25% benchmark labelled where it is drawn
     if (monthly && monthly.capacity_factor && monthly.capacity_factor.some(v => v != null)) {
-        const cfTraces = [{
-            x: fmtMonths,
-            y: monthly.capacity_factor,
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: '#22c55e', width: 2 },
-            marker: { size: 4 },
-            hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
-            name: 'Capacity Factor',
-            showlegend: false,
-        }];
-        const cfRolling = makeRollingTrace(fmtMonths, monthly.capacity_factor, '#ffffff');
-        if (cfRolling) { cfRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; cfTraces.push(cfRolling); }
-        Plotly.newPlot('chartCapacity', cfTraces, {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Capacity Factor', tickformat: '.0%' },
-            shapes: [{
-                type: 'line', y0: 0.25, y1: 0.25, x0: 0, x1: 1, xref: 'paper',
-                line: { color: '#475569', width: 1, dash: 'dash' },
-            }],
-            showlegend: !!cfRolling,
-            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
-        }, PLOTLY_CONFIG);
+        const cfTraces = [monthLine(monthly.capacity_factor, 'Capacity factor', C('info'), '.1%')];
+        const cfRolling = makeRollingTrace(fmtMonths, monthly.capacity_factor, '.1%');
+        if (cfRolling) cfTraces.push(cfRolling);
+        const bench = referenceLine(0.25, '25% benchmark');
+        Plotly.newPlot('chartCapacity', cfTraces, chartLayout({
+            height: H.lg,
+            xaxis: monthAxis(fmtMonths, 'chartCapacity'),
+            yaxis: { title: { text: 'Capacity factor' }, tickformat: '.0%', rangemode: 'tozero' },
+            shapes: [bench.shape],
+            annotations: [bench.annotation],
+            showlegend: withLegend(cfTraces),
+        }), PLOTLY_CONFIG);
     }
 
-    // Curtailment chart — single shortfall-proxy series (S3-01: no causal split)
+    // Curtailment — single shortfall-proxy series (S3-01: no causal split)
     if (monthly && monthly.curtailment_pct && monthly.curtailment_pct.some(v => v != null)) {
         const curtTraces = [{
             x: fmtMonths,
             y: monthly.curtailment_pct,
             type: 'bar',
-            name: 'Curtailment proxy',
-            marker: { color: '#f97316' },
-            hovertemplate: '%{x}<br>Shortfall proxy: %{y:.1%}<extra></extra>',
+            name: 'Shortfall proxy',
+            marker: { color: C('warn') },
+            hovertemplate: 'Shortfall proxy: %{y:.1%}<extra></extra>',
         }];
-
-        // Rolling average
-        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '#ffffff');
-        if (curtRolling) { curtRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; curtTraces.push(curtRolling); }
-
-        Plotly.newPlot('chartCurtailment', curtTraces, {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Shortfall % (proxy)', tickformat: '.0%' },
-            showlegend: !!curtRolling,
-            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
-        }, PLOTLY_CONFIG);
+        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '.1%');
+        if (curtRolling) curtTraces.push(curtRolling);
+        Plotly.newPlot('chartCurtailment', curtTraces, chartLayout({
+            height: H.lg,
+            xaxis: monthAxis(fmtMonths, 'chartCurtailment'),
+            yaxis: { title: { text: 'Shortfall (proxy)' }, tickformat: '.0%' },
+            showlegend: withLegend(curtTraces),
+        }), PLOTLY_CONFIG);
     }
 
-    // Economic curtailment chart
+    // Economic curtailment
     const econPanel = document.getElementById('panelEconCurtailment');
     if (monthly && monthly.econ_curtailment_pct && monthly.econ_curtailment_pct.some(v => v != null)) {
         econPanel.style.display = 'block';
         const econTraces = [{
-            x: fmtMonths,
-            y: monthly.econ_curtailment_pct,
-            type: 'scatter',
+            ...monthLine(monthly.econ_curtailment_pct, 'Economic curtailment', C('bad'), '.1%'),
             fill: 'tozeroy',
-            line: { color: '#ef4444', width: 2 },
-            fillcolor: 'rgba(239, 68, 68, 0.2)',
-            hovertemplate: '%{x}<br>%{y:.1%}<extra></extra>',
-            name: 'Economic Curtailment',
-            showlegend: false,
+            fillcolor: C('bad-wash'),
         }];
-        const econRolling = makeRollingTrace(fmtMonths, monthly.econ_curtailment_pct, '#ffffff');
-        if (econRolling) { econRolling.hovertemplate = '%{x}<br>12M Avg: %{y:.1%}<extra></extra>'; econTraces.push(econRolling); }
-        Plotly.newPlot('chartEconCurtailment', econTraces, {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'Economic Curtailment %', tickformat: '.0%' },
-            showlegend: !!econRolling,
-            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
-        }, PLOTLY_CONFIG);
+        const econRolling = makeRollingTrace(fmtMonths, monthly.econ_curtailment_pct, '.1%');
+        if (econRolling) econTraces.push(econRolling);
+        Plotly.newPlot('chartEconCurtailment', econTraces, chartLayout({
+            height: H.lg,
+            xaxis: monthAxis(fmtMonths, 'chartEconCurtailment'),
+            yaxis: { title: { text: 'Economic curtailment' }, tickformat: '.0%' },
+            showlegend: withLegend(econTraces),
+        }), PLOTLY_CONFIG);
     } else if (econPanel) {
         econPanel.style.display = 'none';
     }
@@ -1341,153 +1292,110 @@ function renderCharts(data) {
         const m = label.match(/^FY\d{2}-(\d{2})/);
         return m ? 'FY' + m[1] : label;
     }
-    const mlfTraces = [];
-    const duidColors = ['#a78bfa', '#4a9eff', '#22c55e', '#f97316', '#ef4444', '#eab308', '#ec4899', '#06b6d4'];
-
-    if (data.mlf_by_duid) {
-        // Station view: one trace per DUID
-        const duids = Object.keys(data.mlf_by_duid);
-        duids.forEach((duid, i) => {
-            const m = data.mlf_by_duid[duid];
-            const color = duidColors[i % duidColors.length];
-            mlfTraces.push({
-                x: m.years.map(shortenFY), y: m.values,
-                type: 'scatter', mode: 'lines+markers',
-                name: duid,
-                line: { color, width: 2 },
-                marker: { size: 5 },
-                hovertemplate: `%{x}<br>${duid}: %{y:.4f}<extra></extra>`,
+    // One unit's final series + (when published) its draft, as a dashed step to a hollow diamond.
+    function mlfTraces_(m, name, color, dash, showDraftInLegend) {
+        const out = [{
+            x: m.years.map(shortenFY), y: m.values,
+            type: 'scatter', mode: 'lines+markers', name,
+            line: { color, width: 2, dash: dash || 'solid' }, marker: { color, size: 6 },
+            hovertemplate: `${name}: %{y:.4f}<extra></extra>`,
+        }];
+        if (m.draft_year && m.draft_value != null) {
+            const lastFY = shortenFY(m.years[m.years.length - 1]);
+            const draftFY = shortenFY(m.draft_year) + ' (draft)';
+            out.push({
+                x: [lastFY, draftFY], y: [m.values[m.values.length - 1], m.draft_value],
+                type: 'scatter', mode: 'lines', showlegend: false, hoverinfo: 'skip',
+                line: { color, width: 1.5, dash: 'dash' },
             });
-            if (m.draft_year && m.draft_value != null) {
-                // Dashed connector from last final to draft
-                const lastFY = shortenFY(m.years[m.years.length - 1]);
-                const lastVal = m.values[m.values.length - 1];
-                mlfTraces.push({
-                    x: [lastFY, shortenFY(m.draft_year) + ' (D)'], y: [lastVal, m.draft_value],
-                    type: 'scatter', mode: 'lines',
-                    name: duid + ' → Draft', showlegend: false,
-                    line: { color, width: 1.5, dash: 'dash' },
-                    hoverinfo: 'skip',
-                });
-                mlfTraces.push({
-                    x: [shortenFY(m.draft_year) + ' (D)'], y: [m.draft_value],
-                    type: 'scatter', mode: 'markers',
-                    name: duid + ' Draft', showlegend: false,
-                    marker: { size: 9, color: 'rgba(255,255,255,0.2)', line: { color, width: 2 }, symbol: 'diamond' },
-                    hovertemplate: `%{x}<br>${duid}: %{y:.4f} (Draft)<extra></extra>`,
-                });
-            }
-        });
-    } else if (data.mlf && data.mlf.values) {
-        // Single DUID view
-        mlfTraces.push({
-            x: data.mlf.years.map(shortenFY), y: data.mlf.values,
-            type: 'scatter', mode: 'lines+markers', name: 'Final',
-            line: { color: '#a78bfa', width: 2 }, marker: { size: 6 },
-            hovertemplate: '%{x}<br>MLF: %{y:.4f} (Final)<extra></extra>',
-        });
-        if (data.mlf.draft_year && data.mlf.draft_value != null) {
-            // Dashed connector from last final to draft
-            const lastFY = shortenFY(data.mlf.years[data.mlf.years.length - 1]);
-            const lastVal = data.mlf.values[data.mlf.values.length - 1];
-            mlfTraces.push({
-                x: [lastFY, shortenFY(data.mlf.draft_year) + ' (D)'], y: [lastVal, data.mlf.draft_value],
-                type: 'scatter', mode: 'lines',
-                name: '→ Draft', showlegend: false,
-                line: { color: '#a78bfa', width: 1.5, dash: 'dash' },
-                hoverinfo: 'skip',
-            });
-            mlfTraces.push({
-                x: [shortenFY(data.mlf.draft_year) + ' (D)'], y: [data.mlf.draft_value],
-                type: 'scatter', mode: 'markers', name: 'Draft',
-                marker: { size: 10, color: 'rgba(167,139,250,0.3)', line: { color: '#a78bfa', width: 2 }, symbol: 'diamond' },
-                hovertemplate: '%{x}<br>MLF: %{y:.4f} (Draft)<extra></extra>',
+            out.push({
+                x: [draftFY], y: [m.draft_value], type: 'scatter', mode: 'markers',
+                name: showDraftInLegend ? 'Draft' : name + ' draft', showlegend: !!showDraftInLegend,
+                marker: { size: 10, symbol: 'diamond', color: C('surface'), line: { color, width: 2 } },
+                hovertemplate: `${name} (draft): %{y:.4f}<extra></extra>`,
             });
         }
+        return out;
+    }
+    const mlfTraces = [];
+    if (data.mlf_by_duid) {
+        // Station view: one line per unit. The units are the entities here, so each DUID keeps
+        // its colour in the station's (sorted) unit order; past six units the colours repeat dotted.
+        const unitColors = ChartTokens.series('accent', 'info', 'good', 'warn', 'neutral', 'bad');
+        Object.keys(data.mlf_by_duid).sort().forEach((duid, i) => {
+            mlfTraces.push(...mlfTraces_(data.mlf_by_duid[duid], duid,
+                unitColors[i % unitColors.length], i >= unitColors.length ? 'dot' : null, false));
+        });
+    } else if (data.mlf && data.mlf.values) {
+        mlfTraces.push(...mlfTraces_(data.mlf, 'Final MLF', C('accent'), null, true));
     }
 
     if (mlfTraces.length > 0) {
-        Plotly.newPlot('chartMLF', mlfTraces, {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'MLF' },
-            showlegend: mlfTraces.length > 1,
-            legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
-            shapes: [{
-                type: 'line', y0: 1.0, y1: 1.0, x0: 0, x1: 1, xref: 'paper',
-                line: { color: '#475569', width: 1, dash: 'dash' },
-            }],
-        }, PLOTLY_CONFIG);
+        // One chronological year axis for every unit: a category axis otherwise orders years by
+        // first appearance, and units with different histories draw lines back in time.
+        const fyKey = label => {
+            const m = String(label).match(/^FY(\d{2})/);
+            return (m ? parseInt(m[1], 10) : 99) + (String(label).includes('draft') ? 0.5 : 0);
+        };
+        const years = [...new Set(mlfTraces.flatMap(t => t.x))].sort((a, b) => fyKey(a) - fyKey(b));
+        const par = referenceLine(1.0, '1.0 = no transmission loss');
+        Plotly.newPlot('chartMLF', mlfTraces, chartLayout({
+            height: H.md,
+            xaxis: { type: 'category', tickangle: 0, categoryorder: 'array', categoryarray: years },
+            yaxis: { title: { text: 'MLF' }, tickformat: '.3f' },
+            shapes: [par.shape],
+            annotations: [par.annotation],
+            showlegend: withLegend(mlfTraces),
+        }), PLOTLY_CONFIG);
     }
 
-    // Price capture
+    // Price capture: this unit's captured price against the regional time-weighted average
     if (monthly && monthly.captured_price && monthly.captured_price.some(v => v != null)) {
-        const avgPriceLabel = 'Regional Avg RRP';
-        const avgPriceHover = 'Avg RRP';
-        Plotly.newPlot('chartPriceCapture', [
-            {
-                x: fmtMonths,
-                y: monthly.avg_rrp,
-                type: 'scatter',
-                mode: 'lines',
-                name: avgPriceLabel,
-                line: { color: '#64748b', width: 1.5 },
-                hovertemplate: `%{x}<br>$%{y:.2f}/MWh<extra>${avgPriceHover}</extra>`,
-            },
-            {
-                x: fmtMonths,
-                y: monthly.captured_price,
-                type: 'scatter',
-                mode: 'lines+markers',
-                name: 'Captured Price',
-                line: { color: '#22c55e', width: 2 },
-                marker: { size: 4 },
-                hovertemplate: '%{x}<br>$%{y:.2f}/MWh<extra>Captured</extra>',
-            },
-        ], {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: catXaxis,
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: '$/MWh' },
+        const pcTraces = [
+            monthLine(monthly.captured_price, 'Captured price', C('info'), '$,.2f'),
+            { ...monthLine(monthly.avg_rrp, 'Regional average price', C('neutral'), '$,.2f'), line: { color: C('neutral'), width: 1.5 } },
+        ];
+        Plotly.newPlot('chartPriceCapture', pcTraces, chartLayout({
+            height: H.lg,
+            xaxis: monthAxis(fmtMonths, 'chartPriceCapture'),
+            yaxis: { title: { text: '$/MWh' } },
             showlegend: true,
-            legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 11 } },
-        }, PLOTLY_CONFIG);
+        }), PLOTLY_CONFIG);
     }
 
-    // Spot price exposure (horizontal bar) — colour by price range
+    // Spot price exposure (horizontal bars): negative-price bins carry the risk the caveat names,
+    // so they are the one coloured entity — and named in the legend, not left to the colour.
     if (data.price_distribution && data.price_distribution.bins && data.price_distribution.bins.length > 0) {
         const bins = data.price_distribution.bins;
         const pctValues = data.price_distribution.generation_share.map(v => Math.round(v * 1000) / 10);
-        // Color by price: red=negative, green=0-50, blue=50-100, purple=>100
-        function priceColor(label) {
-            if (label.startsWith('< -') || label.startsWith('> ')) {
-                return label.startsWith('< -') ? '#ef4444' : '#a78bfa';
-            }
+        const isNegative = label => {
+            if (label.startsWith('< -')) return true;
             const m = label.match(/^(-?\d+)/);
-            if (!m) return '#64748b';
-            const v = parseInt(m[1]);
-            if (v < 0) return '#ef4444';
-            if (v < 50) return '#22c55e';
-            if (v < 100) return '#4a9eff';
-            return '#a78bfa';
-        }
-        const barColors = bins.map(priceColor);
-        Plotly.newPlot('chartPriceDistribution', [{
-            x: pctValues,
-            y: bins,
-            type: 'bar',
-            orientation: 'h',
-            marker: { color: barColors },
-            text: pctValues.map(v => v > 0.5 ? v.toFixed(1) + '%' : ''),
-            textposition: 'outside',
-            textfont: { color: '#8b8fa3', size: 10 },
-            hovertemplate: '%{y}: %{x:.1f}%<extra></extra>',
-        }], {
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: '% of Generation', type: 'linear', ticksuffix: '%', range: [0, Math.max(...pctValues) * 1.15] },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, type: 'category', autorange: true, dtick: 1 },
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 80 },
-            height: 500,
-        }, PLOTLY_CONFIG);
+            return !!m && parseInt(m[1], 10) < 0;
+        };
+        const neg = bins.map(isNegative);
+        const barTrace = (keep, name, color) => ({
+            y: bins.filter((_, i) => keep(i)),
+            x: pctValues.filter((_, i) => keep(i)),
+            type: 'bar', orientation: 'h', name,
+            marker: { color },
+            text: pctValues.filter((_, i) => keep(i)).map(v => v > 0.5 ? v.toFixed(1) + '%' : ''),
+            textposition: 'outside', cliponaxis: false,
+            textfont: { color: C('muted'), size: 11 },
+            hovertemplate: '%{y} $/MWh: %{x:.1f}% of generation<extra></extra>',
+        });
+        const peTraces = [
+            barTrace(i => neg[i], 'Below $0/MWh', C('bad')),
+            barTrace(i => !neg[i], '$0/MWh and above', C('info')),
+        ].filter(t => t.y.length);
+        Plotly.newPlot('chartPriceDistribution', peTraces, chartLayout({
+            height: Math.max(H.lg, bins.length * 18 + 72),
+            hovermode: 'closest',
+            barmode: 'overlay',
+            xaxis: { title: { text: 'Share of generation' }, type: 'linear', ticksuffix: '%', range: [0, Math.max(...pctValues) * 1.15] },
+            yaxis: { type: 'category', categoryorder: 'array', categoryarray: bins, dtick: 1, ticksuffix: ' ' },
+            showlegend: withLegend(peTraces),
+        }), PLOTLY_CONFIG);
         setPeriodLabel('chartPriceDistribution', data.monthly && data.monthly.months);
     }
 
@@ -1498,29 +1406,27 @@ function renderCharts(data) {
     );
     if (fcasHasData) {
         fcasPanel.style.display = 'block';
-        const fcasColors = [
-            '#ef4444', '#f97316', '#eab308', '#22c55e',
-            '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
-        ];
+        // Colour = the service's timescale; Raise solid, Lower dotted — so a pair reads as a pair.
+        const TIMESCALE_COLOR = { '6s': C('info'), '60s': C('accent'), '5min': C('good'), 'Reg': C('warn') };
         const services = Object.keys(data.fcas.services);
-        const fcasTraces = services.map((service, i) => ({
-            x: data.fcas.months.map(fmtMonth),
-            y: data.fcas.services[service],
-            type: 'scatter',
-            mode: 'lines',
-            name: service,
-            line: { color: fcasColors[i % fcasColors.length], width: 1.5 },
-            hovertemplate: '%{x}<br>' + service + ': $%{y:.2f}/MWh<extra></extra>',
-        }));
-        Plotly.newPlot('chartFCAS', fcasTraces, {
-            height: 500,
-            ...PLOTLY_LAYOUT_BASE,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: '$/MWh' },
+        const fcasTraces = services.map(service => {
+            const [dir, scale] = service.split(' ');
+            const color = TIMESCALE_COLOR[scale] || C('neutral');
+            return {
+                x: data.fcas.months.map(fmtMonth),
+                y: data.fcas.services[service],
+                type: 'scatter', mode: 'lines+markers', name: service,
+                line: { color, width: 1.5, dash: dir === 'Lower' ? 'dot' : 'solid' },
+                marker: { color, size: 4 },
+                hovertemplate: service + ': $%{y:,.2f}/MWh<extra></extra>',
+            };
+        });
+        Plotly.newPlot('chartFCAS', fcasTraces, chartLayout({
+            height: H.lg,
+            xaxis: monthAxis(data.fcas.months.map(fmtMonth), 'chartFCAS'),
+            yaxis: { title: { text: '$/MWh' } },
             showlegend: true,
-            legend: { x: 0, y: 1.25, orientation: 'h', font: { size: 10 }, traceorder: 'normal' },
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40 },
-        }, PLOTLY_CONFIG);
+        }), PLOTLY_CONFIG);
     } else if (fcasPanel) {
         fcasPanel.style.display = 'none';
     }
@@ -1537,7 +1443,7 @@ function renderCharts(data) {
             fpBox.innerHTML = '<b>FCAS participation — this unit</b> (' + fp.month + '): ' +
                 fp.services_offered + ' services offered · ' + pct +
                 ' · avg ' + avg + ' offered (peak ' + peak + ')' +
-                '<br><span style="opacity:.7">Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are REGIONAL market averages shared by every generator in ' + (data.region || 'the region') + '.</span>';
+                '<br><span class="text-faint">Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are REGIONAL market averages shared by every generator in ' + (data.region || 'the region') + '.</span>';
         } else {
             fpBox.style.display = 'none';
         }
@@ -1561,7 +1467,7 @@ function renderCharts(data) {
                 ' · band-1 avg ' + dol(of.price_band_min_avg) +
                 ' · band-10 avg ' + dol(of.price_band_max_avg) +
                 ' · neg-band days ' + pc(of.negative_band_day_share) + asof +
-                '<br><span style="opacity:.7">Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.</span>';
+                '<br><span class="text-faint">Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.</span>';
         } else {
             ofBox.style.display = 'none';
         }
@@ -1580,16 +1486,16 @@ function renderCharts(data) {
         const px = [stack[0][0]], py = [0];
         for (const [price, cum] of stack) { px.push(price); py.push(cum); }
         Plotly.newPlot('offerCurveChart', [{
-            x: px, y: py, mode: 'lines', line: { shape: 'hv', width: 2, color: '#4aa3ff' },
-            hovertemplate: 'Cum MW %{y:.0f} at $%{x:,.0f}/MWh<extra></extra>'
-        }], {
-            ...PLOTLY_LAYOUT_BASE,
-            height: 360,
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: { text: 'Offered price ($/MWh)' }, rangemode: 'tozero', autorange: true },
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: { text: 'Cumulative offered MW' }, rangemode: 'tozero' },
+            x: px, y: py, type: 'scatter', mode: 'lines', name: 'Offered MW',
+            line: { shape: 'hv', width: 2, color: C('info') },
+            hovertemplate: '%{y:,.0f} MW offered at or below $%{x:,.0f}/MWh<extra></extra>'
+        }], chartLayout({
+            height: H.md,
+            hovermode: 'closest',
+            xaxis: { title: { text: 'Offered price ($/MWh)' }, rangemode: 'tozero', autorange: true },
+            yaxis: { title: { text: 'Cumulative offered MW' }, rangemode: 'tozero' },
             showlegend: false,
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 16 }
-        }, PLOTLY_CONFIG);
+        }), PLOTLY_CONFIG);
         if (ocNote) ocNote.textContent = label || '';
     }
     if (ocWrap && ocChart && ocDay) {
@@ -1624,29 +1530,36 @@ function renderCharts(data) {
     }
 
     // S3-02: explicit no-data state when a section is absent from this
-    // payload — a previous generator's chart must never stay on screen.
+    // payload — a previous generator's chart must never stay on screen. Each absence says why,
+    // in the panel (the `state` pattern), instead of leaving an empty box.
     if (!(monthly && monthly.generation_mwh && monthly.generation_mwh.length > 0)) {
         Plotly.purge(document.getElementById('chartGeneration'));
+        showChartState('chartGeneration', 'No monthly generation', 'The published data for this unit has no monthly generation series.');
     }
     if (!(monthly && monthly.capacity_factor && monthly.capacity_factor.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartCapacity'));
+        showChartState('chartCapacity', 'No capacity factor', 'The published data for this unit has no monthly capacity factor.');
     }
     if (!(monthly && monthly.curtailment_pct && monthly.curtailment_pct.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartCurtailment'));
         setPeriodLabel('chartCurtailment', []);
+        showChartState('chartCurtailment', 'No curtailment proxy', 'Availability data for this unit is not in the published series, so the shortfall proxy cannot be computed.');
     }
     if (!(monthly && monthly.econ_curtailment_pct && monthly.econ_curtailment_pct.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartEconCurtailment'));
     }
     if (!mlfTraces.length) {
         Plotly.purge(document.getElementById('chartMLF'));
+        showChartState('chartMLF', 'No loss factor published', 'AEMO publishes MLFs per financial year; this unit has none in the published data.');
     }
     if (!(monthly && monthly.captured_price && monthly.captured_price.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartPriceCapture'));
+        showChartState('chartPriceCapture', 'No price capture', 'Captured price needs output in the month; the published data has no captured-price series for this unit.');
     }
     if (!(data.price_distribution && data.price_distribution.bins && data.price_distribution.bins.length > 0)) {
         Plotly.purge(document.getElementById('chartPriceDistribution'));
         setPeriodLabel('chartPriceDistribution', []);
+        showChartState('chartPriceDistribution', 'No price exposure', 'The histogram is omitted when the unit has no output in the window.');
     }
     if (!fcasHasData) {
         Plotly.purge(document.getElementById('chartFCAS'));
@@ -1661,7 +1574,7 @@ function renderCharts(data) {
         document.querySelectorAll('.js-plotly-plot').forEach((el) => {
             if (el.getBoundingClientRect().height >= 50) return;
             const svg = el.querySelector('svg.main-svg');
-            const h = Math.max(parseInt(svg && svg.getAttribute('height')) || 0, 450);
+            const h = (el.layout && el.layout.height) || Math.max(parseInt(svg && svg.getAttribute('height')) || 0, H.lg);
             try { Plotly.relayout(el, { height: h }); } catch (e) { /* noop */ }
         });
     }
@@ -1689,114 +1602,51 @@ function renderCharts(data) {
         const sliceStart = startIdx >= 0 ? startIdx : 0;
 
         const dates = data.daily.dates.slice(sliceStart, lastIdx + 1);
-        const cfValues = data.daily.capacity_factor.slice(sliceStart, lastIdx + 1).map(v => v != null ? v * 100 : 0);
+        // A missing day stays a gap — it is not a zero-output day.
+        const cfValues = data.daily.capacity_factor.slice(sliceStart, lastIdx + 1).map(v => v != null ? v * 100 : null);
         const genMwh = data.daily.generation_mwh.slice(sliceStart, lastIdx + 1);
-
-        // CF band colors (applied to generation bars)
-        function cfColor(val) {
-            if (val < 15) return '#ef4444';
-            if (val < 30) return '#f97316';
-            if (val < 50) return '#eab308';
-            return '#22c55e';
-        }
-        const barColors = cfValues.map(cfColor);
 
         // Averages
         const validGen = genMwh.filter(v => v != null && v > 0);
         const avgGen = validGen.length > 0 ? validGen.reduce((a, b) => a + b, 0) / validGen.length : 0;
-        const validCF = cfValues.filter(v => v > 0);
+        const validCF = cfValues.filter(v => v != null && v > 0);
         const avgCF = validCF.length > 0 ? validCF.reduce((a, b) => a + b, 0) / validCF.length : 0;
+        const genRef = referenceLine(avgGen, `Average ${avgGen.toFixed(0)} MWh`, 'y');
+        const cfRef = referenceLine(avgCF, `Average ${avgCF.toFixed(1)}%`, 'y2');
 
-        // CF color bands for the CF subplot
-        const cfLineColors = cfValues.map(cfColor);
-
+        // Two stacked plots, one series each (named by its axis title — no legend needed).
         Plotly.newPlot('chartDailyCF', [
-            // Top subplot: daily generation bars
             {
-                x: dates, y: genMwh,
-                type: 'bar',
-                marker: { color: barColors },
-                hovertemplate: '%{x}<br>%{y:,.0f} MWh<extra></extra>',
-                xaxis: 'x',
-                yaxis: 'y',
-                name: 'Daily Generation (MWh)',
+                x: dates, y: genMwh, type: 'bar', name: 'Daily generation',
+                marker: { color: C('info') },
+                hovertemplate: 'Generation: %{y:,.0f} MWh<extra></extra>',
+                xaxis: 'x', yaxis: 'y',
             },
-            // Bottom subplot: capacity factor line with markers
             {
-                x: dates, y: cfValues,
-                type: 'scatter', mode: 'lines',
-                line: { color: '#a78bfa', width: 1.5 },
-                xaxis: 'x2',
-                yaxis: 'y2',
-                name: 'Capacity Factor (%)',
-                hovertemplate: '%{x}<br>CF: %{y:.1f}%<extra></extra>',
+                x: dates, y: cfValues, type: 'scatter', mode: 'lines', name: 'Capacity factor',
+                line: { color: C('info'), width: 1.5 },
+                hovertemplate: 'Capacity factor: %{y:.1f}%<extra></extra>',
+                xaxis: 'x2', yaxis: 'y2',
             },
-        ], {
-            ...PLOTLY_LAYOUT_BASE,
-            // Top x-axis (hidden tick labels — shared with bottom)
-            xaxis: {
-                ...PLOTLY_LAYOUT_BASE.xaxis,
-                type: 'date', tickangle: 0,
-                domain: [0, 1],
-                anchor: 'y',
-                showticklabels: false,
-            },
-            // Bottom x-axis (visible labels)
+        ], chartLayout({
+            height: H.xl,
+            xaxis: { type: 'date', domain: [0, 1], anchor: 'y', showticklabels: false },
             xaxis2: {
-                ...PLOTLY_LAYOUT_BASE.xaxis,
-                type: 'date', tickangle: 0,
-                domain: [0, 1],
-                anchor: 'y2',
-                matches: 'x',
+                type: 'date', domain: [0, 1], anchor: 'y2', matches: 'x',
+                gridcolor: C('line-soft'), linecolor: C('line'), tickcolor: C('line'),
+                tickfont: { size: 11, color: C('faint') }, automargin: true,
             },
-            // Top subplot: generation
-            yaxis: {
-                ...PLOTLY_LAYOUT_BASE.yaxis,
-                title: 'Daily Generation (MWh)',
-                domain: [0.45, 1],
-                anchor: 'x',
-            },
-            // Bottom subplot: capacity factor
+            yaxis: { title: { text: 'MWh / day' }, domain: [0.45, 1], anchor: 'x' },
             yaxis2: {
-                ...PLOTLY_LAYOUT_BASE.yaxis,
-                title: { text: 'Capacity Factor (%)', font: { color: '#a78bfa' } },
-                domain: [0, 0.38],
-                anchor: 'x2',
-                range: [0, Math.min(100, Math.max(...cfValues) + 10)],
-                ticksuffix: '%',
-                tickfont: { color: '#a78bfa' },
+                title: { text: 'Capacity factor' }, domain: [0, 0.36], anchor: 'x2',
+                range: [0, Math.min(100, Math.max(0, ...validCF) + 10)], ticksuffix: '%',
+                gridcolor: C('line-soft'), zerolinecolor: C('line'),
+                tickfont: { size: 11, color: C('faint') }, automargin: true,
             },
-            shapes: [
-                // Avg generation line (top subplot)
-                {
-                    type: 'line', y0: avgGen, y1: avgGen, x0: 0, x1: 1, xref: 'paper', yref: 'y',
-                    line: { color: '#4a9eff', width: 1.5, dash: 'dash' },
-                },
-                // Avg CF line (bottom subplot)
-                {
-                    type: 'line', y0: avgCF, y1: avgCF, x0: 0, x1: 1, xref: 'paper', yref: 'y2',
-                    line: { color: '#ef4444', width: 1.5, dash: 'dash' },
-                },
-            ],
-            annotations: [
-                {
-                    x: 1, y: avgGen, xref: 'paper', yref: 'y',
-                    text: `Avg: ${avgGen.toFixed(0)} MWh`,
-                    showarrow: false, font: { color: '#4a9eff', size: 10 },
-                    xanchor: 'left', xshift: 4,
-                },
-                {
-                    x: 1, y: avgCF, xref: 'paper', yref: 'y2',
-                    text: `Avg: ${avgCF.toFixed(1)}%`,
-                    showarrow: false, font: { color: '#ef4444', size: 10 },
-                    xanchor: 'left', xshift: 4,
-                },
-            ],
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, r: 70, t: 10 },
-            height: 600,
-            showlegend: true,
-            legend: { x: 0, y: 1.06, orientation: 'h', font: { size: 10 } },
-        }, PLOTLY_CONFIG);
+            shapes: [genRef.shape, cfRef.shape],
+            annotations: [genRef.annotation, cfRef.annotation],
+            showlegend: false,
+        }), PLOTLY_CONFIG);
     } else if (dailyCFPanel) {
         dailyCFPanel.style.display = 'none';
     }
@@ -1853,29 +1703,32 @@ function renderCharts(data) {
 
         // Horizontal bar chart — top constraints by hours bound
         const constraintMonths = data.constraints.heatmap && data.constraints.heatmap.months;
-        Plotly.newPlot('chartConstraintsBar', [{
-            y: tc.map(constraintLabel),
-            customdata: tc.map(c => {
-                const cls = referencesOwnUnit(c.id) ? 'Own unit'
-                    : c.id.startsWith('C_') ? 'Commissioning'
-                    : c.id.startsWith('NC') ? 'Non-conformance'
-                    : 'System';
-                const d = (c.description || '').replace(/^[A-Za-z]+=\s*/, '');
-                return [cls, d];
-            }),
-            x: tc.map(c => c.total_hours),
-            type: 'bar',
-            orientation: 'h',
-            marker: { color: '#4a9eff' },
-            hovertemplate: '<b>%{y}</b><br>%{customdata[0]} constraint<br>%{customdata[1]}<br>%{x:.1f} hours bound<extra></extra>',
-            textposition: 'none',
-        }], {
-            ...PLOTLY_LAYOUT_BASE,
-            height: Math.max(300, tc.length * 28),
-            yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, automargin: true, type: 'category' },
-            xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, title: 'Hours Bound' },
-            margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 160 },
-        }, PLOTLY_CONFIG);
+        // Colour = the constraint's class (the same classification the hover states).
+        const CLASS_COLOR = { 'Own unit': C('accent'), 'Commissioning': C('warn'), 'Non-conformance': C('bad'), 'System': C('neutral') };
+        const classify = c => referencesOwnUnit(c.id) ? 'Own unit'
+            : c.id.startsWith('C_') ? 'Commissioning'
+            : c.id.startsWith('NC') ? 'Non-conformance'
+            : 'System';
+        const cbTraces = Object.keys(CLASS_COLOR).map(cls => {
+            const rows = tc.filter(c => classify(c) === cls);
+            return {
+                y: rows.map(constraintLabel),
+                x: rows.map(c => c.total_hours),
+                customdata: rows.map(c => (c.description || '').replace(/^[A-Za-z]+=\s*/, '')),
+                type: 'bar', orientation: 'h', name: cls,
+                marker: { color: CLASS_COLOR[cls] },
+                hovertemplate: `<b>%{y}</b><br>${cls} constraint<br>%{customdata}<br>%{x:.1f} hours bound<extra></extra>`,
+                textposition: 'none',
+            };
+        }).filter(t => t.y.length);
+        Plotly.newPlot('chartConstraintsBar', cbTraces, chartLayout({
+            height: Math.max(H.sm, tc.length * 26 + 72),
+            hovermode: 'closest',
+            barmode: 'overlay',
+            yaxis: { type: 'category', categoryorder: 'array', categoryarray: tc.map(constraintLabel).reverse(), tickfont: { size: 11, color: C('muted') } },
+            xaxis: { title: { text: 'Hours bound' } },
+            showlegend: cbTraces.length > 1,
+        }), PLOTLY_CONFIG);
         setPeriodLabel('chartConstraintsBar', constraintMonths);
 
         // Monthly heatmap
@@ -1890,17 +1743,22 @@ function renderCharts(data) {
                 }),
                 z: constraintIds.map(id => hm.constraints[id]),
                 type: 'heatmap',
-                colorscale: [[0, '#1a1d27'], [0.5, '#f97316'], [1, '#ef4444']],
+                colorscale: ChartTokens.seqScale(),
+                xgap: 1, ygap: 1,
                 hovertemplate: '%{y}<br>%{x}<br>%{z:.1f} hours<extra></extra>',
                 showscale: true,
-                colorbar: { title: 'Hours', titleside: 'right', len: 0.8 },
-            }], {
-                ...PLOTLY_LAYOUT_BASE,
-                height: Math.max(250, constraintIds.length * 22),
-                yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, automargin: true, type: 'category' },
-                xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'category' },
-                margin: { ...PLOTLY_LAYOUT_BASE.margin, l: 160 },
-            }, PLOTLY_CONFIG);
+                colorbar: {
+                    title: { text: 'Hours', side: 'right', font: { size: 11, color: C('muted') } },
+                    len: 0.8, thickness: 10, outlinewidth: 0,
+                    tickfont: { size: 11, color: C('faint') },
+                },
+            }], chartLayout({
+                height: Math.max(H.sm, constraintIds.length * 22 + 72),
+                hovermode: 'closest',
+                showlegend: false,
+                yaxis: { type: 'category', tickfont: { size: 11, color: C('muted') } },
+                xaxis: monthAxis(hm.months.map(fmtMonth), 'chartConstraintsHeatmap', 90),
+            }), PLOTLY_CONFIG);
         }
     } else if (constraintPanel) {
         constraintPanel.style.display = 'none';
@@ -1919,12 +1777,33 @@ function handleHash() {
 window.addEventListener('hashchange', handleHash);
 
 // ─── Fullscreen Chart Expansion ───────────────────────────────────────
+const ICON_EXPAND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
+const ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+
+// Fullscreen grows the panel's first chart to the viewport; closing restores its own height.
+function fitFullscreenChart(panel, on) {
+    const plotDiv = panel.querySelector('[id^="chart"]');
+    if (!plotDiv || !plotDiv.data) return;
+    if (on) {
+        plotDiv.dataset.baseHeight = (plotDiv.layout && plotDiv.layout.height) || '';
+        setTimeout(() => Plotly.relayout(plotDiv, { height: Math.max(Number(plotDiv.dataset.baseHeight) || 0, window.innerHeight - 140), width: null, autosize: true }), 50);
+    } else if (plotDiv.dataset.baseHeight) {
+        const h = Number(plotDiv.dataset.baseHeight);
+        delete plotDiv.dataset.baseHeight;
+        setTimeout(() => Plotly.relayout(plotDiv, { height: h, width: null, autosize: true }), 50);
+    } else {
+        setTimeout(() => Plotly.Plots.resize(plotDiv), 50);
+    }
+}
+
 function initExpandButtons() {
     document.querySelectorAll('.chart-panel').forEach(panel => {
         const btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'chart-expand-btn';
-        btn.innerHTML = '⛶';
+        btn.innerHTML = ICON_EXPAND;
         btn.title = 'Expand chart';
+        btn.setAttribute('aria-label', 'Expand chart');
         btn.addEventListener('click', () => toggleFullscreen(panel));
         panel.appendChild(btn);
     });
@@ -1940,34 +1819,30 @@ function toggleFullscreen(panel) {
     if (panel.classList.contains('fullscreen')) {
         panel.classList.remove('fullscreen');
         overlay.classList.remove('visible');
-        panel.querySelector('.chart-expand-btn').innerHTML = '⛶';
+        panel.querySelector('.chart-expand-btn').innerHTML = ICON_EXPAND;
         panel.querySelector('.chart-expand-btn').title = 'Expand chart';
+        fitFullscreenChart(panel, false);
     } else {
         // Close any other fullscreen panel first
         document.querySelectorAll('.chart-panel.fullscreen').forEach(p => {
             p.classList.remove('fullscreen');
+            p.querySelector('.chart-expand-btn').innerHTML = ICON_EXPAND;
+            fitFullscreenChart(p, false);
         });
         panel.classList.add('fullscreen');
         overlay.classList.add('visible');
-        panel.querySelector('.chart-expand-btn').innerHTML = '✕';
+        panel.querySelector('.chart-expand-btn').innerHTML = ICON_CLOSE;
         panel.querySelector('.chart-expand-btn').title = 'Close';
-    }
-    // Trigger Plotly resize for the chart inside
-    const plotDiv = panel.querySelector('[id^="chart"]');
-    if (plotDiv && plotDiv.data) {
-        setTimeout(() => Plotly.Plots.resize(plotDiv), 50);
+        fitFullscreenChart(panel, true);
     }
 }
 
 function closeFullscreen() {
     document.querySelectorAll('.chart-panel.fullscreen').forEach(panel => {
         panel.classList.remove('fullscreen');
-        panel.querySelector('.chart-expand-btn').innerHTML = '⛶';
+        panel.querySelector('.chart-expand-btn').innerHTML = ICON_EXPAND;
         panel.querySelector('.chart-expand-btn').title = 'Expand chart';
-        const plotDiv = panel.querySelector('[id^="chart"]');
-        if (plotDiv && plotDiv.data) {
-            setTimeout(() => Plotly.Plots.resize(plotDiv), 50);
-        }
+        fitFullscreenChart(panel, false);
     });
     document.getElementById('fullscreenOverlay').classList.remove('visible');
 }
@@ -2441,19 +2316,23 @@ function renderSpreadChart(region) {
         label = dur + ' window';
     }
     const spreadTraces = [
-        { x: xs, y: high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Discharge-window VWAP (' + label + ')', line: { color: '#22c55e', width: 1.5 } },
-        { x: xs, y: low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Charge-window VWAP (' + label + ')', line: { color: '#ef4444', width: 1.5 } },
-        { x: xs, y: spread.slice(sCut), type: 'scatter', mode: 'lines', name: 'Spread (' + label + ')', yaxis: 'y2', line: { color: '#3b82f6', width: 1.2, dash: 'dot' } },
+        { x: xs, y: high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Discharge-window VWAP', line: { color: C('good'), width: 1.5 },
+          hovertemplate: 'Discharge VWAP: $%{y:,.0f}/MWh<extra></extra>' },
+        { x: xs, y: low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Charge-window VWAP', line: { color: C('bad'), width: 1.5 },
+          hovertemplate: 'Charge VWAP: $%{y:,.0f}/MWh<extra></extra>' },
+        { x: xs, y: spread.slice(sCut), type: 'scatter', mode: 'lines', name: 'Spread (right axis)', yaxis: 'y2', line: { color: C('info'), width: 1.2, dash: 'dot' },
+          hovertemplate: 'Spread: $%{y:,.0f}/MWh<extra></extra>' },
     ];
-    Plotly.newPlot('chartMarketSpread', spreadTraces, {
-        ...PLOTLY_LAYOUT_BASE,
-        xaxis: { ...PLOTLY_LAYOUT_BASE.xaxis, type: 'date' },
-        yaxis: { ...PLOTLY_LAYOUT_BASE.yaxis, title: 'VWAP $/MWh' },
-        yaxis2: { title: 'Spread $/MWh', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', zerolinecolor: '#2d3140', tickfont: { size: 11 }, automargin: true },
+    Plotly.newPlot('chartMarketSpread', spreadTraces, chartLayout({
+        height: H.lg,
+        xaxis: { type: 'date' },
+        yaxis: { title: { text: 'VWAP $/MWh · ' + label } },
+        yaxis2: {
+            title: { text: 'Spread $/MWh' }, overlaying: 'y', side: 'right', showgrid: false, zeroline: false,
+            tickfont: { size: 11, color: C('faint') }, automargin: true,
+        },
         showlegend: true,
-        legend: { x: 0, y: 1.2, orientation: 'h', font: { size: 10 } },
-        margin: { ...PLOTLY_LAYOUT_BASE.margin, t: 40, r: 78 },
-    }, PLOTLY_CONFIG);
+    }), PLOTLY_CONFIG);
 }
 
 document.querySelectorAll('#spreadDuration button').forEach(btn => {
@@ -2461,8 +2340,8 @@ document.querySelectorAll('#spreadDuration button').forEach(btn => {
         marketSpreadDuration = btn.dataset.dur;
         document.querySelectorAll('#spreadDuration button').forEach(b => {
             const on = b === btn;
-            b.style.borderColor = on ? '#4a9eff' : '#2d3140';
-            b.style.color = on ? '#ffffff' : '#9ca3af';
+            b.classList.toggle('seg-item-active', on);
+            b.setAttribute('aria-pressed', String(on));
         });
         renderSpreadChart(marketSpreadRegion);
     });

@@ -46,9 +46,19 @@
     return getComputedStyle(el).getPropertyValue(name).trim();
   }
 
+  /** The CSS variable behind a token name. Accepts the camelCase keys above, the CSS names
+   *  themselves ('surface-2', 'line-soft' — layout() uses these), or a raw '--var'. */
+  function _varName(name) {
+    var n = String(name);
+    if (SEMANTIC[n]) return SEMANTIC[n];
+    if (n.indexOf("--") === 0) return n;
+    for (var k in SEMANTIC) if (SEMANTIC[k] === "--" + n) return SEMANTIC[k];
+    return null;
+  }
+
   /** Current theme's value of a token ('' if unknown — the caller sees it, nothing is invented). */
   function color(name) {
-    var varName = SEMANTIC[name] || (String(name).indexOf("--") === 0 ? name : null);
+    var varName = _varName(name);
     if (!varName) return "";
     return _read(document.documentElement, varName);
   }
@@ -62,7 +72,7 @@
       document.body.appendChild(probe);
       _lightCache = probe;
     }
-    return color(name) ? _read(_lightCache, SEMANTIC[name] || name) : color(name);
+    return color(name) ? _read(_lightCache, _varName(name)) : color(name);
   }
 
   /** Inline style for .swatch / .swatch-bar, carrying both themes so the dot tracks the theme. */
