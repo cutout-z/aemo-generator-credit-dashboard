@@ -13,6 +13,12 @@ removed. AEMO distinguishes physical units (GENSETID) from dispatch units
 drops unmapped regions, so those appends could never supply dispatch
 history — they only polluted the search index with 'nan'-region entries.
 Only registration-list DUIDs (which carry a NEM region) are indexed.
+
+Open loop df4d20dd76f90960 (ADPPV3): the Registration List itself can carry a
+blank Region cell for a stub row (a 0.02 MW non-scheduled unit), which used to
+pass straight through to index.json and inflate the dashboard region filter.
+``_resolve_missing_regions`` now recovers those cells from the same-station
+sibling units at parse time and reports anything it cannot resolve.
 """
 
 from __future__ import annotations
@@ -108,6 +114,112 @@ def _drop_stale_genset_caches(cache_path: Path) -> None:
             logger.info(f"Removed stale GENSETID-era cache {stale.name}")
 
 
+def _clean_region(value):
+    """Normalise a Registration List Region cell to a stripped string or None."""
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    return text
+
+
+def _resolve_missing_regions(df: pd.DataFrame) -> pd.DataFrame:
+    """Backfill registration rows whose Region cell is blank (no NEM region).
+
+    Open loop df4d20dd76f90960 (ADPPV3): the Registration List vintage behind the
+    2026-09-17 publish carried an EMPTY Region cell for ADPPV3 (Adelaide
+    Desalination Plant solar, 0.02 MW — a registration stub row). Nothing between
+    the parse and the published JSON rejected a blank region, so
+    ``docs/data/index.json`` and ``docs/data/generators/ADPPV3.json`` published
+    ``"region": ""``. The dashboard builds its region filter from the distinct
+    ``region`` values in the index (docs/index.html populateFilters/updateStats),
+    so the blank read as a sixth region.
+
+    Only the Registration List's own rows exist at this point, so the region is
+    recovered from the most authoritative local evidence available: the other
+    units registered on the same STATION_NAME, which resolve to exactly one NEM
+    region (a station physically sits in one region — the current list has 453
+    stations and no name spanning two regions). A missing region that no sibling
+    supplies is left unset and reported loudly rather than guessed; a
+    present-but-not-NEM value is reported too and never overwritten, because
+    silently rewriting a stated region would hide a source anomaly.
+
+    Returns the frame with REGION normalised (stripped strings, None when
+    unresolved); rows that end with no NEM region keep failing
+    ``_cache_is_valid`` so they can never be served from cache.
+    """
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+    if "REGION" not in df.columns:
+        df["REGION"] = None
+
+    region = df["REGION"].map(_clean_region)
+    valid = region.isin(config.REGIONS)
+    missing = region.isna()
+    anomaly = (~valid) & (~missing)
+
+    if anomaly.any():
+        logger.warning(
+            "Registration List rows carry a non-NEM region value (left as-is, "
+            "never overwritten): %s",
+            ", ".join(
+                f"{df.at[i, 'DUID']}={region.at[i]!r}" for i in df.index[anomaly]
+            ),
+        )
+
+    if missing.any():
+        station = df["STATION_NAME"].astype(object).map(
+            lambda v: str(v).strip() if isinstance(v, str) else None
+        )
+        consensus: dict[str, str] = {}
+        for name, group in df[valid].groupby(station[valid]):
+            regions = set(region[group.index].dropna())
+            if name and len(regions) == 1:
+                consensus[name] = regions.pop()
+
+        recovered = {
+            df.at[i, "DUID"]: consensus[station.at[i]]
+            for i in df.index[missing]
+            if station.at[i] in consensus
+        }
+        if recovered:
+            region = region.copy()
+            for i in df.index[missing]:
+                name = station.at[i]
+                if name in consensus:
+                    region.at[i] = consensus[name]
+            logger.info(
+                "Backfilled REGION for %d Registration List row(s) from "
+                "same-station consensus: %s",
+                len(recovered),
+                ", ".join(f"{d}→{r}" for d, r in sorted(recovered.items())),
+            )
+
+        unresolved = [
+            df.at[i, "DUID"] for i in df.index[missing] if pd.isna(region.at[i])
+        ]
+        if unresolved:
+            logger.warning(
+                "Registration List rows with no NEM region and no resolvable "
+                "sibling unit — they will publish a blank region and inflate the "
+                "dashboard region filter until AEMO restores the cell: %s",
+                ", ".join(unresolved),
+            )
+
+    df["REGION"] = region
+    return df
+
+
 def _parse_registration_list(xls_path: Path) -> pd.DataFrame:
     """Parse the NEM Registration and Exemption List for all generators."""
     logger.info("Parsing NEM Registration List...")
@@ -157,6 +269,10 @@ def _parse_registration_list(xls_path: Path) -> pd.DataFrame:
 
     # Deduplicate
     df = df.drop_duplicates(subset="DUID", keep="first")
+
+    # Region guard (open loop df4d20dd76f90960): a blank Region cell in the
+    # Registration List vintage must not reach index.json / the per-DUID docs.
+    df = _resolve_missing_regions(df)
 
     # Select final columns
     keep_cols = [

@@ -633,19 +633,30 @@ async function init() {
 }
 
 function updateStats() {
-    const regions = new Set(generators.map(g => g.region));
-    const fuels = new Set(generators.map(g => g.fuel_category));
+    const regions = new Set(generators.map(g => g.region).filter(isKnownRegion));
+    const fuels = new Set(generators.map(g => g.fuel_category).filter(isKnownValue));
     document.getElementById('statsBar').innerHTML =
         `<span><strong>${generators.length}</strong> generators</span>` +
         `<span><strong>${regions.size}</strong> regions</span>` +
         `<span><strong>${fuels.size}</strong> fuel types</span>`;
 }
 
+// Open loop df4d20dd76f90960: index.json entries can carry an empty region when
+// the upstream Registration List omits the Region cell (ADPPV3 was published as
+// "region": "" and the app bar read 6 regions). Unknown values must never become
+// a filter option or inflate the app-bar counts.
+function isKnownValue(v) {
+    return typeof v === 'string' && v.trim() !== '' && v.trim().toLowerCase() !== 'nan';
+}
+function isKnownRegion(v) {
+    return isKnownValue(v) && v.trim().toLowerCase() !== 'unknown';
+}
+
 function populateFilters() {
     const regionSelect = document.getElementById('filterRegion');
     const fuelSelect = document.getElementById('filterFuel');
 
-    const regions = [...new Set(generators.map(g => g.region))].sort();
+    const regions = [...new Set(generators.map(g => g.region).filter(isKnownRegion))].sort();
     regions.forEach(r => {
         const opt = document.createElement('option');
         opt.value = r;
@@ -653,7 +664,7 @@ function populateFilters() {
         regionSelect.appendChild(opt);
     });
 
-    const fuels = [...new Set(generators.map(g => g.fuel_category))].sort();
+    const fuels = [...new Set(generators.map(g => g.fuel_category).filter(isKnownValue))].sort();
     fuels.forEach(f => {
         const opt = document.createElement('option');
         opt.value = f;
