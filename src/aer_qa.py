@@ -6,7 +6,8 @@ FCAS costs) roughly six-to-eight weeks after quarter end. There is no API and no
 machine-readable index: the chart pages link the CSVs.
 
 This lane ingests that suite and cross-checks it against our own derived
-quarterly aggregates (``docs/data/market_quarterly.json``) with QED-style
+quarterly aggregates (``market_daily.json``'s ``quarterly`` block, with
+``market_quarterly.json`` as a legacy fallback — see below) with QED-style
 warn-bands. It is a **QA process**: divergences are recorded as pass/warn per
 series in ``docs/data/aer_qa.json`` and in the daily run manifest. There is
 deliberately no chart, no panel and no ``index.html`` change — per the owner's
@@ -48,6 +49,36 @@ Comparators (``config.AER_QA_BANDS``):
   totals) are ingested and published as reference values marked
   ``not_comparable`` with the reason — never dropped, never faked into a pass.
 
+Like-for-like source *and* window (added 2026-09-19, after the first live run):
+
+- **Our side is read from the live rollup.** ``market_daily.json`` is rewritten
+  every daily run by ``publish_market_json`` from the accumulated factor history,
+  so its ``quarterly`` block always spans the full window the raw cache +
+  processed-cache snapshot support. ``market_quarterly.json`` is the *legacy*
+  standalone artifact: its writer was dropped when the rollup moved into
+  market_daily.json, so the copy on disk is a frozen snapshot of whatever window
+  the last pre-refactor run held. It is consulted only for region×quarter keys
+  the live artifact lacks, and each check records ``our_source`` so a fallback is
+  visible in the published artifact instead of silently skewing a verdict.
+- **A whole-quarter AER figure needs a whole-quarter window on our side.** Rows
+  whose ``days_covered`` falls short of the quarter's calendar days
+  (``config.AER_QA_MIN_COVERAGE_RATIO``, 90 %) report ``partial_coverage`` with
+  the shortfall spelled out: counted, published, and *never* a warn — a partial
+  window cannot support a ratio.
+- **Worked example — the first live run's only warn.** TAS1 2025Q4 came out at
+  3.00 % against the AER's 8.04 % (355/4416, ratio 0.37), which the frozen legacy
+  artifact explains: its "2025Q4" row spanned 2025-11-01 → 2025-12-31 only (61 of
+  92 days), missing October — Tasmania's heaviest negative-price month of that
+  quarter (12.8 % of 5-minute intervals, vs 2.9 % in November and 3.3 % in
+  December). Over the full quarter our own 5-minute share is 6.39 %
+  (1,693 of 26,496 raw DISPATCHPRICE intervals, and 357 of 4,417 trading
+  intervals on the AER's 30-minute basis — within 2 intervals of the published
+  355), ratio 0.79 (0.75 against the published 2-dp rollup value, 0.06), inside the
+  band. The share calculation was never wrong; the
+  comparison window was. The stale artifact's window also moved the other regions
+  by 1–2 points (SA1 0.48 vs 0.46, VIC1 0.42 vs 0.41, QLD1 0.27 vs 0.28) — inside
+  the band, so only TAS1 tripped.
+
 Machine-local cache: ``data/aer_qa/`` (parsed reference values + edition
 metadata), never committed. Published artifact: ``docs/data/aer_qa.json``
 through the S3-12 semantic-diff publish gate.
@@ -71,7 +102,7 @@ import pandas as pd
 import requests
 
 from . import config
-from .market_factors import MARKET_QUARTERLY_JSON
+from .market_factors import MARKET_DAILY_JSON, MARKET_QUARTERLY_JSON
 from .run_status import STATUS_DEGRADED, STATUS_ERROR, STATUS_OK
 from .semantic_publish import write_json_if_facts_changed
 
@@ -93,6 +124,13 @@ OUTCOME_SKIP = "skip"
 OUTCOME_NOT_COMPARABLE = "not_comparable"
 OUTCOME_AWAITING_EDITION = "awaiting_edition"
 OUTCOME_BELOW_FLOOR = "below_noise_floor"
+# Our own aggregate does not span the whole quarter the AER figure covers, so the
+# comparison is not like-for-like. A coverage fact, never a data-quality warn.
+OUTCOME_PARTIAL_COVERAGE = "partial_coverage"
+
+# Our-side source labels (recorded per check as ``our_source``).
+SOURCE_DAILY = "market_daily"        # live rollup, rewritten every run
+SOURCE_LEGACY = "market_quarterly"   # legacy artifact, frozen pre-refactor snapshot
 
 # AER column labels are human ("New South Wales ($ per megawatt hour)"). Map the
 # label (parenthetical stripped, lowercased) to our region codes.
@@ -122,6 +160,20 @@ MAX_CHECKS = 240
 MAX_REFERENCE_QUARTERS = 8
 
 REFERENCE_COLUMNS = ("series", "quarter", "region", "value")
+
+
+def _empty_outcome_counts() -> dict[str, int]:
+    """Zeroed outcome tally (every outcome an entry can report, so a new one can
+    never be silently dropped from the published counts)."""
+    return {
+        OUTCOME_PASS: 0,
+        OUTCOME_WARN: 0,
+        OUTCOME_SKIP: 0,
+        OUTCOME_NOT_COMPARABLE: 0,
+        OUTCOME_AWAITING_EDITION: 0,
+        OUTCOME_BELOW_FLOOR: 0,
+        OUTCOME_PARTIAL_COVERAGE: 0,
+    }
 
 
 class AerQaError(RuntimeError):
@@ -497,23 +549,86 @@ def compare_share_ratio(
 
 # ─── Cross-check engine ────────────────────────────────────────────────────
 
-def load_our_quarterly(docs_data_dir: str | Path) -> dict[tuple[str, str], dict]:
-    """Our derived region×quarter rows from ``market_quarterly.json``."""
-    path = Path(docs_data_dir) / MARKET_QUARTERLY_JSON
+def _whole_days(value) -> int | None:
+    """``days_covered`` as a JSON-safe int (None when absent or unusable)."""
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def coverage_shortfall(quarter: str, row: dict) -> str | None:
+    """Why our row is not like-for-like with a whole-quarter AER figure, if it isn't.
+
+    The AER publishes whole-quarter counts and prices, and our ``market_*`` rows
+    carry ``days_covered``. When our window starts (or ends) mid-quarter the two
+    sides describe different periods, so a ratio (or band) verdict would measure
+    the shorter window's weather rather than our derivation — the TAS1 2025Q4
+    false alarm, where a frozen 61-day window dropped October. Returns the
+    operator-facing detail when coverage is short, None when it is adequate or
+    unreported (an artifact without ``days_covered`` falls back to the band alone).
+    """
+    covered = _whole_days(row.get("days_covered"))
+    if covered is None:
+        return None
+    days = quarter_days(quarter)
+    ratio = float(config.AER_QA_MIN_COVERAGE_RATIO)
+    if covered >= ratio * days:
+        return None
+    return (f"our aggregate window covers {covered} of {days} day(s) "
+            f"({covered / days:.0%} < {ratio:.0%}) — not like-for-like with the "
+            f"whole-quarter AER figure, so the comparison is suppressed")
+
+
+def _read_json_object(path: Path) -> dict | None:
+    """Parsed JSON object at ``path``, or None when absent/unreadable/not an object."""
     if not path.exists():
-        return {}
+        return None
     try:
         payload = json.loads(path.read_text())
     except (OSError, ValueError) as e:
-        logger.warning("market_quarterly.json unreadable for the AER check: %s", e)
-        return {}
-    rows = payload.get("rows") if isinstance(payload, dict) else None
+        logger.warning("%s unreadable for the AER check: %s", path.name, e)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _quarter_rows(payload: dict | None, key: str) -> list:
+    rows = (payload or {}).get(key)
+    return rows if isinstance(rows, list) else []
+
+
+def load_our_quarterly(docs_data_dir: str | Path) -> dict[tuple[str, str], dict]:
+    """Our derived region×quarter rows, live artifact first.
+
+    ``market_daily.json`` is the **live** aggregate: ``publish_market_json``
+    rewrites its ``quarterly`` block on every daily run from the same in-memory
+    frames as the daily series, so it spans the full accumulated factor history.
+    ``market_quarterly.json`` is the **legacy** standalone artifact: its writer was
+    dropped when the rollup moved into market_daily.json, so the copy on disk is a
+    frozen snapshot of whatever window the last pre-refactor run happened to hold
+    (the first live AER run compared against exactly that — see the module
+    docstring's TAS1 2025Q4 worked example). It is consulted only for
+    region×quarter keys the live artifact lacks, and every row records which
+    artifact it came from (``_source``) so a fallback is visible, never silent.
+    """
+    docs = Path(docs_data_dir)
     out: dict[tuple[str, str], dict] = {}
-    for row in rows or []:
-        quarter = quarter_label(row.get("quarter"))
-        region = row.get("region")
-        if quarter and region:
-            out[(str(region), quarter)] = row
+    for payload, key, source in (
+        (_read_json_object(docs / MARKET_DAILY_JSON), "quarterly", SOURCE_DAILY),
+        (_read_json_object(docs / MARKET_QUARTERLY_JSON), "rows", SOURCE_LEGACY),
+    ):
+        for row in _quarter_rows(payload, key):
+            if not isinstance(row, dict):
+                continue
+            quarter = quarter_label(row.get("quarter"))
+            region = row.get("region")
+            if not quarter or not region:
+                continue
+            row = dict(row)
+            row["_source"] = source
+            out.setdefault((str(region), quarter), row)
     return out
 
 
@@ -538,7 +653,9 @@ def build_checks(
     """Per-series pass/warn/skip verdicts for the quarters we can compare.
 
     A quarter the edition does not cover (yet) is recorded as
-    ``awaiting_edition`` — a publication-lag fact, never a data-quality warn.
+    ``awaiting_edition`` — a publication-lag fact, never a data-quality warn. A
+    quarter our own aggregate only partly spans is ``partial_coverage`` — likewise
+    a coverage fact, never a verdict on our share calculation.
     """
     bands = bands or config.AER_QA_BANDS
     our_quarters = sorted({q for (_r, q) in our_rows}, key=quarter_sort_key)
@@ -558,9 +675,7 @@ def build_checks(
             "unit": spec.get("unit"),
             "comparator": comparator,
             "checks": [],
-            "counts": {OUTCOME_PASS: 0, OUTCOME_WARN: 0, OUTCOME_SKIP: 0,
-                       OUTCOME_NOT_COMPARABLE: 0, OUTCOME_AWAITING_EDITION: 0,
-                       OUTCOME_BELOW_FLOOR: 0},
+            "counts": _empty_outcome_counts(),
         }
 
         def _add(check: dict) -> None:
@@ -610,15 +725,33 @@ def build_checks(
                     "series": series_key, "quarter": quarter, "region": region,
                     "aer_value": None if aer_value is None else float(aer_value),
                 }
+                ours: dict = {}
                 if comparator == COMPARATOR_BAND:
+                    ours = {
+                        "avg_vwap_low": row.get("avg_vwap_low"),
+                        "avg_vwap_high": row.get("avg_vwap_high"),
+                    }
+                elif comparator == COMPARATOR_SHARE:
+                    ours = {
+                        "neg_price_share": row.get("neg_price_share"),
+                        "aer_periods": periods,
+                    }
+                if ours:
+                    check["ours"] = ours
+                if row.get("_source"):
+                    check["our_source"] = row["_source"]
+                if row.get("days_covered") is not None:
+                    check["our_days_covered"] = _whole_days(row.get("days_covered"))
+                shortfall = coverage_shortfall(quarter, row)
+                if shortfall:
+                    # Not like-for-like: the AER figure is a whole quarter, our
+                    # window is not. Recorded, counted, never a data-quality warn.
+                    verdict = {"outcome": OUTCOME_PARTIAL_COVERAGE, "detail": shortfall}
+                elif comparator == COMPARATOR_BAND:
                     verdict = compare_band_contains(
                         aer_value, row.get("avg_vwap_low"), row.get("avg_vwap_high"),
                         tolerance_ratio=float(band.get("tolerance_ratio", 0.0)),
                     )
-                    check["ours"] = {
-                        "avg_vwap_low": row.get("avg_vwap_low"),
-                        "avg_vwap_high": row.get("avg_vwap_high"),
-                    }
                 elif comparator == COMPARATOR_SHARE:
                     verdict = compare_share_ratio(
                         aer_value, periods, row.get("neg_price_share"),
@@ -626,10 +759,6 @@ def build_checks(
                         ratio_max=float(band.get("ratio_max", 1e9)),
                         noise_floor=int(band.get("noise_floor", 0)),
                     )
-                    check["ours"] = {
-                        "neg_price_share": row.get("neg_price_share"),
-                        "aer_periods": periods,
-                    }
                 else:
                     verdict = {"outcome": OUTCOME_SKIP,
                                "detail": f"unknown comparator {comparator!r}"}
@@ -642,6 +771,17 @@ def build_checks(
             })
         out[series_key] = entry
     return out
+
+
+def _our_rows_sources(checks: dict) -> dict[str, int]:
+    """Count of compared checks per our-side artifact (``our_source`` label)."""
+    counts: dict[str, int] = {}
+    for entry in checks.values():
+        for check in entry["checks"]:
+            source = check.get("our_source")
+            if source:
+                counts[source] = counts.get(source, 0) + 1
+    return counts
 
 
 def _findings(checks: dict) -> list[str]:
@@ -723,9 +863,7 @@ def build_aer_qa_payload(
     reference_quarter: str | None,
 ) -> dict:
     """Compact QA artifact: edition identity, pass/warn counts, warn findings."""
-    totals = {OUTCOME_PASS: 0, OUTCOME_WARN: 0, OUTCOME_SKIP: 0,
-              OUTCOME_NOT_COMPARABLE: 0, OUTCOME_AWAITING_EDITION: 0,
-              OUTCOME_BELOW_FLOOR: 0}
+    totals = _empty_outcome_counts()
     for entry in checks.values():
         for outcome, count in entry["counts"].items():
             totals[outcome] = totals.get(outcome, 0) + count
@@ -756,9 +894,13 @@ def build_aer_qa_payload(
             "not_comparable": totals[OUTCOME_NOT_COMPARABLE],
             "awaiting_edition": totals[OUTCOME_AWAITING_EDITION],
             "below_noise_floor": totals[OUTCOME_BELOW_FLOOR],
+            "partial_coverage": totals[OUTCOME_PARTIAL_COVERAGE],
             "skipped": totals[OUTCOME_SKIP],
             "findings": len(findings),
         },
+        # Which artifact our side of the comparison came from, per source label —
+        # a legacy-artifact fallback is an operator fact, never a silent one.
+        "our_rows_source": _our_rows_sources(checks),
         "findings": findings,
         "series": checks,
         "reference_values": _reference_payload(reference),
@@ -944,6 +1086,13 @@ def run_aer_qa_lane(
             f"{summary['warned']} warn / {summary['not_comparable']} reference-only "
             f"across {summary['series']} series"
         )
+        if summary.get("partial_coverage"):
+            note += (f"; {summary['partial_coverage']} partial-window check(s) "
+                     f"suppressed (our aggregate does not span the quarter)")
+        legacy = (payload.get("our_rows_source") or {}).get(SOURCE_LEGACY)
+        if legacy:
+            note += (f"; {legacy} check(s) compared against the legacy "
+                     f"market_quarterly.json snapshot")
     if warnings:
         note += f"; {len(warnings)} warn-band finding(s)"
     logger.info("AER QA lane: %s", note)

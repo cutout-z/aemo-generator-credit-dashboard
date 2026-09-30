@@ -98,20 +98,25 @@ proxy benchmarked against AEMO QED) — see README methodology.
 ### AER market-statistics QA cross-check (quarterly CSV suite, Sep 2026)
 - **What**: The AER's quarterly market-statistics CSV suite — regional VWA spot
   prices, counts of 30-minute prices below $0 and above $5,000, and NEM total FCAS
-  costs — ingested and cross-checked against our own derived
-  `docs/data/market_quarterly.json` with QED-style warn-bands. **QA process only:
-  no chart, no panel, no `index.html` change** (owner decision 2026-09-19).
-  Outputs `docs/data/aer_qa.json` + an `aer_qa` lane record in
-  `docs/data/run_status.json`; see `src/aer_qa.py`.
+  costs — ingested and cross-checked against our own derived quarterly aggregates
+  (`docs/data/market_daily.json`'s `quarterly` block — the live rollup — with
+  `docs/data/market_quarterly.json` as a legacy fallback only) with QED-style
+  warn-bands. **QA process only: no chart, no panel, no `index.html` change**
+  (owner decision 2026-09-19). Outputs `docs/data/aer_qa.json` + an `aer_qa` lane
+  record in `docs/data/run_status.json`; see `src/aer_qa.py`.
 - **Checks**: AER's published regional VWA must land inside our derived quarterly
   band `[avg_vwap_low, avg_vwap_high]` (±15% of band width); AER's below-$0
   interval count, converted to a share of the quarter's 4,368 trading intervals,
   is ratio-banded 0.5–2.0 against our `neg_price_share` (5-minute denominator —
   wide band, gross-divergence alarm only, and counts under 50 intervals on both
-  sides are `below_noise_floor`, not warns). Above-$5,000 counts and FCAS cost
-  totals have no counterpart column in our artifact: they are ingested and
-  published as reference values marked `not_comparable` with the reason — never
-  dropped, never faked into a pass. Warns never fail the run.
+  sides are `below_noise_floor`, not warns). A quarter our own aggregate only
+  partly spans (`days_covered` < 90% of the quarter's calendar days) reports
+  `partial_coverage` — same non-warn treatment, with the shortfall spelled out, so
+  a whole-quarter regulator figure is never ratio-banded against a partial window.
+  Above-$5,000 counts and FCAS cost totals have no counterpart column in our
+  artifact: they are ingested and published as reference values marked
+  `not_comparable` with the reason — never dropped, never faked into a pass.
+  Warns never fail the run.
 - **Gotchas**: the chart pages are behind a bot-management interstitial
   (live-probed 2026-09-19: all four slugs answer HTTP 200 with a ~2.4 KB
   `bm-verify` refresh stub — the slug exists, the content does not), while the
@@ -125,10 +130,22 @@ proxy benchmarked against AEMO QED) — see README methodology.
   `content_sha256` means an unchanged edition is not re-fetched. Refresh the seed
   folder date (e.g. `2026-11`) when a new edition lands.
 - **First live run** (AER 2026-08 edition covering through 2026Q2, 2026-09-19):
-  27 pass / 1 warn / 2 reference-only. The warn is a real finding, not a lane
-  bug: TAS1 2025Q4 negative-price share — ours 3.00% of 5-minute intervals vs the
-  AER's 8.04% of 30-minute trading intervals (ratio 0.37). Worth investigating
-  whether our negative-price capture under-counts TAS through that quarter.
+  27 pass / 1 warn / 2 reference-only. The warn looked like a real finding — TAS1
+  2025Q4 negative-price share, ours 3.00% of 5-minute intervals vs the AER's 8.04%
+  of 30-minute trading intervals (ratio 0.37) — but the diagnosis the same day
+  landed on the **comparison window, not the share**: the lane's then-only source
+  `market_quarterly.json` is a frozen snapshot (its writer was dropped when the
+  rollup moved into `market_daily.json`) spanning 2025-11-01 → 2026-08-01, so its
+  "2025Q4" row covers 61 of 92 days and misses October, Tasmania's heaviest
+  negative-price month of that quarter (12.8% of 5-minute intervals, vs 2.9% Nov /
+  3.3% Dec). Over the full quarter our share is 6.39% (1,693 / 26,496 raw
+  `DISPATCHPRICE` intervals), ratio 0.79 — in band (0.75 against the published
+  2-dp rollup value 0.06 that the artifact carries); on the AER's own 30-minute
+  basis our raw prices give 357 / 4,417 ≈ 8.08%, within two intervals of the
+  published 355. The lane now reads the live rollup first (legacy artifact only as
+  a per-key fallback, recorded as `our_source`) and suppresses whole-quarter
+  comparisons against partial windows as `partial_coverage` (never a warn). Re-run
+  against the same edition: 67 pass / 0 warn.
 
 ## Future — Tier 2 (situational value)
 
