@@ -213,8 +213,11 @@ class TestParseNormalize:
         assert first["storage_mwh"] == pytest.approx(200.0)
         assert first["full_commercial_use_date"] == "2027-07-31"
         assert first["expected_closure_year"] == 2060
-        # blank DUID (62% of real rows) stays absent, never a stub string
-        assert snap.iloc[1]["duid"] is None
+        # blank DUID (62% of real rows) stays absent, never a stub string.
+        # Accept either spelling of "missing": pandas ≥3 keeps a blank cell in a
+        # mixed column as NaN where pandas 2 produced None. The published JSON is
+        # unaffected — the writer serialises both as null.
+        assert pd.isna(snap.iloc[1]["duid"])
 
     def test_duplicate_unit_id_rows_are_kept(self, tmp_path):
         """Two physical units may share one Gen Info Unit ID (Whitwood case)."""
