@@ -28,29 +28,52 @@ def plot_range(pg, chart_id: str, axis: str):
     return pg.evaluate(f"document.getElementById('{chart_id}')._fullLayout.{axis}axis.range.slice()")
 
 
-def axis_drag(pg, chart_id: str, axis: str) -> tuple[list, list]:
-    """Grab the axis strip where its tick labels actually are, and drag along it."""
-    pg.evaluate(f"document.getElementById('{chart_id}').scrollIntoView({{block: 'center'}})")
-    pg.wait_for_timeout(300)
-    box = pg.evaluate(f"""(() => {{
-        const gd = document.getElementById('{chart_id}'), r = gd.getBoundingClientRect(), s = gd._fullLayout._size;
-        return '{axis}' === 'y'
-            ? [r.left + s.l / 2, r.top + s.t + s.h / 2]
-            : [r.left + s.l + s.w / 2, r.top + s.t + s.h + 12];
-    }})()""")
-    before = plot_range(pg, chart_id, axis)
-    pg.mouse.move(*box)
-    pg.mouse.down()
-    dx, dy = (0, 60) if axis == "y" else (80, 0)   # down / right = expand
-    pg.mouse.move(box[0] + dx, box[1] + dy, steps=8)
-    pg.mouse.up()
-    pg.wait_for_timeout(400)
-    after = plot_range(pg, chart_id, axis)
-    # Expanded around the same view — in Plotly's linear units, so date axes are compared as dates
-    # (a range scaled as strings once jumped to Plotly's 2000–2001 default and still "changed").
-    expanded = pg.evaluate(f"""(([b, a]) => {{ const ax = document.getElementById('{chart_id}')._fullLayout.{axis}axis;
-        return ax.r2l(a[0]) < ax.r2l(b[0]) && ax.r2l(a[1]) > ax.r2l(b[1]); }})""", [before, after])
-    return before, after if expanded else ["NOT EXPANDED", *after]
+SWEEP_AXES = """(id) => { const L = document.getElementById(id)._fullLayout;
+    return Object.keys(L).filter(k => /^[xy]axis\\d*$/.test(k) && L[k]._length).map(k => ({ k, type: L[k].type,
+        labels: L[k].showticklabels !== false, matches: L[k].matches || null })); }"""
+RANGES = """(id) => { const L = document.getElementById(id)._fullLayout;
+    return Object.fromEntries(Object.keys(L).filter(k => /^[xy]axis\\d*$/.test(k) && L[k]._length).map(k => [k, L[k].range.map(v => L[k].r2l(v))])); }"""
+STRIP = """([id, k]) => { const gd = document.getElementById(id), r = gd.getBoundingClientRect(), L = gd._fullLayout, a = L[k], s = L._size;
+    if (k[0] === 'x') { const ya = L[String(a.anchor || 'y').replace(/^y/, 'yaxis')];
+        return [r.left + a._offset + a._length / 2, r.top + ya._offset + ya._length + 10]; }
+    return [a.side === 'right' ? r.right - s.r / 2 : r.left + s.l / 2, r.top + a._offset + a._length / 2]; }"""
+
+
+def axis_sweep(pg) -> list[str]:
+    """Drag every draggable axis strip of every chart on screen. Each drag must expand exactly the
+    grabbed axis around its current view (plus any axis Plotly links to it with `matches`);
+    returns a line per problem."""
+    problems = []
+    ids = pg.evaluate("[...document.querySelectorAll('.js-plotly-plot')].filter(e => e.data && e.getBoundingClientRect().height > 50).map(e => e.id)")
+    for cid in ids:
+        pg.evaluate(f"document.getElementById('{cid}').scrollIntoView({{block: 'center'}})")
+        pg.wait_for_timeout(250)
+        axes = pg.evaluate(SWEEP_AXES, cid)
+        for a in axes:
+            k = a["k"]
+            if not a["labels"] or (k[0] == "y" and a["type"] in ("category", "date", "log")) or a["type"] == "log":
+                continue
+            linked = {k} | {b["k"] for b in axes if b["matches"] and b["matches"].replace("x", "xaxis").replace("y", "yaxis") == k}
+            if a["matches"]:
+                linked.add(a["matches"].replace("x", "xaxis", 1) if a["matches"][0] == "x" else a["matches"].replace("y", "yaxis", 1))
+            before = pg.evaluate(RANGES, cid)
+            x, y = pg.evaluate(STRIP, [cid, k])
+            pg.mouse.move(x, y)
+            pg.mouse.down()
+            pg.mouse.move(x + (80 if k[0] == "x" else 0), y + (60 if k[0] == "y" else 0), steps=6)
+            pg.mouse.up()
+            pg.wait_for_timeout(300)
+            after = pg.evaluate(RANGES, cid)
+            # An axis "moved" if either end shifted by more than 0.1% of its span (Plotly re-pads
+            # autoranged axes by a hair when another axis changes; that is not a drag leaking).
+            span = lambda r: abs(r[1] - r[0]) or 1
+            moved = {n for n in before if max(abs(after[n][0] - before[n][0]), abs(after[n][1] - before[n][1])) > 0.001 * span(before[n])}
+            grew = after[k][0] < before[k][0] and after[k][1] > before[k][1]
+            if not grew or not moved <= linked:
+                problems.append(f"{cid}.{k}: {'not expanded' if not grew else 'also moved ' + str(sorted(moved - linked))}")
+            pg.evaluate(f"Plotly.relayout('{cid}', Object.fromEntries({list(before)}.map(n => [n + '.autorange', true])))")
+            pg.wait_for_timeout(150)
+    return problems
 
 
 def main() -> int:
@@ -99,12 +122,10 @@ def main() -> int:
         full = pg.evaluate("document.getElementById('chartGeneration').data[0].x.length")
         check(six == 6 and full > 6, "period switch", f"6M → {six} months, 3Y → {full}")
 
-        # Axis drag (initAxisRangeDrag), both axes, at the tick-label strips
-        yb, ya = axis_drag(pg, "chartCapacity", "y")
-        check(ya[0] != "NOT EXPANDED", "axis drag — y (linear)", f"{yb} → {ya}")
-        xb, xa = axis_drag(pg, "chartMarketSpread", "x")
-        check(xa[0] != "NOT EXPANDED", "axis drag — x (date)", f"{xb} → {xa}")
-        pg.evaluate("Plotly.relayout('chartCapacity', {'yaxis.autorange': true}); Plotly.relayout('chartMarketSpread', {'xaxis.autorange': true})")
+        # Axis drag (initAxisRangeDrag): every axis of every chart, at its tick-label strip
+        n_axes = pg.evaluate("[...document.querySelectorAll('.js-plotly-plot')].filter(e => e.data).length")
+        problems = axis_sweep(pg)
+        check(not problems, "axis drag — every axis, every chart", "; ".join(problems) or f"{n_axes} charts swept")
 
         # Fullscreen: button opens and grows the chart; Escape and the overlay both close
         panel = "#chartCapacity >> xpath=ancestor::div[contains(@class,'chart-panel')][1]"

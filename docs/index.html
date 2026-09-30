@@ -2061,23 +2061,35 @@ initDragReorder();
 // present and future.
 function initAxisRangeDrag() {
     let drag = null;
+    // Which axis strip is under the pointer — any axis, not just the first x/y: the daily chart
+    // stacks two subplots (x2/y2 below) and the price-spread chart has a right-hand y2.
+    // Positions come from Plotly's own axis geometry (_offset/_length: pixels from the paper
+    // origin, as drawn) and the margins as drawn (_size, auto-expanded for labels and legends).
+    // Returns the layout key ('xaxis', 'yaxis2', ...) or null.
     const zoneFor = (gd, e) => {
         if (!gd._fullLayout) return null;
         const L = gd._fullLayout;
         const rect = gd.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return null;
         const px = e.clientX - rect.left, py = e.clientY - rect.top;
-        // _size = the margins as drawn (auto-expanded for tick labels, titles, legend);
-        // margin = as configured. Zones follow what is on screen.
         const M = L._size || L.margin;
-        const plotL = M.l, plotR = rect.width - M.r;
-        const plotT = M.t, plotB = rect.height - M.b;
-        if (px > plotL && px < plotR && py > plotB && py < rect.height) {
-            return L.xaxis.type === 'log' ? null : 'x';
+        const keys = Object.keys(L).filter(k => /^[xy]axis\d*$/.test(k) && L[k] && L[k]._length);
+        for (const k of keys) {
+            if (k[0] !== 'y') continue;
+            const ax = L[k];
+            if (ax.type === 'log' || ax.type === 'date' || ax.type === 'category') continue;
+            if (py < ax._offset || py > ax._offset + ax._length) continue;
+            if (ax.side === 'right' ? (px > rect.width - M.r && px < rect.width) : (px > 0 && px < M.l)) return k;
         }
-        if (px > 0 && px < plotL && py > plotT && py < plotB) {
-            const t = L.yaxis.type;
-            return (t === 'log' || t === 'date' || t === 'category') ? null : 'y';
+        for (const k of keys) {
+            if (k[0] !== 'x') continue;
+            const ax = L[k];
+            if (ax.type === 'log' || ax.showticklabels === false) continue;
+            if (px < ax._offset || px > ax._offset + ax._length) continue;
+            // The strip under the plot this axis is drawn against (its anchor y-axis).
+            const ya = L[String(ax.anchor || 'y').replace(/^y/, 'yaxis')];
+            const bottom = ya && ya._length ? ya._offset + ya._length : rect.height - M.b;
+            if (py > bottom && py < Math.min(rect.height, bottom + Math.max(M.b, 28))) return k;
         }
         return null;
     };
@@ -2085,25 +2097,24 @@ function initAxisRangeDrag() {
         if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
         const gd = e.target.closest ? e.target.closest('.js-plotly-plot') : null;
         if (!gd) return;
-        const axis = zoneFor(gd, e);
-        if (!axis) return;
-        const ax = gd._fullLayout[axis + 'axis'];
+        const key = zoneFor(gd, e);
+        if (!key) return;
+        const ax = gd._fullLayout[key];
         if (!ax.range) return;
         e.preventDefault();
         e.stopPropagation();
-        const rect = gd.getBoundingClientRect();
+        const isX = key[0] === 'x';
         drag = {
             gd,
-            axis,
-            start: axis === 'x' ? e.clientX : e.clientY,
+            key,
+            isX,
+            start: isX ? e.clientX : e.clientY,
             // Work in Plotly's linear units: a date axis keeps its range as date strings, and
             // scaling those arithmetically sent the axis to Plotly's 2000–2001 default.
             ax,
             range: ax.range.map(v => ax.r2l(v)),
-            // ~half a plot-length of drag ≈ one e-fold of zoom
-            k: Math.max(120, (axis === 'x'
-                ? rect.width - gd._fullLayout.margin.l - gd._fullLayout.margin.r
-                : rect.height - gd._fullLayout.margin.t - gd._fullLayout.margin.b) * 0.45),
+            // ~half the axis length of drag ≈ one e-fold of zoom
+            k: Math.max(120, ax._length * 0.45),
             lastApplied: 0,
         };
     }, true);
@@ -2116,17 +2127,17 @@ function initAxisRangeDrag() {
             }
             if (gd) {
                 const z = zoneFor(gd, e);
-                gd.style.cursor = z === 'x' ? 'ew-resize' : z === 'y' ? 'ns-resize' : '';
+                gd.style.cursor = !z ? '' : z[0] === 'x' ? 'ew-resize' : 'ns-resize';
             }
             return;
         }
-        const delta = drag.axis === 'x' ? e.clientX - drag.start : e.clientY - drag.start;
+        const delta = drag.isX ? e.clientX - drag.start : e.clientY - drag.start;
         if (Math.abs(delta - drag.lastApplied) < 2) return;
         drag.lastApplied = delta;
         const f = Math.exp(delta / drag.k);
         const c = (drag.range[0] + drag.range[1]) / 2;
         const half = (drag.range[1] - drag.range[0]) / 2 * f;
-        Plotly.relayout(drag.gd, { [drag.axis + 'axis.range']: [drag.ax.l2r(c - half), drag.ax.l2r(c + half)] });
+        Plotly.relayout(drag.gd, { [drag.key + '.range']: [drag.ax.l2r(c - half), drag.ax.l2r(c + half)] });
     });
     document.addEventListener('mouseup', () => { drag = null; });
 }
