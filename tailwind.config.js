@@ -11,10 +11,10 @@ module.exports = {
   // The page, its inline <script> (the class strings it builds live in the same file),
   // and the unpublished design pages under design/.
   content: ["./docs/**/*.html", "./docs/**/*.js", "./design/**/*.html"],
-  // Preflight OFF on purpose: the existing page has its own inline <style> block that must keep
-  // working while the pass migrates panel by panel. Flip this to `true` and rebuild when the
-  // page has been rebuilt on the token layer (BRIEF.md step 1).
-  corePlugins: { preflight: false },
+  // Preflight ON since BRIEF.md step 1: the page's own inline reset (`* { margin:0; padding:0 }`,
+  // the body font) is gone, so this is the only reset. The panels not yet migrated set their own
+  // spacing and type explicitly, so they are unaffected.
+  corePlugins: { preflight: true },
   theme: {
     extend: {
       colors: {
@@ -42,6 +42,8 @@ module.exports = {
         "bad-wash": "var(--bad-wash)",
         "neutral-wash": "var(--neutral-wash)",
       },
+      // Preflight gives every element a border colour; make a bare `border` a hairline, not gray-200.
+      borderColor: { DEFAULT: "var(--line)" },
       borderRadius: { control: "8px", card: "12px", panel: "14px" },
       boxShadow: { pop: "var(--shadow-pop)" },
       spacing: { 18: "4.5rem" },

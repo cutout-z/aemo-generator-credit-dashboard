@@ -6,253 +6,28 @@
     <title>AEMO Generator Credit Dashboard</title>
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="assets/app.css">
     <style>
+        /* Legacy aliases. The panels not yet migrated (period strip, chart panels, tooltips) still
+           use the pre-token variable names; they now resolve to the design tokens in app.css.
+           Delete each alias when the last rule using it is migrated (BRIEF.md steps 3–4). */
         :root {
-            --bg: #0f1117;
-            --surface: #1a1d27;
-            --surface-hover: #242836;
-            --border: #2d3140;
-            --text: #e1e4eb;
-            --text-dim: #8b8fa3;
-            --accent: #4a9eff;
-            --accent-dim: #2d6bbf;
-            --green: #22c55e;
-            --red: #ef4444;
-            --yellow: #eab308;
-            --orange: #f97316;
+            --border: var(--line);
+            --text-dim: var(--muted);
+            --surface-hover: var(--surface-2);
+            --accent-dim: var(--accent-wash);
+            --green: var(--good);
+            --red: var(--bad);
+            --yellow: var(--warn);
+            --orange: var(--accent);
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-        }
-
-        header {
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-            padding: 16px 24px;
-            display: flex;
-            align-items: center;
-            gap: 24px;
-            flex-wrap: wrap;
-        }
-
-        header h1 {
-            font-size: 18px;
-            font-weight: 600;
-            white-space: nowrap;
-        }
-
-        header h1 span {
-            color: var(--text-dim);
-            font-weight: 400;
-        }
-
-        /* Search */
-        .search-container {
-            position: relative;
-            flex: 1;
-            min-width: 280px;
-            max-width: 500px;
-        }
-
-        .search-input {
-            width: 100%;
-            padding: 10px 16px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text);
-            font-size: 14px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .search-input:focus {
-            border-color: var(--accent);
-        }
-
-        .search-input::placeholder {
-            color: var(--text-dim);
-        }
-
-        .search-dropdown {
-            display: none;
-            position: absolute;
-            top: calc(100% + 4px);
-            left: 0;
-            right: 0;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            max-height: 400px;
-            overflow-y: auto;
-            z-index: 100;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-        }
-
+        /* Show/hide state only — the look of these lives in the markup (token utilities). */
+        .search-dropdown { display: none; }
         .search-dropdown.visible { display: block; }
-
-        .search-item {
-            padding: 10px 16px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            border-bottom: 1px solid var(--border);
-            transition: background 0.15s;
-        }
-
-        .search-item:last-child { border-bottom: none; }
-        .search-item:hover, .search-item.active { background: var(--surface-hover); }
-
-        .search-item .name {
-            font-weight: 500;
-            flex: 1;
-        }
-
-        .search-item .duid {
-            font-family: monospace;
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .badge {
-            font-size: 11px;
-            font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 4px;
-            text-transform: uppercase;
-        }
-
-        .badge-region {
-            background: var(--accent-dim);
-            color: #fff;
-        }
-
-        .badge-fuel {
-            color: #fff;
-        }
-        .badge-fuel[data-fuel="Solar"] { background: #d97706; }
-        .badge-fuel[data-fuel="Wind"] { background: #0891b2; }
-        .badge-fuel[data-fuel="Hydro"] { background: #2563eb; }
-        .badge-fuel[data-fuel="Battery"] { background: #7c3aed; }
-        .badge-fuel[data-fuel="Fossil"] { background: #64748b; }
-        .badge-fuel[data-fuel="Other Renewable"] { background: #16a34a; }
-        .badge-fuel[data-fuel="Other"] { background: #475569; }
-
-        /* Filters */
-        .filters {
-            display: flex;
-            gap: 8px;
-        }
-
-        .filter-select {
-            padding: 8px 12px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text);
-            font-size: 13px;
-            cursor: pointer;
-        }
-
-        /* Stats bar */
-        .stats-bar {
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-            padding: 8px 24px;
-            font-size: 13px;
-            color: var(--text-dim);
-            display: flex;
-            gap: 24px;
-        }
-
-        .stats-bar strong { color: var(--text); }
-
-        /* Main content */
-        .content {
-            padding: 24px;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        /* Welcome state */
-        .welcome {
-            text-align: center;
-            padding: 80px 24px;
-        }
-
-        .welcome h2 {
-            font-size: 24px;
-            margin-bottom: 12px;
-        }
-
-        .welcome p {
-            color: var(--text-dim);
-            font-size: 15px;
-            max-width: 500px;
-            margin: 0 auto 32px;
-        }
-
-        .welcome .hint {
-            font-size: 13px;
-            color: var(--text-dim);
-            margin-top: 16px;
-        }
-
-        /* Identity card */
-        .identity-card {
-            display: none;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px 24px;
-            margin-bottom: 20px;
-        }
-
+        .search-item.active { background: var(--surface-2); }
+        .identity-card { display: none; }
         .identity-card.visible { display: block; }
-
-        .identity-card h2 {
-            font-size: 22px;
-            margin-bottom: 12px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .identity-meta {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 24px;
-        }
-
-        .meta-item {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-
-        .meta-item .label {
-            font-size: 11px;
-            text-transform: uppercase;
-            color: var(--text-dim);
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }
-
-        .meta-item .value {
-            font-size: 15px;
-            font-weight: 500;
-        }
-
-        .meta-item .value.mono {
-            font-family: monospace;
-        }
 
         /* Chart grid — flexbox for resizable widths */
         .chart-grid {
@@ -397,7 +172,7 @@
             display: none;
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
+            background: var(--scrim);
             z-index: 999;
         }
 
@@ -432,7 +207,7 @@
         }
 
         .time-btn:hover { border-color: var(--accent); color: var(--text); }
-        .time-btn.active { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+        .time-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--text); }
 
         /* Chart title tooltips */
         .chart-title-wrap {
@@ -462,12 +237,12 @@
             top: calc(100% + 8px);
             left: 0;
             z-index: 200;
-            background: #242836;
+            background: var(--surface-2);
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 12px 16px;
             width: 340px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            box-shadow: var(--shadow-pop);
             font-size: 13px;
             font-weight: 400;
             line-height: 1.5;
@@ -503,137 +278,112 @@
             display: block;
         }
 
-        /* Download buttons */
-        .download-buttons {
-            display: flex;
-            gap: 8px;
-            margin-left: auto;
-        }
-
-        .download-btn {
-            padding: 6px 14px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text-dim);
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.15s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .download-btn:hover {
-            border-color: var(--accent);
-            color: var(--text);
-        }
-
-        .download-btn svg {
-            width: 14px;
-            height: 14px;
-            fill: currentColor;
-        }
-
-        .load-status {
-            width: 100%;
-            margin-top: 10px;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 13px;
-            background: rgba(239, 68, 68, 0.12);
-            border: 1px solid rgba(239, 68, 68, 0.4);
-            color: #fca5a5;
-        }
-
         /* Responsive */
         @media (max-width: 900px) {
             .chart-grid { grid-template-columns: 1fr; }
-            header { flex-direction: column; align-items: flex-start; }
-            .search-container { max-width: 100%; }
         }
     </style>
 </head>
 <body>
 
-<header>
-    <h1>AEMO Generator Credit <span>Dashboard</span></h1>
-    <div class="search-container">
-        <input type="text" class="search-input" id="searchInput"
-               placeholder="Search by generator name or DUID..."
-               autocomplete="off">
-        <div class="search-dropdown" id="searchDropdown"></div>
-    </div>
-    <div class="filters">
-        <select class="filter-select" id="filterMarket" style="display:none;">
+<!-- Shell: the frame (bg) holds one inset canvas; the app bar sits at its top. -->
+<div class="min-h-screen md:p-2">
+<div class="min-h-[calc(100vh-1rem)] bg-canvas md:rounded-panel md:border md:border-line">
+
+<!-- App bar: brand, search, and the filters that narrow the search. One row at lg+; below that
+     they stack, and the result list opens under the whole block so it never covers a filter.
+     (.search-container spans the filters too: clicking one must not close the results.) -->
+<header class="z-30 border-b border-line bg-canvas lg:sticky lg:top-0 md:rounded-t-panel">
+    <div class="search-container relative flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 md:px-6 lg:h-14 lg:flex-nowrap lg:py-0">
+        <div class="flex shrink-0 items-center gap-2.5">
+            <span class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-bg" aria-hidden="true">GC</span>
+            <h1 class="text-[13px] font-semibold leading-tight text-ink">AEMO Generator Credit<span class="block text-[12px] font-normal text-faint">Dashboard</span></h1>
+        </div>
+        <div class="w-full lg:relative lg:w-auto lg:min-w-[220px] lg:max-w-[480px] lg:flex-1">
+            <span class="relative block">
+                <svg class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input type="text" class="search-input input pl-8" id="searchInput"
+                       placeholder="Search by generator name or DUID"
+                       aria-label="Search generators by name or DUID"
+                       autocomplete="off">
+            </span>
+            <div class="search-dropdown absolute inset-x-4 top-full z-50 mt-1.5 max-h-[400px] overflow-y-auto rounded-xl border border-line bg-surface shadow-pop md:inset-x-6 lg:right-auto lg:left-0 lg:w-[max(100%,640px)]" id="searchDropdown"></div>
+        </div>
+        <select class="filter-select" id="filterMarket" hidden>
             <option value="">All Markets</option>
             <option value="NEM">NEM</option>
         </select>
-        <select class="filter-select" id="filterRegion">
+        <!-- Region is a segmented control driving the hidden <select>, which stays the value
+             getFilteredGenerators() reads and populateFilters() fills. -->
+        <div class="seg max-w-full shrink-0 overflow-x-auto" role="group" aria-label="Filter search by region" id="regionSeg"></div>
+        <select class="filter-select" id="filterRegion" hidden>
             <option value="">All Regions</option>
         </select>
-        <select class="filter-select" id="filterFuel">
-            <option value="">All Fuel Types</option>
-        </select>
+        <span class="relative shrink-0">
+            <select class="filter-select input h-7 w-auto cursor-pointer appearance-none pr-7 text-[12px]" id="filterFuel" aria-label="Filter search by fuel type">
+                <option value="">All fuel types</option>
+            </select>
+            <svg class="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </span>
+        <div class="stats-bar num flex gap-4 whitespace-nowrap text-[12px] text-faint sm:ml-auto lg:hidden min-[1400px]:flex [&_strong]:font-medium [&_strong]:text-ink" id="statsBar">
+            <span>Loading generator data…</span>
+        </div>
     </div>
 </header>
 
-<div class="stats-bar" id="statsBar">
-    <span>Loading generator data...</span>
-</div>
-
-<div class="content">
+<main class="content mx-auto max-w-[1400px] px-4 pb-16 pt-6 md:px-8">
     <!-- Welcome state -->
-    <div class="welcome" id="welcomeState">
-        <h2>Generator Credit Risk Dashboard</h2>
-        <p>Search for any NEM generator by name or DUID to view its credit risk profile: revenue, capacity factor, loss factor trajectory, and price capture.</p>
-        <div class="hint">Tip: Use the URL hash to bookmark generators — e.g. #CLRKCWF1</div>
+    <div class="welcome mx-auto max-w-[560px] px-4 py-20 text-center" id="welcomeState">
+        <h2 class="text-[20px] font-semibold leading-7 text-ink">Generator credit risk</h2>
+        <p class="mt-2 text-[14px] leading-6 text-muted">Search for any NEM generator by name or DUID to view its credit risk profile: revenue, capacity factor, loss factor trajectory, and price capture.</p>
+        <p class="mt-4 text-[12px] text-faint">Bookmark a generator with the URL hash — e.g. <span class="kbd">#CLRKCWF1</span></p>
     </div>
 
     <!-- Identity card -->
-    <div class="identity-card" id="identityCard">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-            <h2 id="genName" style="flex:1;min-width:200px;"></h2>
-            <div class="download-buttons" id="downloadButtons" style="display:none;">
-                <button class="download-btn" onclick="downloadCSV()" title="Download monthly data as CSV">
-                    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 3.5L18.5 8H14V3.5zM6 20V4h7v5h5v11H6z"/><path d="M8 15h8v1.5H8z"/><path d="M8 12h8v1.5H8z"/></svg>
+    <section class="identity-card card mb-4" id="identityCard" aria-labelledby="genName">
+        <div class="card-head flex-wrap">
+            <h2 id="genName" class="flex min-w-[200px] flex-1 flex-wrap items-center gap-2 text-[20px] font-semibold leading-7 text-ink"></h2>
+            <div class="download-buttons flex gap-2" id="downloadButtons" style="display:none;">
+                <button type="button" class="btn h-7 px-2.5 text-[12px]" onclick="downloadCSV()" title="Download monthly data as CSV">
+                    <svg class="size-3.5 fill-current text-muted" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 3.5L18.5 8H14V3.5zM6 20V4h7v5h5v11H6z"/><path d="M8 15h8v1.5H8z"/><path d="M8 12h8v1.5H8z"/></svg>
                     CSV
                 </button>
-                <button class="download-btn" onclick="downloadXLSX()" title="Download data as Excel workbook">
-                    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 3.5L18.5 8H14V3.5zM6 20V4h7v5h5v11H6z"/><path d="M8 15h8v1.5H8z"/><path d="M8 12h8v1.5H8z"/></svg>
+                <button type="button" class="btn h-7 px-2.5 text-[12px]" onclick="downloadXLSX()" title="Download data as Excel workbook">
+                    <svg class="size-3.5 fill-current text-muted" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM14 3.5L18.5 8H14V3.5zM6 20V4h7v5h5v11H6z"/><path d="M8 15h8v1.5H8z"/><path d="M8 12h8v1.5H8z"/></svg>
                     XLSX
                 </button>
             </div>
         </div>
-        <div class="identity-meta">
-            <div class="meta-item">
-                <span class="label">DUID</span>
-                <span class="value mono" id="genDUID"></span>
-            </div>
-            <div class="meta-item">
-                <span class="label">Region</span>
-                <span class="value" id="genRegion"></span>
-            </div>
-            <div class="meta-item">
-                <span class="label">Fuel Type</span>
-                <span class="value" id="genFuel"></span>
-            </div>
-            <div class="meta-item">
-                <span class="label">Technology</span>
-                <span class="value" id="genTech"></span>
-            </div>
-            <div class="meta-item">
-                <span class="label">Nameplate Capacity</span>
-                <span class="value" id="genCapacity"></span>
-            </div>
-            <div class="meta-item">
-                <span class="label">Connection Point</span>
-                <span class="value mono" id="genConnection"></span>
-            </div>
+        <div class="card-body">
+            <dl class="identity-meta grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+                <div class="meta-item min-w-0">
+                    <dt class="text-[12px] font-medium text-faint">DUID</dt>
+                    <dd class="mt-0.5 truncate font-mono text-[13px] text-ink" id="genDUID"></dd>
+                </div>
+                <div class="meta-item min-w-0">
+                    <dt class="text-[12px] font-medium text-faint">Region</dt>
+                    <dd class="mt-0.5 truncate text-[14px] text-ink" id="genRegion"></dd>
+                </div>
+                <div class="meta-item min-w-0">
+                    <dt class="text-[12px] font-medium text-faint">Fuel type</dt>
+                    <dd class="mt-0.5 truncate text-[14px] text-ink" id="genFuel"></dd>
+                </div>
+                <div class="meta-item min-w-0">
+                    <dt class="text-[12px] font-medium text-faint">Technology</dt>
+                    <dd class="mt-0.5 truncate text-[14px] text-ink" id="genTech"></dd>
+                </div>
+                <div class="meta-item min-w-0">
+                    <dt class="text-[12px] font-medium text-faint">Nameplate capacity</dt>
+                    <dd class="num mt-0.5 truncate text-[14px] text-ink" id="genCapacity"></dd>
+                </div>
+                <div class="meta-item min-w-0">
+                    <dt class="text-[12px] font-medium text-faint">Connection point</dt>
+                    <dd class="mt-0.5 truncate font-mono text-[13px] text-ink" id="genConnection"></dd>
+                </div>
+            </dl>
+            <div id="loadStatus" class="load-status mt-4 rounded-lg border border-line-soft bg-surface-2 px-3 py-2 text-[13px] text-muted data-[state=error]:border-transparent data-[state=error]:bg-bad-wash data-[state=error]:text-bad" role="status" style="display:none;"></div>
         </div>
-        <div id="loadStatus" class="load-status" style="display:none;"></div>
-    </div>
+    </section>
 
     <!-- Time period selector -->
     <div class="time-controls" id="timeControls">
@@ -800,6 +550,9 @@
             <div id="chartConstraintsHeatmap" style="margin-top: 8px;"></div>
         </div>
     </div>
+</main>
+
+</div>
 </div>
 
 <div class="fullscreen-overlay" id="fullscreenOverlay"></div>
@@ -815,8 +568,9 @@ fetch('data/market_daily.json').then(r => r.ok ? r.json() : null).then(d => {
 }).catch(() => {});
 
 const PLOTLY_LAYOUT_BASE = {
-    paper_bgcolor: '#1a1d27',
-    plot_bgcolor: '#1a1d27',
+    // Transparent: the card surface (a design token) shows through. Chart tokens proper: BRIEF step 4.
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: '#e1e4eb', size: 12 },
     margin: { t: 10, r: 20, b: 60, l: 60 },
     xaxis: { gridcolor: '#2d3140', zerolinecolor: '#2d3140', tickangle: -45, tickfont: { size: 11 } },
@@ -841,10 +595,11 @@ async function init() {
         generators = await resp.json();
         updateStats();
         populateFilters();
+        renderRegionSeg();
         handleHash();
     } catch (e) {
         document.getElementById('statsBar').innerHTML =
-            '<span style="color:var(--red)">Failed to load generator index. Run the pipeline first.</span>';
+            '<span class="text-bad">Failed to load generator index. Run the pipeline first.</span>';
     }
 }
 
@@ -878,6 +633,37 @@ function populateFilters() {
     });
 }
 
+// Region filter as a segmented control. The hidden <select id="filterRegion"> stays the source of
+// truth (getFilteredGenerators reads it, populateFilters fills it); the segment buttons drive it.
+function renderRegionSeg() {
+    const select = document.getElementById('filterRegion');
+    const seg = document.getElementById('regionSeg');
+    seg.innerHTML = '';
+    [...select.options].forEach((opt, i) => {
+        if (i > 0 && !opt.value) return; // a blank region in the index is not a choice
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'seg-item';
+        b.textContent = i === 0 ? 'All' : opt.textContent;
+        b.dataset.value = opt.value;
+        b.addEventListener('click', () => {
+            select.value = opt.value;
+            select.dispatchEvent(new Event('change'));
+        });
+        seg.appendChild(b);
+    });
+    syncRegionSeg();
+}
+
+function syncRegionSeg() {
+    const v = document.getElementById('filterRegion').value;
+    document.querySelectorAll('#regionSeg .seg-item').forEach(b => {
+        const on = b.dataset.value === v;
+        b.classList.toggle('seg-item-active', on);
+        b.setAttribute('aria-pressed', String(on));
+    });
+}
+
 // ─── Search ────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('searchInput');
 const searchDropdown = document.getElementById('searchDropdown');
@@ -903,7 +689,7 @@ function renderDropdown(results) {
     activeIndex = -1;
 
     if (results.length === 0) {
-        searchDropdown.innerHTML = '<div class="search-item"><span class="name" style="color:var(--text-dim)">No generators found</span></div>';
+        searchDropdown.innerHTML = '<div class="search-item px-3 py-2.5 text-[13px] text-muted">No generators found</div>';
         searchDropdown.classList.add('visible');
         return;
     }
@@ -912,16 +698,16 @@ function renderDropdown(results) {
     const shown = results.slice(0, 50);
     shown.forEach((g, i) => {
         const item = document.createElement('div');
-        item.className = 'search-item';
+        item.className = 'search-item flex cursor-pointer items-center gap-3 border-b border-line-soft px-3 py-2 text-[13px] last:border-b-0 hover:bg-surface-2';
         item.dataset.index = i;
         const isStation = g.type === 'station';
         item.innerHTML = `
-            ${isStation ? '<span class="badge" style="background:#0d9488;color:#fff;font-size:10px">STATION</span>' : ''}
-            <span class="name">${highlightMatch(g.station_name, searchInput.value)}</span>
-            <span class="duid">${isStation ? g.duid_count + ' DUIDs' : g.duid}</span>
-            <span class="badge badge-region">${g.region}</span>
-            <span class="badge badge-fuel" data-fuel="${g.fuel_category}">${g.fuel_category}</span>
-            ${g.capacity_mw ? `<span style="font-size:12px;color:var(--text-dim)">${g.capacity_mw} MW</span>` : ''}
+            <span class="name min-w-0 flex-1 truncate font-medium text-ink">${highlightMatch(g.station_name, searchInput.value)}</span>
+            ${isStation ? '<span class="badge">Station</span>' : ''}
+            <span class="duid w-[84px] shrink-0 truncate font-mono text-[12px] text-faint">${isStation ? g.duid_count + ' DUIDs' : g.duid}</span>
+            <span class="flex w-12 shrink-0">${g.region ? `<span class="badge font-mono">${g.region}</span>` : ''}</span>
+            <span class="hidden w-[120px] shrink-0 sm:flex"><span class="badge">${g.fuel_category}</span></span>
+            <span class="num hidden w-16 shrink-0 text-right text-[12px] text-muted sm:inline">${g.capacity_mw ? `${g.capacity_mw} MW` : ''}</span>
         `;
         item.addEventListener('click', () => selectGenerator(g.duid));
         searchDropdown.appendChild(item);
@@ -929,8 +715,8 @@ function renderDropdown(results) {
 
     if (results.length > 50) {
         const more = document.createElement('div');
-        more.className = 'search-item';
-        more.innerHTML = `<span class="name" style="color:var(--text-dim)">${results.length - 50} more results...</span>`;
+        more.className = 'search-item px-3 py-2.5 text-[12px] text-faint';
+        more.textContent = `${results.length - 50} more results — refine the search or the filters`;
         searchDropdown.appendChild(more);
     }
 
@@ -940,7 +726,7 @@ function renderDropdown(results) {
 function highlightMatch(text, query) {
     if (!query.trim()) return text;
     const re = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-    return text.replace(re, '<strong style="color:var(--accent)">$1</strong>');
+    return text.replace(re, '<strong class="font-semibold text-accent">$1</strong>');
 }
 
 searchInput.addEventListener('input', () => {
@@ -990,6 +776,7 @@ document.addEventListener('click', (e) => {
 // Filter change triggers search refresh
 ['filterMarket', 'filterRegion', 'filterFuel'].forEach(id => {
     document.getElementById(id).addEventListener('change', () => {
+        if (id === 'filterRegion') syncRegionSeg();
         const results = getFilteredGenerators(searchInput.value);
         renderDropdown(results);
     });
@@ -1060,9 +847,9 @@ async function selectGenerator(duid) {
 
     const isStation = gen.type === 'station';
     document.getElementById('genName').innerHTML = `
-        ${gen.station_name}
-        <span class="badge badge-fuel" data-fuel="${gen.fuel_category}">${gen.fuel_category}</span>
-        ${isStation ? '<span class="badge" style="background:#0d9488;color:#fff">STATION</span>' : ''}
+        <span class="min-w-0">${gen.station_name}</span>
+        <span class="badge">${gen.fuel_category}</span>
+        ${isStation ? '<span class="badge">Station</span>' : ''}
     `;
     document.getElementById('genDUID').textContent = isStation ? `${gen.duid_count} DUIDs` : gen.duid;
     document.getElementById('genRegion').textContent = gen.region;
@@ -1081,6 +868,7 @@ async function selectGenerator(duid) {
     const fileKey = gen.file || duid;
     try {
         statusEl.textContent = 'Loading data…';
+        statusEl.dataset.state = 'loading';
         statusEl.style.display = 'block';
         const resp = await fetch(`data/generators/${fileKey}.json`, { signal: selectionAbort.signal });
         if (!resp.ok) {
@@ -1099,6 +887,7 @@ async function selectGenerator(duid) {
         // keep a previous generator's charts or show empty placeholders.
         purgeChartsAndState();
         statusEl.textContent = `Could not load data for ${duid}: ${e.message}. The dataset may not exist yet for this selection.`;
+        statusEl.dataset.state = 'error';
         statusEl.style.display = 'block';
         console.error(`Error loading ${duid}:`, e);
     }
