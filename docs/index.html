@@ -476,8 +476,9 @@
                     </div>
                 </div>
                 <div id="constraintSummaryBox" class="note-box mb-3 rounded-lg border border-line-soft bg-surface-2 px-3.5 py-2.5 text-[13px] leading-5 text-muted [&_b]:font-medium [&_b]:text-ink" style="display:none;"></div>
-                <div id="chartConstraintsBar"><div class="placeholder">No constraint data</div></div>
-                <div id="chartConstraintsHeatmap" style="margin-top: 8px;"></div>
+                <div id="chartConstraintsBar"></div>
+                <div id="constraintsHeatmapHead" class="mb-1 mt-6 text-[13px] font-medium text-ink" hidden>Hours bound by month</div>
+                <div id="chartConstraintsHeatmap"></div>
             </div>
             </div>
         </section>
@@ -783,10 +784,29 @@ function purgeChartsAndState() {
     setPeriodLabel('chartGeneration', []);
     setPeriodLabel('chartPriceDistribution', []);
     renderKPIs(null);
+    // Constraints are outside CHART_IDS (table + heatmap): clear them too.
+    document.getElementById('chartConstraintsBar').innerHTML = '';
+    Plotly.purge(document.getElementById('chartConstraintsHeatmap'));
     // A previous unit's "no data" message must not show while the next unit loads.
     document.querySelectorAll('.chart-panel .placeholder').forEach(ph => { ph.innerHTML = ''; });
     currentData = null;
     syncPeriodControl(null);
+}
+
+// Text from the data goes into innerHTML only through this.
+function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+// A labelled stat grid for a note box: numbers get a label each instead of a run-on sentence.
+function statGridHTML(title, stats, note) {
+    return '<div class="mb-2 text-[13px] font-medium text-ink">' + title + '</div>' +
+        '<dl class="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3 lg:grid-cols-6">' +
+        stats.map(([label, value]) =>
+            '<div class="min-w-0"><dt class="text-[12px] text-faint">' + label + '</dt>' +
+            '<dd class="num truncate text-[14px] font-medium text-ink">' + value + '</dd></div>').join('') +
+        '</dl>' +
+        (note ? '<p class="mt-2 text-[12px] leading-4 text-faint">' + note + '</p>' : '');
 }
 
 // A panel with nothing to draw says why, in place (the `state` pattern). Plotly hides the
@@ -1437,13 +1457,17 @@ function renderCharts(data) {
         if (data.fcas_participation) {
             const fp = data.fcas_participation;
             fpBox.style.display = 'block';
-            const pct = fp.participation_pct != null ? (100 * fp.participation_pct).toFixed(2) + '% of intervals' : 'n/a';
-            const avg = fp.avg_max_avail_mw != null ? fp.avg_max_avail_mw + ' MW' : 'n/a';
-            const peak = fp.max_max_avail_mw != null ? fp.max_max_avail_mw + ' MW' : 'n/a';
-            fpBox.innerHTML = '<b>FCAS participation — this unit</b> (' + fp.month + '): ' +
-                fp.services_offered + ' services offered · ' + pct +
-                ' · avg ' + avg + ' offered (peak ' + peak + ')' +
-                '<br><span class="text-faint">Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are REGIONAL market averages shared by every generator in ' + (data.region || 'the region') + '.</span>';
+            const na = '<span class="text-faint">n/a</span>';
+            const mw = v => v != null ? Number(v).toLocaleString('en-AU') + ' MW' : na;
+            fpBox.innerHTML = statGridHTML(
+                'FCAS participation — this unit · ' + esc(fmtMonthLong(fp.month || '')),
+                [
+                    ['Services offered', fp.services_offered != null ? esc(fp.services_offered) + ' of 8' : na],
+                    ['Intervals with an offer', fp.participation_pct != null ? (100 * fp.participation_pct).toFixed(1) + '%' : na],
+                    ['Average offered', mw(fp.avg_max_avail_mw)],
+                    ['Peak offered', mw(fp.max_max_avail_mw)],
+                ],
+                'Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are regional market averages shared by every generator in ' + esc(data.region || 'the region') + '.');
         } else {
             fpBox.style.display = 'none';
         }
@@ -1457,17 +1481,22 @@ function renderCharts(data) {
     if (ofBox) {
         if (data.offers) {
             const of = data.offers;
-            const mw = (v) => v != null ? v + ' MW' : 'n/a';
-            const pc = (v) => v != null ? Math.round(100 * v) + '%' : 'n/a';
-            const dol = (v) => v != null ? (v < 0 ? '-$' + Math.abs(v).toFixed(0) : '$' + v.toFixed(0)) : 'n/a';
-            const asof = of.price_asof_month ? ' (prices as of ' + of.price_asof_month + ')' : '';
+            const na = '<span class="text-faint">n/a</span>';
+            const mw = v => v != null ? Number(v).toLocaleString('en-AU') + ' MW' : na;
+            const pc = v => v != null ? Math.round(100 * v) + '%' : na;
+            const dol = v => v != null ? (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('en-AU', { maximumFractionDigits: 0 }) : na;
             ofBox.style.display = 'block';
-            ofBox.innerHTML = '<b>' + of.month + '</b>: ' +
-                'avg ' + mw(of.avg_offered_mw) + ' offered (p95 ' + mw(of.offered_mw_p95) + ')' +
-                ' · band-1 avg ' + dol(of.price_band_min_avg) +
-                ' · band-10 avg ' + dol(of.price_band_max_avg) +
-                ' · neg-band days ' + pc(of.negative_band_day_share) + asof +
-                '<br><span class="text-faint">Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.</span>';
+            ofBox.innerHTML = statGridHTML(
+                'Energy offers · ' + esc(fmtMonthLong(of.month || '')),
+                [
+                    ['Average offered', mw(of.avg_offered_mw)],
+                    ['95th percentile offered', mw(of.offered_mw_p95)],
+                    ['Band 1 average price', dol(of.price_band_min_avg) + '<span class="text-[12px] font-normal text-faint">/MWh</span>'],
+                    ['Band 10 average price', dol(of.price_band_max_avg) + '<span class="text-[12px] font-normal text-faint">/MWh</span>'],
+                    ['Days with a negative band', pc(of.negative_band_day_share)],
+                ],
+                'Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.' +
+                    (of.price_asof_month ? ' Prices as of ' + esc(fmtMonthLong(of.price_asof_month)) + '.' : ''));
         } else {
             ofBox.style.display = 'none';
         }
@@ -1486,8 +1515,8 @@ function renderCharts(data) {
         const px = [stack[0][0]], py = [0];
         for (const [price, cum] of stack) { px.push(price); py.push(cum); }
         Plotly.newPlot('offerCurveChart', [{
-            x: px, y: py, type: 'scatter', mode: 'lines', name: 'Offered MW',
-            line: { shape: 'hv', width: 2, color: C('info') },
+            x: px, y: py, type: 'scatter', mode: 'lines+markers', name: 'Offered MW',
+            line: { shape: 'hv', width: 2, color: C('info') }, marker: { color: C('info'), size: 5 },
             hovertemplate: '%{y:,.0f} MW offered at or below $%{x:,.0f}/MWh<extra></extra>'
         }], chartLayout({
             height: H.md,
@@ -1703,36 +1732,42 @@ function renderCharts(data) {
 
         // Horizontal bar chart — top constraints by hours bound
         const constraintMonths = data.constraints.heatmap && data.constraints.heatmap.months;
-        // Colour = the constraint's class (the same classification the hover states).
-        const CLASS_COLOR = { 'Own unit': C('accent'), 'Commissioning': C('warn'), 'Non-conformance': C('bad'), 'System': C('neutral') };
+        // Ranked table (was a bar chart): the descriptions are prose the bar chart could only put in
+        // a hover. Hours carry an inline bar coloured by class; the class is also a word (badge).
+        const CLASS_TOKEN = { 'Own unit': 'accent', 'Commissioning': 'warn', 'Non-conformance': 'bad', 'System': 'neutral' };
         const classify = c => referencesOwnUnit(c.id) ? 'Own unit'
             : c.id.startsWith('C_') ? 'Commissioning'
             : c.id.startsWith('NC') ? 'Non-conformance'
             : 'System';
-        const cbTraces = Object.keys(CLASS_COLOR).map(cls => {
-            const rows = tc.filter(c => classify(c) === cls);
-            return {
-                y: rows.map(constraintLabel),
-                x: rows.map(c => c.total_hours),
-                customdata: rows.map(c => (c.description || '').replace(/^[A-Za-z]+=\s*/, '')),
-                type: 'bar', orientation: 'h', name: cls,
-                marker: { color: CLASS_COLOR[cls] },
-                hovertemplate: `<b>%{y}</b><br>${cls} constraint<br>%{customdata}<br>%{x:.1f} hours bound<extra></extra>`,
-                textposition: 'none',
-            };
-        }).filter(t => t.y.length);
-        Plotly.newPlot('chartConstraintsBar', cbTraces, chartLayout({
-            height: Math.max(H.sm, tc.length * 26 + 72),
-            hovermode: 'closest',
-            barmode: 'overlay',
-            yaxis: { type: 'category', categoryorder: 'array', categoryarray: tc.map(constraintLabel).reverse(), tickfont: { size: 11, color: C('muted') } },
-            xaxis: { title: { text: 'Hours bound' } },
-            showlegend: cbTraces.length > 1,
-        }), PLOTLY_CONFIG);
+        const maxHours = Math.max(...tc.map(c => c.total_hours || 0), 1);
+        const rows = tc.map(c => {
+            const cls = classify(c);
+            const token = CLASS_TOKEN[cls];
+            const desc = (c.description || '').replace(/^[A-Za-z]+=\s*/, '');
+            const pct = Math.max(2, Math.round(100 * (c.total_hours || 0) / maxHours));
+            return '<tr data-row>' +
+                '<td class="td pl-5 font-mono text-[12px] text-ink sm:whitespace-nowrap">' + esc(constraintLabel(c)) + '</td>' +
+                '<td class="td"><span class="badge"><span class="swatch" style="' + ChartTokens.swatchStyle(token) + '"></span>' + cls + '</span></td>' +
+                '<td class="td-num max-sm:text-left"><span class="flex items-center justify-end gap-2.5 max-sm:justify-start">' +
+                    '<span class="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">' +
+                        '<span class="block h-full rounded-full" style="width:' + pct + '%;background:' + C(token) + '"></span></span>' +
+                    '<span class="w-14 text-right max-sm:text-left">' + (c.total_hours || 0).toFixed(1) + '<span class="text-faint"> h</span></span></span></td>' +
+                '<td class="td pr-5 text-[13px] leading-5 text-muted">' + (desc ? esc(desc) : '<span class="text-faint">No description published</span>') + '</td>' +
+                '</tr>';
+        }).join('');
+        document.getElementById('chartConstraintsBar').innerHTML =
+            '<div class="-mx-5 overflow-x-auto">' +
+            '<table class="dt-stack w-full min-w-[720px] border-collapse">' +
+            '<colgroup><col class="w-[200px]"><col class="w-[150px]"><col class="w-[160px]"><col></colgroup>' +
+            '<thead><tr><th class="th pl-5" scope="col">Constraint</th><th class="th" scope="col">Class</th>' +
+            '<th class="th text-right" scope="col">Hours bound</th><th class="th pr-5" scope="col">Description</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody></table></div>';
         setPeriodLabel('chartConstraintsBar', constraintMonths);
 
         // Monthly heatmap
         const hm = data.constraints.heatmap;
+        const hmHead = document.getElementById('constraintsHeatmapHead');
+        if (hmHead) hmHead.hidden = !(hm && hm.months && hm.months.length);
         if (hm && hm.months && hm.months.length > 0) {
             const constraintIds = Object.keys(hm.constraints);
             Plotly.newPlot('chartConstraintsHeatmap', [{

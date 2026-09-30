@@ -220,7 +220,7 @@
   .dt-stack, .dt-stack tbody, .dt-stack tr, .dt-stack td, .dt-stack th[scope=rowgroup] { display: block; width: 100%; }
   .dt-stack th[scope=rowgroup] { position: static; }
   .dt-stack tr[data-row] { padding: 12px 20px; border-bottom: 1px solid var(--line-soft); }
-  .dt-stack tr[data-row] td { border: 0; padding: 0; }
+  .dt-stack tr[data-row] td { border: 0; padding: 0; height: auto; }   /* .td's fixed row height would overlap stacked cells */
   .dt-stack tr[data-row] td + td { margin-top: 2px; }
   .dt-stack tr[data-row] td:last-child { margin-top: 6px; }
 }
