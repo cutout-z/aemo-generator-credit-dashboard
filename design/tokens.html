@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-design="skeleton">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design tokens — proof page</title>
+<!-- Unpublished: this file lives outside docs/ on purpose, so GitHub Pages never serves it. -->
+<link rel="stylesheet" href="../docs/assets/app.css">
+<style>
+  /* Page chrome for the proof page only — not part of the design language. */
+  body { max-width: 1100px; margin: 0 auto; padding: 28px 20px 80px; }
+  section { margin: 34px 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .swatchbox { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .swatchbox i { display: block; height: 44px; }
+  .swatchbox small { display: block; padding: 6px 8px; color: var(--muted); font-family: var(--mono, monospace); font-size: 11px; }
+  .seqgrid { display: grid; grid-template-columns: repeat(8, 1fr); }
+  .seqgrid div { height: 46px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="block-head">
+  <span class="block-num">00</span>
+  <span class="block-title">Design tokens — proof page</span>
+  <span class="block-desc">the palette, the type scale and every component class, rendered from the compiled asset</span>
+</div>
+<p class="card-sub">If this page looks unstyled, run <code>./scripts/build-css.sh</code> — the compiled CSS is committed and Tailwind only emits component classes it finds in the sources.</p>
+
+<section>
+  <div class="row" style="justify-content:space-between">
+    <h2 class="card-title">Surfaces, text, status</h2>
+    <button class="btn btn-ghost" onclick="flip()">Flip theme</button>
+  </div>
+  <div class="swatches" id="palette"></div>
+  <p class="foot">Text floor: <code>--faint</code> is the lightest colour allowed for 12px text (4.9:1 on a card). Colour never carries meaning alone — status badges pair a dot with a word.</p>
+</section>
+
+<section>
+  <h2 class="card-title">Type scale</h2>
+  <div class="card"><div class="card-body">
+    <div class="kpi-value">123.4</div><div class="kpi-label">KPI value — 26px semibold, tabular figures</div>
+    <hr style="border:0;border-top:1px solid var(--line-soft);margin:18px 0">
+    <div class="card-title">Card title — 14px semibold</div>
+    <div class="card-sub">Card subtitle — 13px muted, the one-line explanation</div>
+    <div class="eyebrow" style="margin-top:12px">EYEBROW — 12px faint, for provenance</div>
+    <div class="mono" style="margin-top:8px">DUID ADPBA1 · 7.8 MW</div>
+  </div></div>
+</section>
+
+<section>
+  <h2 class="card-title">Controls</h2>
+  <div class="grid3">
+    <div class="card"><div class="card-body">
+      <div class="field-label">Search</div>
+      <input class="input" placeholder="Search any NEM generator…">
+      <div class="row" style="margin-top:12px">
+        <span class="seg"><span class="seg-item seg-item-active">3M</span><span class="seg-item">6M</span><span class="seg-item">12M</span><span class="seg-item">3Y</span><span class="seg-item">5Y</span></span>
+      </div>
+    </div></div>
+    <div class="card"><div class="card-body">
+      <div class="field-label">Status</div>
+      <div class="row">
+        <span class="pill pill-good"><span class="badge-dot"></span>healthy</span>
+        <span class="pill pill-warn"><span class="badge-dot"></span>stale 3d</span>
+        <span class="pill pill-bad"><span class="badge-dot"></span>failed</span>
+        <span class="pill pill-neutral">unknown</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <span class="badge">BATTERY</span><span class="badge">SA1</span><span class="badge">Storage</span>
+      </div>
+    </div></div>
+    <div class="card"><div class="card-body">
+      <div class="field-label">Actions</div>
+      <div class="row">
+        <button class="btn btn-primary">Primary</button>
+        <button class="btn">CSV</button>
+        <button class="btn">XLSX</button>
+        <button class="btn btn-ghost">Ghost</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label class="chip"><input type="checkbox" checked>Solar<span class="chip-count">231</span></label>
+        <label class="chip"><input type="checkbox">Wind<span class="chip-count">98</span></label>
+        <label class="switch"><input type="checkbox" checked></label>
+      </div>
+    </div></div>
+  </div>
+</section>
+
+<section>
+  <h2 class="card-title">The card unit and a table</h2>
+  <div class="card">
+    <div class="card-head">
+      <div><div class="card-title">Generation</div><div class="card-sub">Monthly, with a 12-month rolling average</div></div>
+      <span class="pill pill-neutral">MWh</span>
+    </div>
+    <div class="card-body"><div id="demo-chart"></div></div>
+    <div class="card-foot"><span>Source: AEMO MMS · DISPATCH_UNIT_SCADA</span><span>·</span><span>2-week publication lag</span></div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr><th class="th">Station</th><th class="th">Region</th><th class="th" style="text-align:right">Capacity (MW)</th><th class="th" style="text-align:right">CF %</th></tr></thead>
+      <tbody>
+        <tr><td class="td">Adelaide Desalination Plant</td><td class="td">SA1</td><td class="td td-num">7.8</td><td class="td td-num">5.6</td></tr>
+        <tr><td class="td">Bungala One Solar Farm</td><td class="td">SA1</td><td class="td td-num">110.0</td><td class="td td-num">24.1</td></tr>
+        <tr><td class="td">Hornsdale Wind Farm 3</td><td class="td">SA1</td><td class="td td-num">112.0</td><td class="td td-num">38.9</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="foot">Numbers right-aligned in tabular figures; headers sticky; hairline rows. A long-text table gets <code>dt-stack</code> to become blocks on phones.</p>
+</section>
+
+<section>
+  <h2 class="card-title">States — absence, stated plainly</h2>
+  <div class="card"><div class="card-body">
+    <div class="state"><span class="state-icon">○</span><div><div class="state-title">No generator selected</div><div class="state-body">Search above for any of the 630 registered NEM units by station name or DUID.</div></div></div>
+    <div class="state"><span class="state-icon">○</span><div><div class="state-title">FCAS participation unavailable for this unit</div><div class="state-body">BIDPEROFFER offers show no enabled services in the selected window — that is a real answer, not a gap in the data.</div></div></div>
+    <div class="row"><span class="skeleton" style="height:12px;width:220px"></span><span class="skeleton" style="height:12px;width:140px"></span></div>
+  </div></div>
+</section>
+
+<section>
+  <h2 class="card-title">Sequential ramp (heatmaps)</h2>
+  <div class="seqgrid">
+    <div class="seq-0">0</div><div class="seq-1">1</div><div class="seq-2">2</div><div class="seq-3">3</div>
+    <div class="seq-4">4</div><div class="seq-5">5</div><div class="seq-6">6</div><div class="seq-7">7</div>
+  </div>
+  <p class="foot">In Plotly, use <code>ChartTokens.seqScale()</code> so a heatmap matches these steps.</p>
+</section>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script src="../assets/js/chart-tokens.js"></script>
+<script>
+// Palette proof: swatch + token name + the light-theme value, read from the CSS itself.
+var TOKENS = ["bg","canvas","surface","surface-2","surface-3","line","line-strong","text","muted","faint",
+              "accent","good","warn","bad","info","neutral","good-wash","warn-wash","bad-wash","accent-wash"];
+var PALETTE_KEYS = {bg:"bg",canvas:"canvas",surface:"surface","surface-2":"surface2","surface-3":"surface3",
+  line:"line","line-strong":"lineStrong",text:"ink",muted:"muted",faint:"faint",accent:"accent",good:"good",
+  warn:"warn",bad:"bad",info:"info",neutral:"neutral","good-wash":"goodWash","warn-wash":"warnWash",
+  "bad-wash":"badWash","accent-wash":"accentWash"};
+document.getElementById("palette").innerHTML = TOKENS.map(function (t) {
+  var key = PALETTE_KEYS[t];
+  var dark = ChartTokens.color(key), light = ChartTokens.lightColor(key);
+  return '<div class="swatchbox"><i style="background:' + dark + '"></i>' +
+         '<small>--' + t + '<br>' + dark + ' / ' + light + '</small></div>';
+}).join("");
+
+// One chart, styled only through the shared layout — no hand-set colours.
+var months = ["Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug"];
+Plotly.newPlot("demo-chart", [
+  { x: months, y: [210,265,240,180,150,190,235,260,205,170,225,290], type: "bar",
+    name: "Monthly", marker: { color: ChartTokens.color("info") } },
+  { x: months, y: [230,235,232,225,210,205,210,215,212,205,208,215], type: "scatter", mode: "lines",
+    name: "12-month average", line: { color: ChartTokens.color("accent"), width: 2, dash: "dot" } }
+], ChartTokens.layout({ height: ChartTokens.HEIGHTS.md }), ChartTokens.config);
+
+function flip() {
+  var root = document.documentElement;
+  root.setAttribute("data-theme", root.getAttribute("data-theme") === "light" ? "dark" : "light");
+  ChartTokens.restyle();
+}
+</script>
+</body>
+</html>
