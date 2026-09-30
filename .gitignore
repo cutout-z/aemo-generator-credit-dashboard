@@ -10,6 +10,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# the Tailwind standalone CLI — scripts/build-css.sh fetches it if absent
+tools/
 .venv/
 venv/
 
