@@ -24,18 +24,23 @@ from src.aer_qa import (
     OUTCOME_AWAITING_EDITION,
     OUTCOME_BELOW_FLOOR,
     OUTCOME_NOT_COMPARABLE,
+    OUTCOME_PARTIAL_COVERAGE,
     OUTCOME_PASS,
     OUTCOME_WARN,
+    SOURCE_DAILY,
+    SOURCE_LEGACY,
     AerQaError,
     build_checks,
     compare_band_contains,
     compare_share_ratio,
+    coverage_shortfall,
     expected_reference_quarter,
     fetch_edition,
     hrefs_in_html,
     is_bot_wall,
     latest_quarter,
     load_cache,
+    load_our_quarterly,
     match_href,
     parse_aer_csv,
     quarter_days,
@@ -64,6 +69,19 @@ NEG_CSV = (
     "\"Victoria (Number of trading intervals)\","
     "\"South Australia (Number of trading intervals)\","
     "\"Tasmania (Number of trading intervals)\"\r\n"
+    "2026 Q1,389,241,1080,1258,5\r\n"
+    "2026 Q2,350,118,913,847,8\r\n"
+)
+
+# Real AER 2026-08 edition row for 2025 Q4, extended with the later quarters so the
+# edition still stamps as covering 2026Q2 (the first live run's warn was on TAS1).
+NEG_CSV_2025Q4 = (
+    "Quarter,\"Queensland (Number of trading intervals)\","
+    "\"New South Wales (Number of trading intervals)\","
+    "\"Victoria (Number of trading intervals)\","
+    "\"South Australia (Number of trading intervals)\","
+    "\"Tasmania (Number of trading intervals)\"\r\n"
+    "2025 Q4,1180,1001,1799,2048,355\r\n"
     "2026 Q1,389,241,1080,1258,5\r\n"
     "2026 Q2,350,118,913,847,8\r\n"
 )
@@ -482,3 +500,118 @@ def test_reference_payload_is_bounded(tmp_path):
         entry["counts"][outcome]
         for entry in checks.values() for outcome in entry["counts"]
     )
+
+
+# ─── Like-for-like source and window (2026-09-19 TAS1 2025Q4 fix) ───────────
+#
+# The first live run warned on TAS1 2025Q4 (ours 3.00% vs the AER's 8.04%, ratio
+# 0.37). Cause: the lane's only "our side" source was market_quarterly.json, whose
+# writer was dropped when the rollup moved into market_daily.json — the file on
+# disk is a frozen snapshot covering 2025-11-01 → 2026-08-01, so its "2025Q4" row
+# spans 61 of 92 days and misses October, Tasmania's heaviest negative-price month
+# of the quarter. Over the full quarter our share is 6.39% → ratio 0.79, in band.
+
+def _docs_with_both_artifacts(tmp_path: Path) -> Path:
+    """docs/data holding the live rollup *and* the stale legacy snapshot."""
+    docs = tmp_path / "docs" / "data"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "market_daily.json").write_text(json.dumps({"quarterly": [
+        {"region": "TAS1", "quarter": "2025Q4", "neg_price_share": 0.0639,
+         "avg_vwap_low": -20.0, "avg_vwap_high": 180.0, "days_covered": 92},
+    ]}))
+    (docs / "market_quarterly.json").write_text(json.dumps({"rows": [
+        {"region": "TAS1", "quarter": "2025Q4", "neg_price_share": 0.03,
+         "avg_vwap_low": -9.0, "avg_vwap_high": 99.0, "days_covered": 61},
+        {"region": "QLD1", "quarter": "2025Q4", "neg_price_share": 0.28,
+         "avg_vwap_low": 10.0, "avg_vwap_high": 120.0, "days_covered": 92},
+    ]}))
+    return docs
+
+
+def test_load_our_quarterly_prefers_live_rollup_and_falls_back(tmp_path):
+    rows = load_our_quarterly(_docs_with_both_artifacts(tmp_path))
+    live = rows[("TAS1", "2025Q4")]
+    assert live["_source"] == SOURCE_DAILY       # live rollup wins for the same key
+    assert live["neg_price_share"] == 0.0639
+    assert live["days_covered"] == 92
+    fallback = rows[("QLD1", "2025Q4")]          # only the legacy snapshot has it
+    assert fallback["_source"] == SOURCE_LEGACY
+
+
+def test_load_our_quarterly_tolerates_missing_artifacts(tmp_path):
+    assert load_our_quarterly(tmp_path / "nowhere") == {}
+
+
+def test_coverage_shortfall_thresholds():
+    assert "61 of 92" in coverage_shortfall("2025Q4", {"days_covered": 61})
+    assert coverage_shortfall("2025Q4", {"days_covered": 92}) is None    # full quarter
+    assert coverage_shortfall("2025Q4", {"days_covered": 83}) is None    # ≥ 90% of 92
+    assert coverage_shortfall("2025Q4", {"days_covered": 82}) is not None  # < 90%
+    assert coverage_shortfall("2025Q4", {}) is None                      # unreported
+
+
+def test_partial_window_is_reported_not_warned():
+    """A 61-day window against a whole-quarter AER count is coverage, not a warn."""
+    reference = parse_aer_csv(NEG_CSV_2025Q4, "neg_price_count")
+    stale = {("TAS1", "2025Q4"): {"region": "TAS1", "quarter": "2025Q4",
+                                 "neg_price_share": 0.03, "days_covered": 61}}
+    checks = build_checks(reference, stale, reference_quarter="2026Q2")
+    neg = checks["neg_price_count"]
+    assert neg["counts"][OUTCOME_PARTIAL_COVERAGE] == 1
+    assert neg["counts"][OUTCOME_WARN] == 0
+    detail = neg["checks"][0]["detail"]
+    assert "61 of 92" in detail and "not like-for-like" in detail
+
+    # The same row over the full quarter is comparable — and inside the band.
+    full = {("TAS1", "2025Q4"): {"region": "TAS1", "quarter": "2025Q4",
+                                 "neg_price_share": 0.0639, "days_covered": 92}}
+    checks = build_checks(reference, full, reference_quarter="2026Q2")
+    neg = checks["neg_price_count"]
+    assert neg["counts"][OUTCOME_PASS] == 1
+    assert neg["counts"][OUTCOME_WARN] == 0
+    assert "ratio 0.79" in neg["checks"][0]["detail"]
+
+
+def test_lane_prefers_live_rollup_and_clears_the_stale_snapshot_warn(tmp_path):
+    docs = _docs_with_both_artifacts(tmp_path)
+    bodies = {**SERIES_BODIES, "neg_price_count": NEG_CSV_2025Q4.encode()}
+    result = run_aer_qa_lane(tmp_path / "data", docs, today=date(2026, 9, 19),
+                             fetch=_fetcher(csv_bodies=bodies))
+
+    assert result.warnings == []
+    payload = json.loads((docs / ARTIFACT_FILENAME).read_text())
+    assert payload["summary"]["warned"] == 0
+    assert payload["summary"]["findings"] == 0
+    # TAS1 comes from the live rollup; QLD1 exists only in the legacy snapshot, so
+    # the fallback is exercised and both sources are visible in the artifact.
+    assert payload["our_rows_source"] == {SOURCE_DAILY: 2, SOURCE_LEGACY: 2}
+    tas = [c for c in payload["series"]["neg_price_count"]["checks"]
+           if c.get("region") == "TAS1"]
+    assert [c["outcome"] for c in tas] == [OUTCOME_PASS]
+    assert tas[0]["our_source"] == SOURCE_DAILY
+    assert tas[0]["our_days_covered"] == 92
+    qld = [c for c in payload["series"]["neg_price_count"]["checks"]
+           if c.get("region") == "QLD1"]
+    assert [c["our_source"] for c in qld] == [SOURCE_LEGACY]
+
+
+def test_lane_reports_partial_coverage_when_only_the_stale_snapshot_exists(tmp_path):
+    """The same run against the legacy artifact alone: no false warn either way."""
+    docs = tmp_path / "docs" / "data"
+    docs.mkdir(parents=True)
+    (docs / "market_quarterly.json").write_text(json.dumps({"rows": [
+        {"region": "TAS1", "quarter": "2025Q4", "neg_price_share": 0.03,
+         "avg_vwap_low": -9.0, "avg_vwap_high": 99.0, "days_covered": 61},
+    ]}))
+    bodies = {**SERIES_BODIES, "neg_price_count": NEG_CSV_2025Q4.encode()}
+    result = run_aer_qa_lane(tmp_path / "data", docs, today=date(2026, 9, 19),
+                             fetch=_fetcher(csv_bodies=bodies))
+
+    assert result.warnings == []
+    payload = json.loads((docs / ARTIFACT_FILENAME).read_text())
+    assert payload["summary"]["warned"] == 0
+    assert payload["summary"]["partial_coverage"] == 2   # vwap band + share ratio
+    assert payload["our_rows_source"] == {SOURCE_LEGACY: 2}
+    neg = payload["series"]["neg_price_count"]
+    assert neg["counts"][OUTCOME_PARTIAL_COVERAGE] == 1
+    assert "61 of 92" in neg["checks"][0]["detail"]

@@ -237,6 +237,14 @@ AER_QA_PUBLISH_LAG_WEEKS = 8
 # Trading intervals (30-minute settlement periods) per day — the denominator when
 # converting an AER interval count into a share of the quarter.
 AER_QA_TRADING_INTERVALS_PER_DAY = 48
+# Minimum share of a quarter's calendar days our own aggregate must span before a
+# whole-quarter AER figure counts as like-for-like. Both of our quarterly artifacts
+# carry `days_covered`; a snapshot whose window starts mid-quarter (a frozen
+# pre-refactor artifact, or a partial build) cannot be ratio-banded against a
+# whole-quarter count, so the check is recorded as `partial_coverage` — a coverage
+# fact, counted and published, never a data-quality warn. Set 0.0 to compare
+# partial windows anyway.
+AER_QA_MIN_COVERAGE_RATIO = 0.9
 
 # AEMO Generation Information (quarterly project register xlsx). The landing
 # page hrefs carry a per-publication ?rev=<hash> query; the module scrapes them
