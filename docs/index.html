@@ -197,7 +197,7 @@
         </select>
         <!-- Region is a segmented control driving the hidden <select>, which stays the value
              getFilteredGenerators() reads and populateFilters() fills. -->
-        <div class="seg max-w-full shrink-0 overflow-x-auto" role="group" aria-label="Filter search by region" id="regionSeg"></div>
+        <div class="seg max-w-full shrink-0 overflow-x-auto empty:hidden" role="group" aria-label="Filter search by region" id="regionSeg"></div>
         <select class="filter-select" id="filterRegion" hidden>
             <option value="">All Regions</option>
         </select>
@@ -218,7 +218,8 @@
     <div class="welcome mx-auto max-w-[560px] px-4 py-20 text-center" id="welcomeState">
         <h2 class="text-[20px] font-semibold leading-7 text-ink">Generator credit risk</h2>
         <p class="mt-2 text-[14px] leading-6 text-muted">Search for any NEM generator by name or DUID to view its credit risk profile: revenue, capacity factor, loss factor trajectory, and price capture.</p>
-        <p class="mt-4 text-[12px] text-faint">Bookmark a generator with the URL hash — e.g. <span class="kbd">#CLRKCWF1</span></p>
+        <p class="mt-4 text-[12px] text-faint">Every unit has its own link — e.g. <a href="#CLRKCWF1" class="kbd hover:border-line-strong hover:text-ink">#CLRKCWF1</a></p>
+        <div id="welcomeNotice" class="mx-auto mt-6 max-w-[480px] text-left" hidden></div>
     </div>
 
     <!-- Entity header: name + fuel, the unit's facts as one quiet line, then a KPI row computed from
@@ -369,6 +370,7 @@
                 <div id="chartPriceCapture"><div class="placeholder">No data yet</div></div>
             </div>
             </div>
+            <p class="omitted-note mt-3 text-[12px] leading-4 text-faint" hidden></p>
         </section>
 
         <!-- Fixed windows: each panel states its own window; the period control does not apply. -->
@@ -481,6 +483,7 @@
                 <div id="chartConstraintsHeatmap"></div>
             </div>
             </div>
+            <p class="omitted-note mt-3 text-[12px] leading-4 text-faint" hidden></p>
         </section>
     </div>
 </main>
@@ -566,7 +569,9 @@ async function init() {
         handleHash();
     } catch (e) {
         document.getElementById('statsBar').innerHTML =
-            '<span class="text-bad">Failed to load generator index. Run the pipeline first.</span>';
+            '<span class="text-bad">Generator index unavailable</span>';
+        showWelcomeNotice('error', 'The generator index could not be loaded',
+            'Search needs data/index.json, which the daily data run publishes. Reload to try again; if it persists, the latest run has not published the index.');
     }
 }
 
@@ -656,7 +661,10 @@ function renderDropdown(results) {
     activeIndex = -1;
 
     if (results.length === 0) {
-        searchDropdown.innerHTML = '<div class="search-item px-3 py-2.5 text-[13px] text-muted">No generators found</div>';
+        const scope = [document.getElementById('filterRegion').value, document.getElementById('filterFuel').value].filter(Boolean).join(' · ');
+        searchDropdown.innerHTML = '<div class="search-item px-3 py-2.5 text-[13px] text-muted">No generators match' +
+            (searchInput.value.trim() ? ' “' + esc(searchInput.value.trim()) + '”' : '') +
+            (scope ? ' in ' + esc(scope) : '') + '.</div>';
         searchDropdown.classList.add('visible');
         return;
     }
@@ -791,6 +799,7 @@ function purgeChartsAndState() {
     document.querySelectorAll('.chart-panel .placeholder').forEach(ph => { ph.innerHTML = ''; });
     currentData = null;
     syncPeriodControl(null);
+    updateOmittedNotes();
 }
 
 // Text from the data goes into innerHTML only through this.
@@ -822,6 +831,60 @@ function showChartState(chartId, title, body) {
     }
     ph.innerHTML = '<div class="state"><svg class="state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg>' +
         '<div><div class="state-title">' + title + '</div><div class="state-body">' + body + '</div></div></div>';
+}
+
+// A notice in the before-selection area (index failed to load, unknown DUID in the link).
+function showWelcomeNotice(kind, title, body) {
+    const el = document.getElementById('welcomeNotice');
+    if (!title) { el.hidden = true; el.innerHTML = ''; return; }
+    const tone = kind === 'error' ? 'border-transparent bg-bad-wash [&_.state-title]:text-bad' : 'border-line bg-surface';
+    el.innerHTML = '<div class="state rounded-card border px-4 py-3 ' + tone + '">' +
+        '<svg class="state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5h.01"/></svg>' +
+        '<div><div class="state-title">' + title + '</div><div class="state-body">' + body + '</div></div></div>';
+    el.hidden = false;
+}
+
+// Quiet loading: every chart area shows a skeleton block until the unit's payload is rendered.
+function setChartsLoading() {
+    document.querySelectorAll('.chart-panel .placeholder').forEach(ph => {
+        ph.innerHTML = '<div class="skeleton h-[180px] w-full"></div>';
+    });
+}
+
+// Panels that do not apply to a unit are hidden; each group says which, and why, in one line —
+// absence is stated, not left for the reader to notice.
+function updateOmittedNotes() {
+    const d = currentData;
+    const solarWind = d && (d.fuel_category === 'Solar' || d.fuel_category === 'Wind');
+    const reasons = {
+        panelCurtailment: 'curtailment proxy (solar and wind only)',
+        panelEconCurtailment: solarWind ? 'economic curtailment (no data for this unit)' : 'economic curtailment (solar and wind only)',
+        panelDailyCF: 'daily generation (no daily data for this unit)',
+        panelOffers: 'energy offers (no offer data for this unit)',
+        panelFCAS: 'regional FCAS prices (fewer than 3 months of data)',
+        panelMarketSpread: 'regional price spreads (no daily price data for this region)',
+        panelConstraints: 'binding constraints (none recorded for this unit)',
+    };
+    document.querySelectorAll('.panel-group').forEach(group => {
+        const note = group.querySelector('.omitted-note');
+        if (!note) return;
+        const missing = d ? [...group.querySelectorAll('.chart-panel')]
+            .filter(panel => panel.style.display === 'none' && reasons[panel.id])
+            .map(panel => reasons[panel.id]) : [];
+        note.hidden = !missing.length;
+        note.textContent = missing.length ? 'Not shown for this unit: ' + missing.join(' · ') + '.' : '';
+    });
+}
+
+// Why a monthly chart is empty: nothing published at all, or nothing inside the chosen period.
+function monthlyAbsence(chartId, key, name, noneTitle, noneBody) {
+    const full = currentData && currentData.monthly && currentData.monthly[key];
+    if (full && full.some(v => v != null)) {
+        showChartState(chartId, 'No ' + name + ' in this period',
+            'The unit has ' + name + ' outside the months shown. Choose a longer period to see it.');
+    } else {
+        showChartState(chartId, noneTitle, noneBody);
+    }
 }
 
 // ─── Entity KPI row ────────────────────────────────────────────────────
@@ -979,6 +1042,8 @@ async function selectGenerator(duid) {
     // generator's numbers must not stay on screen under the new name.
     purgeChartsAndState();
     setKPIsLoading();
+    setChartsLoading();
+    showWelcomeNotice(null);
 
     // Show identity card and controls (downloads stay hidden until a
     // payload is accepted — see below)
@@ -1028,6 +1093,7 @@ async function selectGenerator(duid) {
         // Surface the failure under the selected identity — never silently
         // keep a previous generator's charts or show empty placeholders.
         purgeChartsAndState();
+        document.getElementById('chartGrid').classList.remove('visible');
         statusEl.textContent = `Could not load data for ${duid}: ${e.message}. The dataset may not exist yet for this selection.`;
         statusEl.dataset.state = 'error';
         statusEl.style.display = 'block';
@@ -1212,6 +1278,7 @@ function syncOffersPanel() {
         return !!(el && el.style.display !== 'none');
     };
     panel.style.display = (childVisible('offersBox') || childVisible('offerCurveWrap')) ? 'block' : 'none';
+    updateOmittedNotes();
 }
 
 function renderCharts(data) {
@@ -1563,16 +1630,16 @@ function renderCharts(data) {
     // in the panel (the `state` pattern), instead of leaving an empty box.
     if (!(monthly && monthly.generation_mwh && monthly.generation_mwh.length > 0)) {
         Plotly.purge(document.getElementById('chartGeneration'));
-        showChartState('chartGeneration', 'No monthly generation', 'The published data for this unit has no monthly generation series.');
+        monthlyAbsence('chartGeneration', 'generation_mwh', 'generation', 'No monthly generation', 'The published data for this unit has no monthly generation series.');
     }
     if (!(monthly && monthly.capacity_factor && monthly.capacity_factor.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartCapacity'));
-        showChartState('chartCapacity', 'No capacity factor', 'The published data for this unit has no monthly capacity factor.');
+        monthlyAbsence('chartCapacity', 'capacity_factor', 'capacity factor', 'No capacity factor', 'The published data for this unit has no monthly capacity factor.');
     }
     if (!(monthly && monthly.curtailment_pct && monthly.curtailment_pct.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartCurtailment'));
         setPeriodLabel('chartCurtailment', []);
-        showChartState('chartCurtailment', 'No curtailment proxy', 'Availability data for this unit is not in the published series, so the shortfall proxy cannot be computed.');
+        monthlyAbsence('chartCurtailment', 'curtailment_pct', 'curtailment proxy', 'No curtailment proxy', 'Availability data for this unit is not in the published series, so the shortfall proxy cannot be computed.');
     }
     if (!(monthly && monthly.econ_curtailment_pct && monthly.econ_curtailment_pct.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartEconCurtailment'));
@@ -1583,7 +1650,7 @@ function renderCharts(data) {
     }
     if (!(monthly && monthly.captured_price && monthly.captured_price.some(v => v != null))) {
         Plotly.purge(document.getElementById('chartPriceCapture'));
-        showChartState('chartPriceCapture', 'No price capture', 'Captured price needs output in the month; the published data has no captured-price series for this unit.');
+        monthlyAbsence('chartPriceCapture', 'captured_price', 'captured price', 'No price capture', 'Captured price needs output in the month; the published data has no captured-price series for this unit.');
     }
     if (!(data.price_distribution && data.price_distribution.bins && data.price_distribution.bins.length > 0)) {
         Plotly.purge(document.getElementById('chartPriceDistribution'));
@@ -1798,6 +1865,7 @@ function renderCharts(data) {
     } else if (constraintPanel) {
         constraintPanel.style.display = 'none';
     }
+    updateOmittedNotes();
 }
 
 // ─── Hash Routing ──────────────────────────────────────────────────────
@@ -1806,6 +1874,19 @@ function handleHash() {
     if (hash) {
         const gen = generators.find(g => g.duid === hash);
         if (gen) selectGenerator(hash);
+        else if (generators.length) {
+            // Back to the before-selection view: the link does not name a unit, so no unit's
+            // figures may stay on screen under it.
+            if (selectionAbort) selectionAbort.abort();
+            selectionToken++;
+            purgeChartsAndState();
+            document.getElementById('identityCard').classList.remove('visible');
+            document.getElementById('chartGrid').classList.remove('visible');
+            document.getElementById('welcomeState').style.display = '';
+            searchInput.value = '';
+            showWelcomeNotice('info', 'No generator “' + esc(hash) + '” in the index',
+            'The link names a DUID that is not in the published index — it may have been renamed or deregistered. Search by name or DUID above.');
+        }
     }
 }
 
