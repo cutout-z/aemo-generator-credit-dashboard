@@ -4,25 +4,43 @@
   "monthly_freshness": "pass"
  },
  "outputs": {
-  "generator_files": 565,
+  "generator_files": 567,
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-09-18T23:32:47Z",
+  "finished_utc": "2026-09-30T23:26:55Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-09-18T23:15:10Z"
+  "started_utc": "2026-09-30T23:15:17Z"
  },
  "schema_version": 1,
  "sources": {
+  "aer_qa": {
+   "asof_month": "2026Q2",
+   "attempted_months": 1,
+   "error": null,
+   "months_with_data": 1,
+   "note": "edition unchanged (content hashes match the cache)",
+   "retained_last_good": false,
+   "status": "ok"
+  },
   "fcas_factors": {
-   "asof_month": "2026-08",
+   "asof_month": "2026-09",
    "attempted_months": 3,
    "error": null,
    "months_with_data": 3,
    "note": null,
+   "retained_last_good": false,
+   "status": "ok"
+  },
+  "geninfo": {
+   "asof_month": "2026-07",
+   "attempted_months": 1,
+   "error": null,
+   "months_with_data": 1,
+   "note": "same edition, source unchanged (size + last-modified match)",
    "retained_last_good": false,
    "status": "ok"
   },
@@ -35,17 +53,26 @@
    "retained_last_good": false,
    "status": "ok"
   },
+  "network_outages": {
+   "asof_month": "2026-08",
+   "attempted_months": 2,
+   "error": null,
+   "months_with_data": 2,
+   "note": "same month, source unchanged (size + last-modified match)",
+   "retained_last_good": false,
+   "status": "ok"
+  },
   "offer_curves": {
    "asof_month": "2026-08",
    "attempted_months": 3,
    "error": null,
-   "months_with_data": 3,
+   "months_with_data": 2,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
   },
   "offer_factors": {
-   "asof_month": "2026-08",
+   "asof_month": "2026-09",
    "attempted_months": 3,
    "error": null,
    "months_with_data": 4,
