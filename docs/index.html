@@ -2067,8 +2067,11 @@ function initAxisRangeDrag() {
         const rect = gd.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return null;
         const px = e.clientX - rect.left, py = e.clientY - rect.top;
-        const plotL = L.margin.l, plotR = rect.width - L.margin.r;
-        const plotT = L.margin.t, plotB = rect.height - L.margin.b;
+        // _size = the margins as drawn (auto-expanded for tick labels, titles, legend);
+        // margin = as configured. Zones follow what is on screen.
+        const M = L._size || L.margin;
+        const plotL = M.l, plotR = rect.width - M.r;
+        const plotT = M.t, plotB = rect.height - M.b;
         if (px > plotL && px < plotR && py > plotB && py < rect.height) {
             return L.xaxis.type === 'log' ? null : 'x';
         }
@@ -2093,7 +2096,10 @@ function initAxisRangeDrag() {
             gd,
             axis,
             start: axis === 'x' ? e.clientX : e.clientY,
-            range: ax.range.slice(),
+            // Work in Plotly's linear units: a date axis keeps its range as date strings, and
+            // scaling those arithmetically sent the axis to Plotly's 2000–2001 default.
+            ax,
+            range: ax.range.map(v => ax.r2l(v)),
             // ~half a plot-length of drag ≈ one e-fold of zoom
             k: Math.max(120, (axis === 'x'
                 ? rect.width - gd._fullLayout.margin.l - gd._fullLayout.margin.r
@@ -2120,7 +2126,7 @@ function initAxisRangeDrag() {
         const f = Math.exp(delta / drag.k);
         const c = (drag.range[0] + drag.range[1]) / 2;
         const half = (drag.range[1] - drag.range[0]) / 2 * f;
-        Plotly.relayout(drag.gd, { [drag.axis + 'axis.range']: [c - half, c + half] });
+        Plotly.relayout(drag.gd, { [drag.axis + 'axis.range']: [drag.ax.l2r(c - half), drag.ax.l2r(c + half)] });
     });
     document.addEventListener('mouseup', () => { drag = null; });
 }

@@ -67,7 +67,14 @@ Screenshot and verify with **Playwright** — cloud browsers cannot reach `127.0
 cd <repo> && /opt/anaconda3/bin/python3 scripts/verify-design.py --dashboard ADPBA1
 ```
 
-It writes nothing by default. Add `--screens` to write the evidence screenshots
+And the interactions a design pass must not lose (search, filters, period, fullscreen, CSV/XLSX,
+axis drag on both axes, deep links, duration switch, offer-day select, reorder, resize, phone scroll):
+
+```bash
+cd <repo> && /opt/anaconda3/bin/python3 scripts/verify-interactions.py
+```
+
+`verify-design.py` writes nothing by default. Add `--screens` to write the evidence screenshots
 (`design/screens/tokens-proof-*.png`, `after-<DUID>-*.png`) — do that when you mean to commit them.
 
 It catches the three failures that are invisible in a diff — a component class Tailwind purged, a chart
@@ -101,6 +108,7 @@ branch it is not. If you need a data file that does not exist, stop and say so �
 
 - [ ] Working tree clean; all work committed **on the branch**.
 - [ ] `pytest -q` run, result stated (counts, and any failure named).
+- [ ] `scripts/verify-design.py --dashboard ADPBA1` and `scripts/verify-interactions.py` both exit 0.
 - [ ] `./scripts/build-css.sh` run after the last class change; `docs/assets/app.css` and
       `docs/assets/js/chart-tokens.js` committed.
 - [ ] Screenshots for every surface you changed, at desktop and phone width, in `design/screens/`
