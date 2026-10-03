@@ -8,12 +8,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-02T23:27:39Z",
+  "finished_utc": "2026-10-03T23:28:18Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-10-02T23:15:05Z"
+  "started_utc": "2026-10-03T23:15:07Z"
  },
  "schema_version": 1,
  "sources": {
