@@ -295,6 +295,28 @@ def main() -> int:
             check(got == want_dates, f"{unit}: the daily chart ends on the last day with data, zero-output days shown",
                   f"page {got[0] if got else None} … {got[-1] if got else None} ({len(got or [])} days) vs data "
                   f"{want_dates[0] if want_dates else None} … {want_dates[-1] if want_dates else None} ({len(want_dates)})")
+        # Partial days (fewer intervals observed than expected) are drawn in the warn colour and say so
+        # on hover. The unit is the first, by name, with a partial day inside its drawn window.
+        punit = None
+        for f in sorted((ROOT / "docs" / "data" / "generators").glob("*.json")):
+            try:
+                if any(expected_daily(f.stem)[1]):
+                    punit = f.stem
+                    break
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+        if punit is None:
+            check(False, "partial days are flagged on the daily chart", "no unit in docs/data has a partial day to test")
+        else:
+            _, want_partial = expected_daily(punit)
+            dpg.goto(BASE + "#" + punit, wait_until="networkidle")
+            dpg.wait_for_timeout(2500)
+            got = dpg.evaluate("""(() => { const t = document.getElementById('chartDailyCF').data[0], warn = C('warn');
+                const col = Array.isArray(t.marker.color) ? t.marker.color : t.x.map(() => t.marker.color);
+                return {flags: col.map(c => c === warn), notes: (t.customdata || []).filter(Boolean).length}; })()""")
+            check(got["flags"] == want_partial and got["notes"] == sum(want_partial),
+                  f"{punit}: partial days are drawn in the warn colour and named on hover",
+                  f"{sum(got['flags'])} warn bars, {got['notes']} hover notes vs {sum(want_partial)} partial days")
         dpg.close()
 
         # Phone: a swipe that starts on a chart scrolls the page

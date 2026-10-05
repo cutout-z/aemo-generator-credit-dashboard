@@ -412,7 +412,7 @@
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
-                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros, and zero-output days are shown, not trimmed.
+                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros, and zero-output days are shown, not trimmed. Bars in the warn colour are partial days (fewer 5-min intervals reported than expected).
                         <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
                     </div>
                 </div>
@@ -1766,6 +1766,12 @@ function renderCharts(data) {
         // A missing day stays a gap — it is not a zero-output day.
         const cfValues = data.daily.capacity_factor.slice(sliceStart, lastIdx + 1).map(v => v != null ? v * 100 : null);
         const genMwh = data.daily.generation_mwh.slice(sliceStart, lastIdx + 1);
+        // A partial day (fewer intervals observed than expected) is drawn in the warn colour and says so
+        // on hover, so a short day does not read as low output.
+        const partial = dates.map((_, i) => !!(obs && exp && obs[sliceStart + i] != null
+            && exp[sliceStart + i] != null && obs[sliceStart + i] < exp[sliceStart + i]));
+        const dayNote = dates.map((_, i) => partial[i]
+            ? `<br>Partial day: ${obs[sliceStart + i]} of ${exp[sliceStart + i]} intervals` : '');
 
         // Averages
         const validGen = genMwh.filter(v => v != null && v > 0);
@@ -1779,8 +1785,9 @@ function renderCharts(data) {
         Plotly.newPlot('chartDailyCF', [
             {
                 x: dates, y: genMwh, type: 'bar', name: 'Daily generation',
-                marker: { color: C('info') },
-                hovertemplate: 'Generation: %{y:,.0f} MWh<extra></extra>',
+                marker: { color: partial.map(p => p ? C('warn') : C('info')) },
+                customdata: dayNote,
+                hovertemplate: 'Generation: %{y:,.0f} MWh%{customdata}<extra></extra>',
                 xaxis: 'x', yaxis: 'y',
             },
             {
