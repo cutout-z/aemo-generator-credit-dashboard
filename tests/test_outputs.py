@@ -71,6 +71,49 @@ NON_HYDRO_MONTHLY_CF_BOUND = 1.10
 # that publishes the rewritten 2022-06; never widen it to mask a new month.
 CF_SUSPENSION_ANOMALY_MONTH = "2022-06"
 
+# Settled battery months whose revenue_aud was never MLF-adjusted (implied factor
+# 1.000). Cause: the MLF source used until 2026-04-21 (src/download_mlf.py, removed
+# in 6b763d2d2) kept only DISPATCHTYPE == "GENERATOR" rows of DUDETAILSUMMARY, so
+# every BIDIRECTIONAL (post-IESS) battery got no factor and revenue x1.0 with no
+# provisional label. The current tracker-based lookup resolves all 26 (audit
+# 2026-10, H3); these rows are frozen by the settled-history guard. REMOVE this
+# exemption in the same change that publishes the audited rewrite of these months.
+UNADJUSTED_BATTERY_DUIDS = frozenset({
+    "BBATTERY1", "BHB1", "BLYTHB1", "BULBES1", "CAPBES1", "CHBESS1", "DPNTB1",
+    "ERB01", "GANNB1", "HBESS1", "HPR1", "KESSB1", "LBB1", "LVES1", "MANNUMB1",
+    "RESS1", "RIVNB2", "TARBESS1", "TB2B1", "TEMPB1", "ULPBESS1", "VBB1",
+    "WANDB1", "WDBESS1", "WDBESS2", "WTAHB1",
+})
+UNADJUSTED_BATTERY_LAST_MONTH = "2026-01"
+
+
+def _unadjusted_revenue_offenders(
+    monthly: pd.DataFrame, mlf_history: pd.DataFrame
+) -> pd.DataFrame:
+    """Rows whose revenue implies factor 1.000 although the FY has a factor != 1.
+
+    implied = revenue_aud / (generation_mwh x captured_price). Only rows with
+    enough energy and a non-trivial captured price are judged (> 1,000 MWh,
+    |captured| > $5), and rows explicitly labelled ``unknown`` (unadjusted and
+    provisional by contract) are excluded. A mid-year factor change moves the
+    implied factor between two published values, never onto exactly 1.000, so
+    this catches the silent x1.0 signature without false-flagging it.
+    """
+    m = monthly[
+        (monthly["generation_mwh"] > 1000)
+        & monthly["captured_price"].notna()
+        & (monthly["captured_price"].abs() > 5)
+    ].copy()
+    if "revenue_mlf_status" in m.columns:
+        m = m[m["revenue_mlf_status"].fillna("") != "unknown"]
+    m["implied"] = m["revenue_aud"] / (m["generation_mwh"] * m["captured_price"])
+    year = m["month"].str[:4].astype(int)
+    m["fy_start_year"] = year.where(m["month"].str[5:7].astype(int) >= 7, year - 1)
+    fy = mlf_history.rename(columns={"DUID": "duid"})[["duid", "fy_start_year", "mlf"]]
+    m = m.merge(fy, on=["duid", "fy_start_year"], how="inner")
+    return m[((m["implied"] - 1.0).abs() < 0.0005) & ((m["mlf"] - 1.0).abs() > 0.005)]
+
+
 # Producer rounding contract for generator-JSON monthly fields (generate_json.py)
 # and the mutable tail the pipeline may still correct (main.py DEFAULT_MONTHS_BACK
 # = 2): a JSON published from a later run can legitimately differ there, so
@@ -264,6 +307,26 @@ class TestSchema:
 # ─── Value bounds ─────────────────────────────────────────────────────────────
 
 
+class TestUnadjustedRevenueDetector:
+    def test_unadjusted_revenue_detector(self):
+        """Hermetic check of the detector itself (synthetic rows)."""
+        monthly = pd.DataFrame({
+            "duid": ["BAT1", "BAT1", "BAT1", "GEN1"],
+            "month": ["2025-01", "2025-08", "2025-09", "2025-08"],
+            "generation_mwh": [2000.0, 2000.0, 2000.0, 2000.0],
+            "captured_price": [100.0, 100.0, 100.0, 100.0],
+            # x1.0 (bad), x0.9396 (good), x1.0 but labelled unknown, x1.0 at mlf 1.0
+            "revenue_aud": [200000.0, 187920.0, 200000.0, 200000.0],
+            "revenue_mlf_status": [None, "exact", "unknown", "exact"],
+        })
+        hist = pd.DataFrame({
+            "DUID": ["BAT1", "BAT1", "GEN1"], "fy_label": ["FY24-25", "FY25-26", "FY25-26"],
+            "fy_start_year": [2024, 2025, 2025], "mlf": [0.8657, 0.9396, 1.0],
+        })
+        out = _unadjusted_revenue_offenders(monthly, hist)
+        assert out[["duid", "month"]].values.tolist() == [["BAT1", "2025-01"]]
+
+
 class TestValueBounds:
     @pytest.fixture(autouse=True)
     def load_data(self):
@@ -364,6 +427,19 @@ class TestValueBounds:
         """
         frame = _live_mlf_frame()
         assert validate_mlf_history(frame) is not None
+
+    def test_revenue_is_mlf_adjusted_where_a_factor_exists(self):
+        """No settled row may carry unadjusted revenue (implied factor 1.000)
+        while its FY has a factor != 1, except the documented battery rows."""
+        offenders = _unadjusted_revenue_offenders(self.agg, _live_mlf_frame())
+        known = offenders["duid"].isin(UNADJUSTED_BATTERY_DUIDS) & (
+            offenders["month"] <= UNADJUSTED_BATTERY_LAST_MONTH
+        )
+        new = offenders[~known]
+        assert new.empty, (
+            "revenue_aud not MLF-adjusted: "
+            f"{new[['duid', 'month', 'implied', 'mlf']].head(10).to_dict('records')}"
+        )
 
     def test_mlf_sentinel_negative_fails(self, tmp_path):
         """S3-10 negative regression: MLF -999 in the live long schema must fail.
