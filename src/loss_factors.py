@@ -17,9 +17,19 @@ the factor periods, and maps each 5-minute interval to the period in effect.
 
 Every dispatch type is kept. The MLF source used until 2026-04 kept only
 DISPATCHTYPE == "GENERATOR" rows, which silently left every BIDIRECTIONAL
-battery unadjusted (audit 2026-10, H3). For a bidirectional unit,
-TRANSMISSIONLOSSFACTOR is the generation-side factor and SECONDARY_TLF the
-load side. Discharge revenue uses the former.
+battery unadjusted (audit 2026-10, H3).
+
+Bidirectional orientation: for DISPATCHTYPE == "BIDIRECTIONAL",
+TRANSMISSIONLOSSFACTOR is the IMPORT (load/charging) MLF and SECONDARY_TLF
+the EXPORT (generation/discharge) MLF. This was checked against AEMO's final
+2026-27 MLF workbook, which labels each battery's "Import MLF" and "Export
+MLF". For all 51 batteries whose two values differ, the 1 Jul 2026 records
+match TLF = Import and SECONDARY_TLF = Export (CAPBES1 1.0263 / 0.9783; RESS1
+0.9008 / 0.9862). Discharge revenue therefore takes TLF from SECONDARY_TLF,
+falling back to TRANSMISSIONLOSSFACTOR (logged) only when it is missing.
+GENERATOR rows always use TRANSMISSIONLOSSFACTOR, even where they carry a
+SECONDARY_TLF. DUDETAILSUMMARY has a single DISTRIBUTIONLOSSFACTOR (no
+secondary DLF column), so DLF is read the same way for every dispatch type.
 
 Interval-to-period rule: an interval belongs to the calendar day of its END
 timestamp minus one minute (interval_days.interval_calendar_day), and a
@@ -69,7 +79,8 @@ def _date(value: pd.Series) -> pd.Series:
 def parse_dudetailsummary(raw: bytes | str) -> pd.DataFrame:
     """Factor periods from an MMSDM DUDETAILSUMMARY archive (zip bytes or CSV).
 
-    Returns ``LOSS_FACTOR_COLUMNS``: TLF from TRANSMISSIONLOSSFACTOR and DLF
+    Returns ``LOSS_FACTOR_COLUMNS``: TLF is the generation-side factor
+    (TRANSMISSIONLOSSFACTOR; SECONDARY_TLF for BIDIRECTIONAL units) and DLF
     from DISTRIBUTIONLOSSFACTOR, NaN when absent or implausible. Where AEMO
     restated a period, the row with the latest LASTCHANGED wins.
     """
@@ -92,12 +103,29 @@ def parse_dudetailsummary(raw: bytes | str) -> pd.DataFrame:
         raise ValueError("no DUDETAILSUMMARY rows in archive")
     df = pd.DataFrame([r[: len(header)] for r in rows], columns=header)
 
+    dispatch = df.get("DISPATCHTYPE", pd.Series("", index=df.index)).str.strip()
+    tlf = _factor(df["TRANSMISSIONLOSSFACTOR"])
+    bidir = dispatch == "BIDIRECTIONAL"
+    if bidir.any():
+        export = (
+            _factor(df["SECONDARY_TLF"]) if "SECONDARY_TLF" in df.columns
+            else pd.Series(float("nan"), index=df.index)
+        )
+        missing = bidir & export.isna()
+        if missing.any():
+            logger.warning(
+                f"DUDETAILSUMMARY: {int(missing.sum())} BIDIRECTIONAL periods lack "
+                "SECONDARY_TLF (export MLF) — falling back to TRANSMISSIONLOSSFACTOR "
+                f"(import) for: {', '.join(sorted(set(df.loc[missing, 'DUID'].str.strip()))[:20])}"
+            )
+        tlf = tlf.where(~bidir | missing, export)
+
     out = pd.DataFrame({
         "DUID": df["DUID"].str.strip(),
         "START_DATE": _date(df["START_DATE"]),
         "END_DATE": _date(df["END_DATE"]),
-        "DISPATCHTYPE": df.get("DISPATCHTYPE", pd.Series("", index=df.index)).str.strip(),
-        "TLF": _factor(df["TRANSMISSIONLOSSFACTOR"]),
+        "DISPATCHTYPE": dispatch,
+        "TLF": tlf,
         "DLF": (
             _factor(df["DISTRIBUTIONLOSSFACTOR"])
             if "DISTRIBUTIONLOSSFACTOR" in df.columns else float("nan")

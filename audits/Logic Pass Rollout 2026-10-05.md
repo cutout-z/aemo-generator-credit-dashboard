@@ -23,16 +23,18 @@ steps below has been run.
 1. Merge the branch into current `main`. `main` has moved on since `2fe41d929`, but only with design
    commits that touch `docs/`, so the `src/` and `tests/` changes should merge cleanly. Run
    `pytest -q tests` and expect only the NAS-data tests in `tests/test_outputs.py` to fail off the lane.
-2. Resolve the FY26-27 bidirectional factor question before any rewrite. For FY26-27 the MLF Tracker's
-   value for batteries equals DUDETAILSUMMARY's `SECONDARY_TLF` (the load side), and its "Import" column
-   equals `TRANSMISSIONLOSSFACTOR`. Example: RESS1 tracker 0.9862 vs DUDETAILSUMMARY 0.9008 / 0.9862.
-   FY24-25 and FY25-26 agree. Check AEMO's FY26-27 MLF report, and fix `aemo-mlf-tracker` if the
-   tracker has the columns swapped. Until this is resolved, the pipeline keeps the tracker value for
-   the 50 affected DUIDs and logs them every month.
+2. Publish the MLF tracker fix first: `aemo-mlf-tracker` branch `fix/logic-pass-2026-10`, commit
+   `dbaf6f7`. It reads a battery's export MLF from `SECONDARY_TLF` for `BIDIRECTIONAL` units. This dashboard
+   reads the tracker. Before that fix, the tracker's FY24-25 and FY25-26 battery values are the import
+   factor, so all 29 and 47 batteries disagree with DUDETAILSUMMARY on the opening factor and keep the
+   wrong value. AEMO's 2026-27 workbook confirms `TRANSMISSIONLOSSFACTOR` = Import and
+   `SECONDARY_TLF` = Export (51 of 51 differing batteries). Run the credit full refresh only after the
+   tracker publish.
 3. Run an audited history rewrite on the NAS lane: `python -m src.main --full-refresh`. This is the
    only path the settled-history guard allows. It rewrites:
    - 2022-06 for every unit (H1): NEM 20.01 → 16.93 TWh, BW01 547,389 → 466,485 MWh;
-   - the 26 batteries' months up to 2026-01 (H3): about −$8.4M, RESS1 $18.51M → $16.42M;
+   - the 26 batteries' months up to 2026-01 (H3): about −$13.1M at the export factor, RESS1
+     $18.51M → $16.15M;
    - FY25-26 units with mid-year revisions (H5): QPSFB1 Feb–Jun −9.9%, LIMOSF11 −$214k;
    - `revenue_loss_adjusted_aud` across all history (H4);
    - offer factors / curves, which repairs 2026-05..08 (H2).
@@ -46,6 +48,11 @@ steps below has been run.
    currently passes `--skip-constraints` (finding M7).
 7. Page decision, separate from this branch: whether to show `revenue_loss_adjusted_aud`, which is
    MLF × DLF, or keep `revenue_aud` and label it as transmission-MLF only.
+
+After the orientation fix, 20 units still disagree with the tracker on the FY26-27 opening factor.
+None is bidirectional: 19 GENERATOR and 1 LOAD. Examples: RACOMIL1 0.8765 vs 1.0026, TULLYSM1 0.9128
+vs 1.0230, KEPBL1 1.0 vs 0.9574. For those, the tracker value is kept and each month logs them. Review
+them separately.
 
 ## Known limitation
 

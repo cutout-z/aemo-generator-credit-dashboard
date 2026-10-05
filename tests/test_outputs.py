@@ -76,7 +76,10 @@ CF_SUSPENSION_ANOMALY_MONTH = "2022-06"
 # in 6b763d2d2) kept only DISPATCHTYPE == "GENERATOR" rows of DUDETAILSUMMARY, so
 # every BIDIRECTIONAL (post-IESS) battery got no factor and revenue x1.0 with no
 # provisional label. The current tracker-based lookup resolves all 26 (audit
-# 2026-10, H3); these rows are frozen by the settled-history guard. REMOVE this
+# 2026-10, H3); these rows are frozen by the settled-history guard. The rewrite
+# must run after the MLF tracker publishes its bidirectional fix, which takes the
+# export factor from SECONDARY_TLF; the pre-fix tracker carries the import factor
+# for FY24-25 and FY25-26. REMOVE this
 # exemption in the same change that publishes the audited rewrite of these months.
 UNADJUSTED_BATTERY_DUIDS = frozenset({
     "BBATTERY1", "BHB1", "BLYTHB1", "BULBES1", "CAPBES1", "CHBESS1", "DPNTB1",

@@ -122,11 +122,11 @@ def aggregate_month(
             mid-year revision counts from its effective date. For a DUID whose
             tracker FY factor is exact, the dated values are trusted only when
             the DUID's first period in the FY carries that same factor. A
-            disagreement leaves the tracker value in force and is logged. This
-            guards against a source that disagrees on which factor a unit
-            carries; for FY26-27 the tracker and DUDETAILSUMMARY swap the
-            generation and load factors of bidirectional units. A DUID with no
-            exact tracker factor uses the dated value wherever one exists.
+            disagreement leaves the tracker value in force and is logged, so
+            two sources that disagree on which factor a unit carries never
+            mix silently. A DUID with no exact tracker factor uses the dated
+            value wherever one exists. For a bidirectional unit the dated value
+            is its export MLF (see loss_factors).
 
     Returns:
         DataFrame with one row per DUID that had SCADA data this month.

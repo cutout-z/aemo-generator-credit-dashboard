@@ -1,8 +1,10 @@
 """Battery (bidirectional) revenue is MLF-adjusted by its own FY factor.
 
 Audit 2026-10 (H3): 26 batteries' settled revenue up to 2026-01 implies a
-factor of exactly 1.000 (RESS1 FY24-25 MLF 0.8657, BHB1 0.8284, RIVNB2
-0.8774). The cause was the pre-2026-04-21 MLF source (src/download_mlf.py),
+factor of exactly 1.000. Their export (generation) MLFs for FY24-25 are RESS1
+0.8702, BHB1 0.8423 and RIVNB2 0.9048. Those come from DUDETAILSUMMARY
+SECONDARY_TLF. The pre-fix MLF tracker carried the import factor for these
+years instead: 0.8657 / 0.8284 / 0.8774. The cause was the pre-2026-04-21 MLF source (src/download_mlf.py),
 which kept only DUDETAILSUMMARY rows with DISPATCHTYPE == "GENERATOR" and so
 dropped every BIDIRECTIONAL unit. The tracker-based lookup used since then
 resolves them; these tests pin that a battery's implied revenue factor equals
@@ -14,11 +16,11 @@ import pytest
 
 from src.aggregate import MLF_STATUS_EXACT, aggregate_month, build_mlf_lookup
 
-# Tracker FY values for three of the affected units (generation-side MLF).
+# Export (generation-side) FY factors for three of the affected units.
 FY_FACTORS = {
-    ("RESS1", 2024): 0.8657, ("RESS1", 2025): 0.9396,
-    ("BHB1", 2024): 0.8284, ("BHB1", 2025): 0.9484,
-    ("RIVNB2", 2024): 0.8774, ("RIVNB2", 2025): 0.9443,
+    ("RESS1", 2024): 0.8702, ("RESS1", 2025): 0.8781,
+    ("BHB1", 2024): 0.8423, ("BHB1", 2025): 0.8999,
+    ("RIVNB2", 2024): 0.9048, ("RIVNB2", 2025): 0.9173,
 }
 
 

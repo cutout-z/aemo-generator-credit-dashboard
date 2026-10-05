@@ -77,7 +77,9 @@ class TestParse:
         # Every dispatch type is kept (the old GENERATOR-only filter was H3).
         ress = p[p["DUID"] == "RESS1"].iloc[0]
         assert ress["DISPATCHTYPE"] == "BIDIRECTIONAL"
-        assert ress["TLF"] == 0.9396  # generation side, not SECONDARY_TLF
+        # Bidirectional: TRANSMISSIONLOSSFACTOR is the IMPORT (load) factor,
+        # SECONDARY_TLF the EXPORT (generation) factor that discharge revenue uses.
+        assert ress["TLF"] == 0.8781
 
     def test_restated_period_keeps_latest_lastchanged(self):
         p = parse_dudetailsummary(_archive([
@@ -179,17 +181,43 @@ class TestRevenueByEffectiveDate:
         assert row[REVENUE_MLF_SOURCE_COL] == "mlf-tracker"
 
     def test_opening_disagreement_keeps_the_tracker_factor(self, caplog):
-        """Tracker and DUDETAILSUMMARY disagree on the FY's opening factor
-        (FY26-27 bidirectional units: generation and load swapped) -> the
-        tracker value stays, the row says so, and the run logs it."""
+        """Tracker and DUDETAILSUMMARY disagree on the FY's opening factor ->
+        the tracker value stays, the row says so, and the run logs it."""
+        periods = _periods([_d("GEN9", "2026/07/01", "2999/12/31", "0.9500")])
+        hist = _history([("GEN9", 2026, 0.9700)])
+        with caplog.at_level(logging.WARNING):
+            row = _month("GEN9", ["2026-08-10 12:00"], 2026, 8, hist, periods)
+        assert row[REVENUE_MLF_VALUE_COL] == 0.97
+        assert row[REVENUE_MLF_SOURCE_COL] == "mlf-tracker"
+        assert "GEN9" in caplog.text
+
+    def test_bidirectional_revenue_uses_the_export_factor(self):
+        """AEMO's 2026-27 MLF workbook: for BIDIRECTIONAL units DUDETAILSUMMARY
+        TRANSMISSIONLOSSFACTOR = Import MLF and SECONDARY_TLF = Export MLF (51/51
+        batteries whose two values differ). Discharge revenue must use Export.
+        RESS1 FY26-27: Import 0.9008, Export 0.9862 (= the tracker value)."""
         periods = _periods([_d("RESS1", "2026/07/01", "2999/12/31", "0.9008",
                                dtype="BIDIRECTIONAL", secondary="0.9862")])
         hist = _history([("RESS1", 2026, 0.9862)])
-        with caplog.at_level(logging.WARNING):
-            row = _month("RESS1", ["2026-08-10 12:00"], 2026, 8, hist, periods)
+        row = _month("RESS1", ["2026-08-10 12:00"], 2026, 8, hist, periods)
         assert row[REVENUE_MLF_VALUE_COL] == 0.9862
-        assert row[REVENUE_MLF_SOURCE_COL] == "mlf-tracker"
-        assert "RESS1" in caplog.text
+        assert row[REVENUE_MLF_SOURCE_COL] == "dudetailsummary"  # agrees with tracker
+        assert row["revenue_aud"] == round(500 * 0.9862)
+        # No tracker factor: the dated export factor is used on its own.
+        row = _month("RESS1", ["2026-08-10 12:00"], 2026, 8, _history([("X", 2026, 1.0)]),
+                     periods)
+        assert row[REVENUE_MLF_VALUE_COL] == 0.9862
+
+    def test_bidirectional_without_secondary_falls_back_and_logs(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            p = _periods([_d("BAT9", "2026/07/01", "2999/12/31", "0.95",
+                             dtype="BIDIRECTIONAL")])
+        assert p["TLF"].tolist() == [0.95]
+        assert "BAT9" in caplog.text
+
+    def test_generator_secondary_tlf_is_ignored(self):
+        p = _periods([_d("GEN8", "2026/07/01", "2999/12/31", "1.019", secondary="0.9176")])
+        assert p["TLF"].tolist() == [1.019]
 
     def test_no_tracker_factor_uses_the_dated_factor(self):
         row = _month("QPSFB1", ["2026-03-10 12:00"], 2026, 3, _history([("X", 2025, 0.9)]),
