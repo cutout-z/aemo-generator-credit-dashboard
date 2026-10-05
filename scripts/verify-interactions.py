@@ -27,6 +27,23 @@ def check(ok: bool, name: str, detail: str = "") -> None:
     results.append((bool(ok), name, detail))
 
 
+def expected_daily(unit: str) -> tuple[list[str], list[bool]]:
+    """The days the daily chart should draw for a unit, from its JSON: trailing days with no data (no
+    value, or no interval observed) trimmed, then one year back from the last day kept; and, per
+    day, whether it is partial (fewer intervals observed than expected)."""
+    d = json.loads((ROOT / "docs" / "data" / "generators" / f"{unit}.json").read_text())["daily"]
+    gen, obs, exp = d["generation_mwh"], d.get("intervals_observed"), d.get("intervals_expected")
+    last = len(gen) - 1
+    while last > 0 and (gen[last] is None or (obs and obs[last] == 0)):
+        last -= 1
+    y, rest = d["dates"][last].split("-", 1)
+    cutoff = f"{int(y) - 1}-{rest}"
+    start = next((i for i, x in enumerate(d["dates"]) if x >= cutoff), 0)
+    partial = [bool(obs and exp and obs[i] is not None and exp[i] is not None and obs[i] < exp[i])
+               for i in range(start, last + 1)]
+    return d["dates"][start:last + 1], partial
+
+
 def plot_range(pg, chart_id: str, axis: str):
     return pg.evaluate(f"document.getElementById('{chart_id}')._fullLayout.{axis}axis.range.slice()")
 
@@ -265,6 +282,20 @@ def main() -> int:
         check(bb2["width"] < bb["width"] - 200 and bb2["height"] > bb["height"] + 40, "panel resize (corner)",
               f"{bb['width']:.0f}x{bb['height']:.0f} → {bb2['width']:.0f}x{bb2['height']:.0f}")
         pg.close()
+
+        # Daily chart: trailing zero-output days are shown; only days with no data are trimmed. BW02
+        # ran at 0 MWh for its last days in this data, which the old "< 10 MWh" trim hid.
+        dpg = b.new_page(viewport={"width": 1440, "height": 960})
+        dpg.on("pageerror", lambda e: errors.append(str(e)[:160]))
+        for unit in ("BW02", UNIT):
+            want_dates, _ = expected_daily(unit)
+            dpg.goto(BASE + "#" + unit, wait_until="networkidle")
+            dpg.wait_for_timeout(2500)
+            got = dpg.evaluate("(() => { const c = document.getElementById('chartDailyCF'); return c && c.data ? c.data[0].x : null; })()")
+            check(got == want_dates, f"{unit}: the daily chart ends on the last day with data, zero-output days shown",
+                  f"page {got[0] if got else None} … {got[-1] if got else None} ({len(got or [])} days) vs data "
+                  f"{want_dates[0] if want_dates else None} … {want_dates[-1] if want_dates else None} ({len(want_dates)})")
+        dpg.close()
 
         # Phone: a swipe that starts on a chart scrolls the page
         ctx = b.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)

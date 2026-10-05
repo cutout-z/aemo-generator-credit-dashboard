@@ -412,7 +412,7 @@
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
-                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros.
+                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros, and zero-output days are shown, not trimmed.
                         <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
                     </div>
                 </div>
@@ -1748,9 +1748,11 @@ function renderCharts(data) {
     if (data.daily && data.daily.dates && data.daily.dates.length > 0) {
         dailyCFPanel.style.display = 'block';
 
-        // Trim: find last date with meaningful generation (>10 MWh) and show 12 months back
+        // Trim only trailing days with NO data (no value, or no interval observed). A day of zero output
+        // is data: trimming days under 10 MWh hid outages (BW02's 0 MWh 27-31 Aug, 134 days of BDL02).
+        const obs = data.daily.intervals_observed, exp = data.daily.intervals_expected;
         let lastIdx = data.daily.dates.length - 1;
-        while (lastIdx > 0 && (data.daily.generation_mwh[lastIdx] == null || data.daily.generation_mwh[lastIdx] < 10)) {
+        while (lastIdx > 0 && (data.daily.generation_mwh[lastIdx] == null || (obs && obs[lastIdx] === 0))) {
             lastIdx--;
         }
         const lastDate = new Date(data.daily.dates[lastIdx]);
