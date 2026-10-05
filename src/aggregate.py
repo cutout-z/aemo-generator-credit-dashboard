@@ -23,6 +23,71 @@ from .interval_days import INTERVALS_PER_DAY, interval_calendar_day_str
 logger = logging.getLogger(__name__)
 
 
+def dedupe_interval_keys(
+    df: pd.DataFrame,
+    keys: list[str],
+    *,
+    label: str,
+    value_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """Return ``df`` with exactly one row per ``keys`` (an interval counts once).
+
+    AEMO archives can carry the same interval twice: the MMSDM June 2022
+    DISPATCHLOAD holds 614,466 repeated (SETTLEMENTDATE, DUID) rows with
+    INTERVENTION=0. Joined to SCADA unfiltered, every repeat multiplied that
+    interval's generation and revenue (BW01 June 2022: 547,389 MWh published
+    vs 466,485 MWh in the raw SCADA).
+
+    Rule: identical repeats collapse to one row; where repeats DISAGREE on
+    ``value_cols`` the LAST row in source order wins (the later-loaded
+    record — the same keep-last rule aggregate_month_daily applies to
+    SCADA) and the conflict count is logged as a warning, so a non-identical
+    duplicate is never silently summed or averaged.
+    """
+    if df is None or df.empty:
+        return df
+    dup_mask = df.duplicated(subset=keys, keep=False)
+    if not dup_mask.any():
+        return df
+    extra = int(df.duplicated(subset=keys, keep="last").sum())
+    conflicts = 0
+    cols = [c for c in (value_cols or []) if c in df.columns]
+    if cols:
+        dups = df.loc[dup_mask, keys + cols]
+        n_distinct = dups.drop_duplicates().groupby(keys, sort=False).size()
+        conflicts = int((n_distinct > 1).sum())
+    msg = f"{label}: dropped {extra:,} duplicate {tuple(keys)} rows"
+    if conflicts:
+        logger.warning(
+            f"{msg}; {conflicts:,} keys disagreed on {cols} — kept the last row"
+        )
+    else:
+        logger.warning(msg)
+    return df.drop_duplicates(subset=keys, keep="last")
+
+
+def _merge_preserving_rows(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    on: list[str],
+    *,
+    label: str,
+) -> pd.DataFrame:
+    """Left-join ``right`` onto ``left`` and fail loudly if rows multiply.
+
+    ``right`` must already be unique on ``on`` (dedupe_interval_keys); the
+    row-count assertion is the backstop that turns any future fan-out into
+    an error instead of silently inflated energy and revenue.
+    """
+    merged = pd.merge(left, right, on=on, how="left", validate="many_to_one")
+    if len(merged) != len(left):
+        raise RuntimeError(
+            f"{label} join changed the row count ({len(left):,} -> "
+            f"{len(merged):,}); refusing to aggregate duplicated intervals"
+        )
+    return merged
+
+
 def aggregate_month(
     scada: pd.DataFrame,
     prices: pd.DataFrame,
@@ -74,26 +139,39 @@ def aggregate_month(
     duid_capacity = generators.set_index("DUID")["CAPACITY_MW"].to_dict()
     duid_fuel = generators.set_index("DUID")["FUEL_CATEGORY"].to_dict()
 
-    # Assign region to SCADA rows
-    scada = scada.copy()
+    # Assign region to SCADA rows. One row per (SETTLEMENTDATE, DUID) on
+    # every side of the joins below: a repeated interval in any source table
+    # must count once, and a join that still multiplies rows aborts.
+    scada = dedupe_interval_keys(
+        scada, ["SETTLEMENTDATE", "DUID"], label=f"SCADA {month_label}",
+        value_cols=["SCADAVALUE"],
+    ).copy()
     scada["REGIONID"] = scada["DUID"].map(duid_region)
     scada = scada.dropna(subset=["REGIONID"])
 
     # Merge SCADA with prices on (SETTLEMENTDATE, REGIONID)
-    merged = pd.merge(
+    price_keys = ["SETTLEMENTDATE", "REGIONID"]
+    merged = _merge_preserving_rows(
         scada,
-        prices[["SETTLEMENTDATE", "REGIONID", "RRP"]],
-        on=["SETTLEMENTDATE", "REGIONID"],
-        how="left",
+        dedupe_interval_keys(
+            prices[price_keys + ["RRP"]], price_keys,
+            label=f"DISPATCHPRICE {month_label}", value_cols=["RRP"],
+        ),
+        price_keys,
+        label=f"SCADA×DISPATCHPRICE {month_label}",
     )
 
     # Merge with dispatchload for curtailment
     if dispatchload is not None and not dispatchload.empty:
-        merged = pd.merge(
+        load_keys = ["SETTLEMENTDATE", "DUID"]
+        merged = _merge_preserving_rows(
             merged,
-            dispatchload[["SETTLEMENTDATE", "DUID", "AVAILABILITY"]],
-            on=["SETTLEMENTDATE", "DUID"],
-            how="left",
+            dedupe_interval_keys(
+                dispatchload[load_keys + ["AVAILABILITY"]], load_keys,
+                label=f"DISPATCHLOAD {month_label}", value_cols=["AVAILABILITY"],
+            ),
+            load_keys,
+            label=f"SCADA×DISPATCHLOAD {month_label}",
         )
     else:
         merged["AVAILABILITY"] = np.nan
@@ -457,6 +535,14 @@ def aggregate_constraints_month(
         return pd.DataFrame()
 
     month_label = f"{year}-{month:02d}"
+
+    # Hours bound are a row count, so a repeated (interval, constraint) row in
+    # the archive would inflate them exactly as DISPATCHLOAD repeats inflated
+    # June 2022 energy: count each binding interval once.
+    dispatchconstraint = dedupe_interval_keys(
+        dispatchconstraint, ["SETTLEMENTDATE", "CONSTRAINTID"],
+        label=f"DISPATCHCONSTRAINT {month_label}", value_cols=["MARGINALVALUE"],
+    )
 
     # Build connection point → set of constraint IDs
     cp_to_constraints = spdcp.groupby("CONNECTIONPOINTID")["GENCONID"].apply(set).to_dict()

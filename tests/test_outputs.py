@@ -59,12 +59,16 @@ EXPECTED_JSON_KEYS = {
 MONTHLY_CF_BOUNDS: dict[str, float] = {"Hydro": 1.25}
 NON_HYDRO_MONTHLY_CF_BOUND = 1.10
 
-# The one month ever observed above those bounds (2022-06, NEM market
-# suspension): fleet-wide SCADA anomalies push post-override monthly CF to
-# 1.12-1.15 across ~7 fossil units while those same units have NO daily rows
-# that month — a documented archive artifact, not a registration signal.
-# Delete this exemption only if AEMO ever republishes corrected 2022-06 SCADA;
-# never widen it to mask a new month.
+# The one month ever observed above those bounds (2022-06). This is NOT an AEMO
+# archive artifact (the earlier diagnosis was wrong): the raw June 2022 SCADA is
+# clean (BW01 466,485 MWh, CF 0.98). The MMSDM June 2022 DISPATCHLOAD archive
+# repeats 614,466 (SETTLEMENTDATE, DUID) rows with INTERVENTION=0, and the old
+# aggregate_month joined it onto SCADA without a dedupe, multiplying those
+# intervals' generation and revenue (BW01 published 547,389 MWh, CF 1.152; NEM
+# +18.2%). aggregate_month now dedupes and asserts the join preserves rows, but
+# the published 2022-06 rows are settled history and stay wrong until an audited
+# --full-refresh rewrite of that month. REMOVE this exemption in the same change
+# that publishes the rewritten 2022-06; never widen it to mask a new month.
 CF_SUSPENSION_ANOMALY_MONTH = "2022-06"
 
 # Producer rounding contract for generator-JSON monthly fields (generate_json.py)
