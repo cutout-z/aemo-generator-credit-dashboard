@@ -412,7 +412,7 @@
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
-                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros.
+                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros, and zero-output days are shown, not trimmed. Bars in the warn colour are partial days (fewer 5-min intervals reported than expected).
                         <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
                     </div>
                 </div>
@@ -1309,16 +1309,21 @@ function rolling12(arr) {
         for (let j = windowStart; j <= i; j++) {
             if (arr[j] != null && !isNaN(arr[j])) { sum += arr[j]; count++; }
         }
-        const windowSize = i - windowStart + 1;
-        result[i] = count >= Math.min(6, windowSize) ? sum / count : null;
+        // At least 6 of the 12 months: a "12-month average" of one or two months is just those months.
+        result[i] = count >= 6 ? sum / count : null;
     }
     return result;
 }
 
-// Add a 12-month rolling average trace (only when period >= 12 months)
-function makeRollingTrace(fmtMonths, values, valueFormat) {
+// Add a 12-month rolling average trace (only when period >= 12 months). The average runs over the
+// unit's FULL monthly history and is then cut to the months on screen: computed on the period slice,
+// the line's first point in the 12M view was that month alone, and its first 11 points in any view
+// averaged fewer than 12 months that the data does hold.
+function makeRollingTrace(fmtMonths, key, valueFormat) {
     if (selectedMonths < 12) return null;
-    const avg = rolling12(values);
+    const full = currentData && currentData.monthly && currentData.monthly[key];
+    if (!Array.isArray(full) || !fmtMonths.length) return null;
+    const avg = rolling12(full).slice(-fmtMonths.length);
     if (!avg) return null;
     return {
         x: fmtMonths,
@@ -1374,7 +1379,7 @@ function renderCharts(data) {
                 ? 'Generation: %{y:,.0f} MWh (≈ %{y:,.0f} LGCs)<extra></extra>'
                 : 'Generation: %{y:,.0f} MWh<extra></extra>',
         }];
-        const genRolling = makeRollingTrace(fmtMonths, monthly.generation_mwh, ',.0f');
+        const genRolling = makeRollingTrace(fmtMonths, 'generation_mwh', ',.0f');
         if (genRolling) genTraces.push(genRolling);
         Plotly.newPlot('chartGeneration', genTraces, chartLayout({
             height: H.lg,
@@ -1387,7 +1392,7 @@ function renderCharts(data) {
     // Capacity factor, with the 25% benchmark labelled where it is drawn
     if (monthly && monthly.capacity_factor && monthly.capacity_factor.some(v => v != null)) {
         const cfTraces = [monthLine(monthly.capacity_factor, 'Capacity factor', C('info'), '.1%')];
-        const cfRolling = makeRollingTrace(fmtMonths, monthly.capacity_factor, '.1%');
+        const cfRolling = makeRollingTrace(fmtMonths, 'capacity_factor', '.1%');
         if (cfRolling) cfTraces.push(cfRolling);
         const bench = referenceLine(0.25, '25% benchmark');
         Plotly.newPlot('chartCapacity', cfTraces, chartLayout({
@@ -1410,7 +1415,7 @@ function renderCharts(data) {
             marker: { color: C('warn') },
             hovertemplate: 'Shortfall proxy: %{y:.1%}<extra></extra>',
         }];
-        const curtRolling = makeRollingTrace(fmtMonths, monthly.curtailment_pct, '.1%');
+        const curtRolling = makeRollingTrace(fmtMonths, 'curtailment_pct', '.1%');
         if (curtRolling) curtTraces.push(curtRolling);
         Plotly.newPlot('chartCurtailment', curtTraces, chartLayout({
             height: H.lg,
@@ -1429,7 +1434,7 @@ function renderCharts(data) {
             fill: 'tozeroy',
             fillcolor: C('bad-wash'),
         }];
-        const econRolling = makeRollingTrace(fmtMonths, monthly.econ_curtailment_pct, '.1%');
+        const econRolling = makeRollingTrace(fmtMonths, 'econ_curtailment_pct', '.1%');
         if (econRolling) econTraces.push(econRolling);
         Plotly.newPlot('chartEconCurtailment', econTraces, chartLayout({
             height: H.lg,
@@ -1622,8 +1627,20 @@ function renderCharts(data) {
             const pc = v => v != null ? Math.round(100 * v) + '%' : na;
             const dol = v => v != null ? (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('en-AU', { maximumFractionDigits: 0 }) : na;
             ofBox.style.display = 'block';
+            // The payload marks a month built from part of its intervals (window: partial,
+            // source_complete: false). Say so: a 4-hour stub otherwise reads as the month's offers.
+            const partial = of.window === 'partial' || of.source_complete === false;
+            let partialNote = '';
+            if (partial) {
+                const [py, pm] = String(of.month || '').split('-').map(Number);
+                const full = py && pm ? new Date(Date.UTC(py, pm, 0)).getUTCDate() * 288 : null;
+                partialNote = ' Partial month: built from ' + (of.intervals_observed != null
+                    ? Number(of.intervals_observed).toLocaleString('en-AU') + (full ? ' of ' + full.toLocaleString('en-AU') : '') + ' five-minute intervals'
+                    : 'part of its intervals') + ', so these figures cover only that part.';
+            }
             ofBox.innerHTML = statGridHTML(
-                'Energy offers · ' + esc(fmtMonthLong(of.month || '')),
+                'Energy offers · ' + esc(fmtMonthLong(of.month || '')) +
+                    (partial ? ' <span class="pill pill-warn ml-1.5" data-offers-partial>Partial month</span>' : ''),
                 [
                     ['Average offered', mw(of.avg_offered_mw)],
                     ['95th percentile offered', mw(of.offered_mw_p95)],
@@ -1632,7 +1649,7 @@ function renderCharts(data) {
                     ['Days with a negative band', pc(of.negative_band_day_share)],
                 ],
                 'Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.' +
-                    (of.price_asof_month ? ' Prices as of ' + esc(fmtMonthLong(of.price_asof_month)) + '.' : ''));
+                    (of.price_asof_month ? ' Prices as of ' + esc(fmtMonthLong(of.price_asof_month)) + '.' : '') + partialNote);
         } else {
             ofBox.style.display = 'none';
         }
@@ -1754,9 +1771,11 @@ function renderCharts(data) {
     if (data.daily && data.daily.dates && data.daily.dates.length > 0) {
         dailyCFPanel.style.display = 'block';
 
-        // Trim: find last date with meaningful generation (>10 MWh) and show 12 months back
+        // Trim only trailing days with NO data (no value, or no interval observed). A day of zero output
+        // is data: trimming days under 10 MWh hid outages (BW02's 0 MWh 27-31 Aug, 134 days of BDL02).
+        const obs = data.daily.intervals_observed, exp = data.daily.intervals_expected;
         let lastIdx = data.daily.dates.length - 1;
-        while (lastIdx > 0 && (data.daily.generation_mwh[lastIdx] == null || data.daily.generation_mwh[lastIdx] < 10)) {
+        while (lastIdx > 0 && (data.daily.generation_mwh[lastIdx] == null || (obs && obs[lastIdx] === 0))) {
             lastIdx--;
         }
         const lastDate = new Date(data.daily.dates[lastIdx]);
@@ -1770,6 +1789,12 @@ function renderCharts(data) {
         // A missing day stays a gap — it is not a zero-output day.
         const cfValues = data.daily.capacity_factor.slice(sliceStart, lastIdx + 1).map(v => v != null ? v * 100 : null);
         const genMwh = data.daily.generation_mwh.slice(sliceStart, lastIdx + 1);
+        // A partial day (fewer intervals observed than expected) is drawn in the warn colour and says so
+        // on hover, so a short day does not read as low output.
+        const partial = dates.map((_, i) => !!(obs && exp && obs[sliceStart + i] != null
+            && exp[sliceStart + i] != null && obs[sliceStart + i] < exp[sliceStart + i]));
+        const dayNote = dates.map((_, i) => partial[i]
+            ? `<br>Partial day: ${obs[sliceStart + i]} of ${exp[sliceStart + i]} intervals` : '');
 
         // Averages
         const validGen = genMwh.filter(v => v != null && v > 0);
@@ -1783,8 +1808,9 @@ function renderCharts(data) {
         Plotly.newPlot('chartDailyCF', [
             {
                 x: dates, y: genMwh, type: 'bar', name: 'Daily generation',
-                marker: { color: C('info') },
-                hovertemplate: 'Generation: %{y:,.0f} MWh<extra></extra>',
+                marker: { color: partial.map(p => p ? C('warn') : C('info')) },
+                customdata: dayNote,
+                hovertemplate: 'Generation: %{y:,.0f} MWh%{customdata}<extra></extra>',
                 xaxis: 'x', yaxis: 'y',
             },
             {
