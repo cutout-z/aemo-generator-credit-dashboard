@@ -125,6 +125,24 @@ def main() -> int:
         full = pg.evaluate("document.getElementById('chartGeneration').data[0].x.length")
         check(six == 6 and full > 6, "period switch", f"6M → {six} months, 3Y → {full}")
 
+        # The 12-month average line runs over the unit's full history and is then cut to the period:
+        # recompute it from the unit's JSON (>= 6 of the 12 months present) for the 12M and 3Y views.
+        gen = json.loads((ROOT / "docs" / "data" / "generators" / f"{UNIT}.json").read_text())["monthly"]["generation_mwh"]
+        want_avg = []
+        for i in range(len(gen)):
+            win = [v for v in gen[max(0, i - 11):i + 1] if v is not None]
+            want_avg.append(sum(win) / len(win) if len(win) >= 6 else None)
+        for months in (12, 36):
+            pg.click(f".time-btn[data-months='{months}']")
+            pg.wait_for_timeout(700)
+            got = pg.evaluate("""(() => { const t = document.getElementById('chartGeneration').data
+                .find(d => d.name === '12-month average'); return t ? t.y : null; })()""")
+            want = want_avg[-min(months, len(gen)):]
+            ok = got is not None and len(got) == len(want) and all(
+                (a is None and b is None) or (a is not None and b is not None and abs(a - b) < 1e-6) for a, b in zip(got, want))
+            check(ok, f"{months}M: the 12-month average equals the full-history average, cut to the period",
+                  f"first point page {got[0] if got else None} vs data {want[0] if want else None}")
+
         # Axis drag (initAxisRangeDrag): every axis of every chart, at its tick-label strip
         n_axes = pg.evaluate("[...document.querySelectorAll('.js-plotly-plot')].filter(e => e.data).length")
         problems = axis_sweep(pg)
