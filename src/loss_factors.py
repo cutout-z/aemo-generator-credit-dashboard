@@ -248,6 +248,13 @@ def interval_loss_factors(
     )
     if right.empty:
         return out
+    # One datetime resolution on both sides: pandas 3 infers seconds or microseconds per source and
+    # merge_asof refuses mixed-resolution keys (the NAS lane runs pandas 3).
+    left["_day"] = left["_day"].astype("datetime64[ns]")
+    right = right.assign(
+        START_DATE=right["START_DATE"].astype("datetime64[ns]"),
+        END_DATE=right["END_DATE"].astype("datetime64[ns]"),
+    )
     hit = pd.merge_asof(
         left, right, left_on="_day", right_on="START_DATE", by="DUID",
         direction="backward",
