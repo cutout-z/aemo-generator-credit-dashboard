@@ -135,18 +135,23 @@ def _fcas_raw(year=2026, month=7, duid="GEN1"):
 
 
 def _energy_raw(year=2026, month=7, duid="GEN1"):
-    """One ENERGY volume row for a month (passes energy_volumes_from_raw).
+    """ENERGY volume rows for a month (passes energy_volumes_from_raw).
 
-    Stamped 01 00:05 (interval END) → calendar day 01, matching the price day.
+    Stamped 01 00:05 (interval END) → calendar day 01, matching the price day,
+    plus one interval on the month's final day so the volume source counts as
+    complete (a finished month with a partial source degrades the lane).
     """
+    last = pd.Period(f"{year}-{month:02d}", freq="M").days_in_month
     row = {
-        "INTERVAL_DATETIME": pd.to_datetime([f"{year}-{month:02d}-01 00:05:00"]),
-        "DUID": [duid], "BIDTYPE": ["ENERGY"],
-        "MAXAVAIL": [0.0], "ENABLEMENTMIN": [0.0], "ENABLEMENTMAX": [0.0],
-        "VERSIONNO": [1],
+        "INTERVAL_DATETIME": pd.to_datetime([
+            f"{year}-{month:02d}-01 00:05:00", f"{year}-{month:02d}-{last} 12:00:00",
+        ]),
+        "DUID": [duid] * 2, "BIDTYPE": ["ENERGY"] * 2,
+        "MAXAVAIL": [0.0] * 2, "ENABLEMENTMIN": [0.0] * 2, "ENABLEMENTMAX": [0.0] * 2,
+        "VERSIONNO": [1] * 2,
     }
     for i in range(1, 11):
-        row[f"BANDAVAIL{i}"] = [10.0 if i == 1 else 0.0]
+        row[f"BANDAVAIL{i}"] = [10.0 if i == 1 else 0.0] * 2
     return pd.DataFrame(row)
 
 

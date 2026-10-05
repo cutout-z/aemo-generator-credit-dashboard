@@ -180,7 +180,9 @@ def fetch_energy_volumes(year: int, month: int, cache_dir: str, rebuild: bool | 
     return energy_volumes_from_raw(raw, year, month)
 
 
-def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.DataFrame:
+def compute_offer_features(
+    prices: pd.DataFrame, volumes: pd.DataFrame, month: str | None = None,
+) -> pd.DataFrame:
     """Per-DUID monthly offer-behaviour features from deduped prices+volumes.
 
     Prices: BIDDAYOFFER_D ENERGY rows (DUID, SETTLEMENTDATE, PRICEBAND1-10).
@@ -198,12 +200,26 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
     reached the month's final calendar day. A mid-month archive/cache
     fragment is flagged incomplete so the attach layer never promotes it to
     an unqualified full-month statistic.
+
+    ``month`` (``YYYY-MM``, the month this fetch was made for): keep only
+    price days and volume intervals that belong to that month, as
+    compute_offer_curves does. A month's fetch window reaches into its
+    neighbours — nemosis widens BIDDAYOFFER_D to the previous trading day, so
+    September's fetch carries 31 August's prices — and without this filter
+    that one-day stub became a "2026-08" row that replaced the full August
+    row in the factor history on every run. None keeps every month present
+    (callers that pass a pre-sliced frame).
     """
     if prices is None or prices.empty or volumes is None or volumes.empty:
         return pd.DataFrame()
 
     p = prices.copy()
     p["month"] = p["SETTLEMENTDATE"].dt.to_period("M").astype(str)
+    if month is not None:
+        p = p[p["month"] == month]
+        volumes = volumes[interval_month(volumes["INTERVAL_DATETIME"]) == month]
+        if p.empty and volumes.empty:
+            return pd.DataFrame()
     per_day = p.groupby(["DUID", "month"]).agg(
         n_days=("SETTLEMENTDATE", "nunique"),
         price_band_min_avg=("PRICEBAND1", "mean"),
@@ -251,6 +267,28 @@ def compute_offer_features(prices: pd.DataFrame, volumes: pd.DataFrame) -> pd.Da
     return out.rename(columns={"DUID": "duid"})
 
 
+# Completeness order for an offer-factor month (factor_cache.month_completeness):
+# a month whose volume source reached its final day beats one that did not,
+# then more price days, then more observed volume intervals.
+OFFER_FACTOR_COMPLETENESS_COLS = ("vol_source_complete", "n_days", "vol_intervals_observed")
+
+
+def keep_most_complete_offer_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    """One row per (duid, month): the most complete copy, never simply the last."""
+    if rows is None or rows.empty or not rows.duplicated(["duid", "month"]).any():
+        return rows
+    ranked = rows.assign(_order=range(len(rows)))
+    sort_cols = [c for c in OFFER_FACTOR_COMPLETENESS_COLS if c in ranked.columns]
+    for col in sort_cols:
+        ranked[f"_k_{col}"] = pd.to_numeric(
+            ranked[col].map(lambda v: float(v) if v is not None and not pd.isna(v) else -1.0),
+            errors="coerce",
+        )
+    keys = [f"_k_{c}" for c in sort_cols] + ["_order"]
+    ranked = ranked.sort_values(keys).drop_duplicates(["duid", "month"], keep="last")
+    return ranked.sort_values("_order").drop(columns=keys)
+
+
 def build_offer_factors(months: list[tuple[int, int]], cache_dir: str) -> pd.DataFrame:
     """Fetch + compute offer factors for each (year, month).
 
@@ -268,7 +306,7 @@ def build_offer_factors(months: list[tuple[int, int]], cache_dir: str) -> pd.Dat
         if volumes.empty:
             logger.warning(f"Offers {year}-{month:02d}: prices without volumes — skipping month")
             continue
-        feats = compute_offer_features(prices, volumes)
+        feats = compute_offer_features(prices, volumes, f"{year}-{month:02d}")
         if not feats.empty:
             logger.info(
                 f"Offer factors {year}-{month:02d}: {len(feats)} DUIDs"
@@ -277,11 +315,9 @@ def build_offer_factors(months: list[tuple[int, int]], cache_dir: str) -> pd.Dat
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
-    # S3-05: adjacent month fetches can each contribute a row for the same
-    # (duid, month) — the next month's first trading day rides in the prior
-    # month's inclusive-end window. Frames append in ascending month order, so
-    # keep the LAST row per (duid, month): the fuller copy wins.
-    out = out.drop_duplicates(subset=["duid", "month"], keep="last")
+    # Each fetch is filtered to its own month, so (duid, month) is unique;
+    # keep the most complete copy should a caller ever pass overlapping rows.
+    out = keep_most_complete_offer_rows(out)
     logger.info("Computed %d offer factor rows for %d month(s)", len(out), len(months))
     return out
 

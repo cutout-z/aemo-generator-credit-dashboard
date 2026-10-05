@@ -22,12 +22,41 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _as_number(value) -> float:
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return float("nan")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def month_completeness(
+    frame: pd.DataFrame, cols: tuple[str, ...],
+) -> dict[str, tuple]:
+    """Per-month completeness score: the max of each ``cols`` column (bools as
+    0/1, missing as -1), compared lexicographically. Absent columns score -1."""
+    scores: dict[str, tuple] = {}
+    for month, grp in frame.groupby("month", sort=False):
+        score = []
+        for col in cols:
+            if col not in grp.columns:
+                score.append(-1)
+                continue
+            vals = pd.to_numeric(grp[col].map(_as_number), errors="coerce")
+            score.append(float(vals.max()) if vals.notna().any() else -1)
+        scores[month] = tuple(score)
+    return scores
+
+
 def merge_month_rows(
     cache_path: str | Path,
     new_rows: pd.DataFrame,
     *,
     full_refresh: bool = False,
     label: str = "factor rows",
+    completeness_cols: tuple[str, ...] | None = None,
+    kept_months: list[str] | None = None,
 ) -> pd.DataFrame:
     """Merge freshly computed per-month rows into the cached history file.
 
@@ -42,6 +71,14 @@ def merge_month_rows(
 
     ``full_refresh=True`` replaces the file wholesale (deliberate audited
     historical rewrite) instead of merging.
+
+    ``completeness_cols``: when given, a cached month whose
+    :func:`month_completeness` score is HIGHER than the fresh month's is kept
+    and the fresh rows for that month are dropped (ties go to the fresh rows).
+    This is what stops a one-trading-day stub of a finished month — which a
+    later month's fetch window used to produce — from replacing the full
+    month in the offer-factor history. Months kept that way are appended to
+    ``kept_months`` (when a list is passed) so the lane can report them.
     """
     cache_path = Path(cache_path)
     if new_rows is None or new_rows.empty:
@@ -54,6 +91,22 @@ def merge_month_rows(
 
     if cache_path.exists() and not full_refresh:
         existing = pd.read_feather(cache_path)
+        if completeness_cols and not existing.empty:
+            old_scores = month_completeness(existing, completeness_cols)
+            new_scores = month_completeness(new_rows, completeness_cols)
+            keep_old = sorted(
+                m for m, s in new_scores.items()
+                if m in old_scores and old_scores[m] > s
+            )
+            for m in keep_old:
+                logger.warning(
+                    "%s %s: fresh rows are less complete than the cached month "
+                    "(%s < %s) — cached month kept",
+                    label, m, new_scores[m], old_scores[m],
+                )
+            if kept_months is not None:
+                kept_months.extend(keep_old)
+            new_rows = new_rows[~new_rows["month"].isin(keep_old)]
         reprocessed = set(pd.unique(new_rows["month"]))
         existing = existing[~existing["month"].isin(reprocessed)]
         merged = pd.concat([existing, new_rows], ignore_index=True)

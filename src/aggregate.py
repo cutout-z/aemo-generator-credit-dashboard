@@ -19,8 +19,74 @@ import pandas as pd
 
 from . import config
 from .interval_days import INTERVALS_PER_DAY, interval_calendar_day_str
+from .loss_factors import fy_opening_tlf, interval_loss_factors
 
 logger = logging.getLogger(__name__)
+
+
+def dedupe_interval_keys(
+    df: pd.DataFrame,
+    keys: list[str],
+    *,
+    label: str,
+    value_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """Return ``df`` with exactly one row per ``keys`` (an interval counts once).
+
+    AEMO archives can carry the same interval twice: the MMSDM June 2022
+    DISPATCHLOAD holds 614,466 repeated (SETTLEMENTDATE, DUID) rows with
+    INTERVENTION=0. Joined to SCADA unfiltered, every repeat multiplied that
+    interval's generation and revenue (BW01 June 2022: 547,389 MWh published
+    vs 466,485 MWh in the raw SCADA).
+
+    Rule: identical repeats collapse to one row; where repeats DISAGREE on
+    ``value_cols`` the LAST row in source order wins (the later-loaded
+    record — the same keep-last rule aggregate_month_daily applies to
+    SCADA) and the conflict count is logged as a warning, so a non-identical
+    duplicate is never silently summed or averaged.
+    """
+    if df is None or df.empty:
+        return df
+    dup_mask = df.duplicated(subset=keys, keep=False)
+    if not dup_mask.any():
+        return df
+    extra = int(df.duplicated(subset=keys, keep="last").sum())
+    conflicts = 0
+    cols = [c for c in (value_cols or []) if c in df.columns]
+    if cols:
+        dups = df.loc[dup_mask, keys + cols]
+        n_distinct = dups.drop_duplicates().groupby(keys, sort=False).size()
+        conflicts = int((n_distinct > 1).sum())
+    msg = f"{label}: dropped {extra:,} duplicate {tuple(keys)} rows"
+    if conflicts:
+        logger.warning(
+            f"{msg}; {conflicts:,} keys disagreed on {cols} — kept the last row"
+        )
+    else:
+        logger.warning(msg)
+    return df.drop_duplicates(subset=keys, keep="last")
+
+
+def _merge_preserving_rows(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    on: list[str],
+    *,
+    label: str,
+) -> pd.DataFrame:
+    """Left-join ``right`` onto ``left`` and fail loudly if rows multiply.
+
+    ``right`` must already be unique on ``on`` (dedupe_interval_keys); the
+    row-count assertion is the backstop that turns any future fan-out into
+    an error instead of silently inflated energy and revenue.
+    """
+    merged = pd.merge(left, right, on=on, how="left", validate="many_to_one")
+    if len(merged) != len(left):
+        raise RuntimeError(
+            f"{label} join changed the row count ({len(left):,} -> "
+            f"{len(merged):,}); refusing to aggregate duplicated intervals"
+        )
+    return merged
 
 
 def aggregate_month(
@@ -32,6 +98,7 @@ def aggregate_month(
     year: int,
     month: int,
     intermittent_scada: pd.DataFrame | None = None,
+    loss_factor_periods: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Aggregate a single month of 5-minute data to per-generator monthly metrics.
 
@@ -49,6 +116,17 @@ def aggregate_month(
             (every DUID unknown — unadjusted, provisional).
         year: Year being processed
         month: Month being processed
+        loss_factor_periods: DUDETAILSUMMARY factor periods
+            (loss_factors.fetch_loss_factor_periods) or None. Revenue applies
+            the transmission factor IN EFFECT on each interval's day, so a
+            mid-year revision counts from its effective date. For a DUID whose
+            tracker FY factor is exact, the dated values are trusted only when
+            the DUID's first period in the FY carries that same factor. A
+            disagreement leaves the tracker value in force and is logged, so
+            two sources that disagree on which factor a unit carries never
+            mix silently. A DUID with no exact tracker factor uses the dated
+            value wherever one exists. For a bidirectional unit the dated value
+            is its export MLF (see loss_factors).
 
     Returns:
         DataFrame with one row per DUID that had SCADA data this month.
@@ -60,8 +138,19 @@ def aggregate_month(
                  proxy) and price_mwh_* per-bin energy behind each share.
                  (S3-11) Every row also carries the MLF provenance used for its
                  revenue_aud: revenue_mlf_status (exact/prior-carry/unknown),
-                 revenue_mlf_source_fy_start (source FY or None), and
-                 revenue_mlf_value (applied factor, None when unadjusted).
+                 revenue_mlf_source_fy_start (source FY or None),
+                 revenue_mlf_value (applied factor, None when unadjusted;
+                 generation-weighted when the factor changed within the
+                 month), and revenue_mlf_source (dudetailsummary /
+                 mlf-tracker / mixed, None when unadjusted).
+                 DLF (audit 2026-10, H4): revenue_aud stays spot revenue x
+                 transmission MLF, which is its published meaning. The
+                 distribution loss factor is applied only in the NEW field
+                 revenue_loss_adjusted_aud (revenue_aud's factor x DLF per
+                 interval). revenue_dlf_value records the generation-weighted
+                 DLF applied, and revenue_dlf_status records whether it was
+                 "published" for every interval, "default" (1.0 throughout:
+                 no DUDETAILSUMMARY value) or "partial".
     """
     if scada.empty:
         return pd.DataFrame()
@@ -74,29 +163,50 @@ def aggregate_month(
     duid_capacity = generators.set_index("DUID")["CAPACITY_MW"].to_dict()
     duid_fuel = generators.set_index("DUID")["FUEL_CATEGORY"].to_dict()
 
-    # Assign region to SCADA rows
-    scada = scada.copy()
+    # Assign region to SCADA rows. One row per (SETTLEMENTDATE, DUID) on
+    # every side of the joins below: a repeated interval in any source table
+    # must count once, and a join that still multiplies rows aborts.
+    scada = dedupe_interval_keys(
+        scada, ["SETTLEMENTDATE", "DUID"], label=f"SCADA {month_label}",
+        value_cols=["SCADAVALUE"],
+    ).copy()
     scada["REGIONID"] = scada["DUID"].map(duid_region)
     scada = scada.dropna(subset=["REGIONID"])
 
     # Merge SCADA with prices on (SETTLEMENTDATE, REGIONID)
-    merged = pd.merge(
+    price_keys = ["SETTLEMENTDATE", "REGIONID"]
+    merged = _merge_preserving_rows(
         scada,
-        prices[["SETTLEMENTDATE", "REGIONID", "RRP"]],
-        on=["SETTLEMENTDATE", "REGIONID"],
-        how="left",
+        dedupe_interval_keys(
+            prices[price_keys + ["RRP"]], price_keys,
+            label=f"DISPATCHPRICE {month_label}", value_cols=["RRP"],
+        ),
+        price_keys,
+        label=f"SCADA×DISPATCHPRICE {month_label}",
     )
 
     # Merge with dispatchload for curtailment
     if dispatchload is not None and not dispatchload.empty:
-        merged = pd.merge(
+        load_keys = ["SETTLEMENTDATE", "DUID"]
+        merged = _merge_preserving_rows(
             merged,
-            dispatchload[["SETTLEMENTDATE", "DUID", "AVAILABILITY"]],
-            on=["SETTLEMENTDATE", "DUID"],
-            how="left",
+            dedupe_interval_keys(
+                dispatchload[load_keys + ["AVAILABILITY"]], load_keys,
+                label=f"DISPATCHLOAD {month_label}", value_cols=["AVAILABILITY"],
+            ),
+            load_keys,
+            label=f"SCADA×DISPATCHLOAD {month_label}",
         )
     else:
         merged["AVAILABILITY"] = np.nan
+
+    # Transmission factor in effect per interval (NaN = no dated factor).
+    fy_start = year if month >= 7 else year - 1
+    lf = interval_loss_factors(merged[["SETTLEMENTDATE", "DUID"]], loss_factor_periods)
+    merged["_TLF"] = lf["TLF"].to_numpy()
+    merged["_DLF"] = lf["DLF"].to_numpy()
+    opening_tlf = fy_opening_tlf(loss_factor_periods, fy_start)
+    disagree: list[str] = []
 
     rows = []
     for duid, group in merged.groupby("DUID"):
@@ -112,23 +222,72 @@ def aggregate_month(
             not isinstance(res, dict)
             or res.get("status") == MLF_STATUS_UNKNOWN
         ):
-            mlf_status = MLF_STATUS_UNKNOWN
-            mlf_source_fy_start = None
-            mlf_value = None
-            mlf = 1.0
+            tracker_status = MLF_STATUS_UNKNOWN
+            tracker_fy = None
+            tracker_mlf = None
         else:
-            mlf_status = res["status"]
-            mlf_source_fy_start = res.get("source_fy_start")
-            mlf_value = float(res["mlf"])
-            mlf = mlf_value
+            tracker_status = res["status"]
+            tracker_fy = res.get("source_fy_start")
+            tracker_mlf = float(res["mlf"])
+
+        # Dated factors replace the tracker's FY value where they apply.
+        dated = group["_TLF"]
+        if tracker_status == MLF_STATUS_EXACT and dated.notna().any():
+            opening = opening_tlf.get(duid)
+            if opening is None or abs(opening - tracker_mlf) > 5e-5:
+                disagree.append(duid)
+                dated = dated * np.nan
+        covered = dated.notna()
+        factor = dated.fillna(tracker_mlf if tracker_mlf is not None else 1.0)
+        if covered.all():
+            mlf_status, mlf_source_fy_start, mlf_source = (
+                MLF_STATUS_EXACT, fy_start, "dudetailsummary",
+            )
+        elif tracker_status == MLF_STATUS_UNKNOWN:
+            # Some (or all) intervals have no factor: provisional, as before.
+            mlf_status, mlf_source_fy_start, mlf_source = MLF_STATUS_UNKNOWN, None, None
+        else:
+            mlf_status, mlf_source_fy_start = tracker_status, tracker_fy
+            mlf_source = "mixed" if covered.any() else "mlf-tracker"
 
         # MWh: 5-minute intervals → divide by 12 to get MWh
-        mwh = group["SCADAVALUE"].clip(lower=0).sum() / 12.0
+        gen = group["SCADAVALUE"].clip(lower=0)
+        mwh = gen.sum() / 12.0
 
-        # Revenue: MWh_interval × RRP × MLF, summed
-        # (unknown status: ×1.0 — unadjusted spot revenue, provisional)
-        group_valid = group.dropna(subset=["RRP"])
-        revenue = (group_valid["SCADAVALUE"].clip(lower=0) / 12.0 * group_valid["RRP"] * mlf).sum()
+        # Applied factor for provenance: generation-weighted, so a month that
+        # straddles a revision records the blend its revenue actually used.
+        if mlf_status == MLF_STATUS_UNKNOWN:
+            mlf_value = None
+        elif gen.sum() > 0:
+            mlf_value = float((factor * gen).sum() / gen.sum())
+        else:
+            mlf_value = float(factor.mean())
+
+        # Revenue: MWh_interval × RRP × factor in effect, summed
+        # (unknown status: ×1.0 where no factor — unadjusted, provisional)
+        valid = group["RRP"].notna()
+        group_valid = group[valid]
+        revenue = (
+            group_valid["SCADAVALUE"].clip(lower=0) / 12.0
+            * group_valid["RRP"] * factor[valid]
+        ).sum()
+
+        # Distribution loss factor (embedded units; 1.0 where none published).
+        dlf_known = group["_DLF"].notna()
+        dlf = group["_DLF"].fillna(1.0)
+        revenue_loss_adjusted = (
+            group_valid["SCADAVALUE"].clip(lower=0) / 12.0
+            * group_valid["RRP"] * factor[valid] * dlf[valid]
+        ).sum()
+        if dlf_known.all():
+            dlf_status = DLF_STATUS_PUBLISHED
+        elif dlf_known.any():
+            dlf_status = DLF_STATUS_PARTIAL
+        else:
+            dlf_status = DLF_STATUS_DEFAULT
+        dlf_value = (
+            float((dlf * gen).sum() / gen.sum()) if gen.sum() > 0 else float(dlf.mean())
+        )
 
         # Capacity factor — not capped; values > 1.0 indicate stale registration or headwater physics
         cap_factor = mwh / (capacity * hours_in_month) if capacity and capacity > 0 else None
@@ -204,6 +363,10 @@ def aggregate_month(
             REVENUE_MLF_STATUS_COL: mlf_status,
             REVENUE_MLF_SOURCE_FY_COL: mlf_source_fy_start,
             REVENUE_MLF_VALUE_COL: round(mlf_value, 6) if mlf_value is not None else None,
+            REVENUE_MLF_SOURCE_COL: mlf_source,
+            REVENUE_LOSS_ADJUSTED_COL: round(revenue_loss_adjusted, 0),
+            REVENUE_DLF_VALUE_COL: round(dlf_value, 6),
+            REVENUE_DLF_STATUS_COL: dlf_status,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
             "curtailment_actual_mwh": curt_actual_mwh,
             "curtailment_potential_mwh": curt_potential_mwh,
@@ -222,6 +385,12 @@ def aggregate_month(
 
         rows.append(row)
 
+    if disagree:
+        logger.warning(
+            f"{month_label}: DUDETAILSUMMARY's opening FY factor disagrees with the "
+            f"MLF tracker for {len(disagree)} DUIDs — tracker FY value kept: "
+            f"{', '.join(sorted(disagree)[:20])}"
+        )
     result = pd.DataFrame(rows)
     logger.info(f"Aggregated {month_label}: {len(result)} generators with data")
     return result
@@ -327,6 +496,17 @@ MLF_STATUS_UNKNOWN = "unknown"
 REVENUE_MLF_STATUS_COL = "revenue_mlf_status"
 REVENUE_MLF_SOURCE_FY_COL = "revenue_mlf_source_fy_start"
 REVENUE_MLF_VALUE_COL = "revenue_mlf_value"
+# Where revenue_mlf_value came from: "dudetailsummary" (dated factors for every
+# interval), "mlf-tracker" (the tracker's FY factor), "mixed", or None.
+REVENUE_MLF_SOURCE_COL = "revenue_mlf_source"
+# H4: revenue after BOTH loss factors (transmission x distribution). A separate
+# field so revenue_aud keeps its published "MLF-adjusted" meaning.
+REVENUE_LOSS_ADJUSTED_COL = "revenue_loss_adjusted_aud"
+REVENUE_DLF_VALUE_COL = "revenue_dlf_value"
+REVENUE_DLF_STATUS_COL = "revenue_dlf_status"
+DLF_STATUS_PUBLISHED = "published"
+DLF_STATUS_PARTIAL = "partial"
+DLF_STATUS_DEFAULT = "default"
 
 
 def build_mlf_lookup(
@@ -457,6 +637,14 @@ def aggregate_constraints_month(
         return pd.DataFrame()
 
     month_label = f"{year}-{month:02d}"
+
+    # Hours bound are a row count, so a repeated (interval, constraint) row in
+    # the archive would inflate them exactly as DISPATCHLOAD repeats inflated
+    # June 2022 energy: count each binding interval once.
+    dispatchconstraint = dedupe_interval_keys(
+        dispatchconstraint, ["SETTLEMENTDATE", "CONSTRAINTID"],
+        label=f"DISPATCHCONSTRAINT {month_label}", value_cols=["MARGINALVALUE"],
+    )
 
     # Build connection point → set of constraint IDs
     cp_to_constraints = spdcp.groupby("CONNECTIONPOINTID")["GENCONID"].apply(set).to_dict()

@@ -34,15 +34,18 @@ from .market_factors import (
 from .download_bids import fcas_bids_from_raw, fetch_bidperoffer_union
 from .fcas_factor import compute_fcas_factors
 from .factor_cache import merge_month_rows
+from .loss_factors import fetch_loss_factor_periods
 from .offer_curves import (
     OFFER_CURVES_CACHE,
     OFFER_CURVES_DAILY_CACHE,
     OFFER_FACTORS_CACHE,
+    OFFER_FACTOR_COMPLETENESS_COLS,
     compute_offer_curves,
     compute_offer_curves_daily,
     compute_offer_features,
     energy_volumes_from_raw,
     fetch_energy_prices,
+    keep_most_complete_offer_rows,
     write_offer_curve_files,
 )
 from .freshness import check_monthly_freshness, check_daily_freshness
@@ -175,6 +178,8 @@ def _finalize_factor_lane(
     no_rows_error: str,
     no_rows_note: str,
     cold_start_error: str,
+    completeness_cols: tuple[str, ...] | None = None,
+    today: datetime | None = None,
 ) -> pd.DataFrame:
     """Persist one lane's fresh per-month facts, or retain the last-known-good.
 
@@ -186,17 +191,40 @@ def _finalize_factor_lane(
     facts the last-known-good history is retained from the cache (degraded —
     blocks kept and stamped retained-stale); with neither facts nor cache the
     lane errors (cold start).
+
+    ``completeness_cols`` (offer lanes; the first column is the lane's
+    source-complete flag): the merge never lets a less complete fresh month
+    replace a more complete cached one, and a FINISHED month (before
+    ``today``'s month) that is still partial after the merge — or that was
+    only kept from the cache because the fresh fetch was partial — degrades
+    the lane instead of reporting ok.
     """
     if frames:
         new = pd.concat(frames, ignore_index=True)
         lane.months_with_data = int(new["month"].nunique())
+        kept: list[str] = []
         merged = merge_month_rows(
             cache_path, new, full_refresh=full_refresh, label=label,
+            completeness_cols=completeness_cols, kept_months=kept,
         )
         lane.frame = merged
-        if errors:
+        problems = list(errors)
+        if completeness_cols:
+            partial = _partial_finished_months(
+                merged, sorted(set(new["month"])), completeness_cols[0], today,
+            )
+            if partial:
+                problems.append(
+                    f"partial source for finished month(s) {', '.join(partial)}"
+                )
+            if kept:
+                problems.append(
+                    "fresh fetch less complete than cache for "
+                    f"{', '.join(kept)} — cached month kept"
+                )
+        if problems:
             lane.status = STATUS_DEGRADED
-            lane.error = "; ".join(errors)
+            lane.error = "; ".join(problems)
         return merged
     retained = read_last_good(cache_path)
     if not retained.empty:
@@ -211,6 +239,26 @@ def _finalize_factor_lane(
     lane.frame = pd.DataFrame()
     lane.error = "; ".join(errors) if errors else cold_start_error
     return lane.frame
+
+
+def _partial_finished_months(
+    frame: pd.DataFrame,
+    months: list[str],
+    flag_col: str,
+    today: datetime | None = None,
+) -> list[str]:
+    """Months in ``months`` that have ended yet have no source-complete row."""
+    if frame is None or frame.empty or flag_col not in frame.columns:
+        return []
+    current = (today or datetime.now()).strftime("%Y-%m")
+    out = []
+    for m in months:
+        if m >= current:
+            continue  # the running month is partial by construction
+        flags = frame.loc[frame["month"] == m, flag_col]
+        if flags.empty or not flags.fillna(False).astype(bool).any():
+            out.append(m)
+    return out
 
 
 def _run_optional_factor_lanes(
@@ -351,7 +399,7 @@ def _run_optional_factor_lanes(
                 curve_errors.append(msg)
                 continue
             try:  # offer-factor lane
-                feats = compute_offer_features(prices, volumes)
+                feats = compute_offer_features(prices, volumes, month_label)
                 if not feats.empty:
                     logger.info(
                         f"Offer factors {month_label}: {feats['duid'].nunique()} DUIDs"
@@ -380,17 +428,14 @@ def _run_optional_factor_lanes(
                     "Offer curve computation failed for %s: %s", month_label, e,
                 )
 
-    # S3-05 offer-factor note: adjacent-month fetches can each contribute a
-    # row for the same (duid, month) — the next month's first trading day
-    # rides in the prior month's inclusive-end window. Frames append in
-    # ascending month order, so keep the LAST row per (duid, month): the
-    # fuller copy wins (matches the pure builder's contract).
+    # Each month's offer features are filtered to that month, so adjacent
+    # fetches no longer both emit a row for one (duid, month). Should one ever
+    # slip through, keep the MOST COMPLETE copy — the old keep-last rule let
+    # the next month's one-trading-day stub replace a full month.
     if len(offer_frames) > 1:
-        merged_feats = pd.concat(offer_frames, ignore_index=True)
-        merged_feats = merged_feats.drop_duplicates(
-            subset=["duid", "month"], keep="last",
-        )
-        offer_frames = [merged_feats]
+        offer_frames = [
+            keep_most_complete_offer_rows(pd.concat(offer_frames, ignore_index=True))
+        ]
 
     if want_fcas:
         fcas_lane.attempted_months = attempted
@@ -411,6 +456,7 @@ def _run_optional_factor_lanes(
             no_rows_error="no offer rows for any attempted month",
             no_rows_note="no offer rows (unpublished months?) — last-known-good retained",
             cold_start_error="no offer rows and no cache to retain (cold start)",
+            completeness_cols=OFFER_FACTOR_COMPLETENESS_COLS,
         )
         offer_curves = _finalize_factor_lane(
             curve_lane, curve_cache, curve_frames, curve_errors,
@@ -419,6 +465,7 @@ def _run_optional_factor_lanes(
             no_rows_note="no offer-curve rows (unpublished months?) — "
                          "last-known-good retained",
             cold_start_error="no offer-curve rows and no cache to retain (cold start)",
+            completeness_cols=("source_complete",),
         )
         if daily_frames:
             offer_curves_daily = pd.concat(daily_frames, ignore_index=True)
@@ -512,6 +559,17 @@ def main():
         logger.info(f"Loaded {len(draft_mlfs)} draft MLFs for {draft_fy_label}")
     else:
         logger.info("No draft MLFs available")
+
+    # Dated loss factors (mid-year MLF revisions). Optional: without them
+    # revenue keeps the tracker's per-FY factor, and each row's
+    # revenue_mlf_source says which source was used.
+    try:
+        loss_factor_periods = fetch_loss_factor_periods(
+            str(data_dir), force=(args.full_refresh or args.refresh_mlf),
+        )
+    except Exception as e:
+        logger.warning(f"Loss-factor periods unavailable: {e}")
+        loss_factor_periods = None
 
     generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
     logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
@@ -614,6 +672,7 @@ def main():
                 # Aggregate
                 monthly = aggregate_month(
                     scada, prices, dispatchload, generators, mlf_lookup, year, month,
+                    loss_factor_periods=loss_factor_periods,
                 )
                 if not monthly.empty:
                     new_rows.append(monthly)

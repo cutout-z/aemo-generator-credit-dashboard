@@ -12,6 +12,10 @@ import pandas as pd
 
 from . import config
 from .aggregate import (
+    REVENUE_DLF_STATUS_COL,
+    REVENUE_DLF_VALUE_COL,
+    REVENUE_LOSS_ADJUSTED_COL,
+    REVENUE_MLF_SOURCE_COL,
     REVENUE_MLF_SOURCE_FY_COL,
     REVENUE_MLF_STATUS_COL,
     REVENUE_MLF_VALUE_COL,
@@ -64,6 +68,40 @@ def _add_revenue_mlf_provenance(monthly_doc: dict, monthly_data: pd.DataFrame) -
         monthly_doc["revenue_mlf_value"] = [
             None if pd.isna(v) else float(v)
             for v in monthly_data[REVENUE_MLF_VALUE_COL]
+        ]
+    # Where the factor came from (dated DUDETAILSUMMARY periods vs the
+    # tracker's FY value). Rows aggregated before the column existed: None.
+    if REVENUE_MLF_SOURCE_COL in monthly_data.columns:
+        monthly_doc["revenue_mlf_source"] = [
+            None if pd.isna(v) else str(v)
+            for v in monthly_data[REVENUE_MLF_SOURCE_COL]
+        ]
+
+
+def _add_loss_adjusted_revenue(monthly_doc: dict, monthly_data: pd.DataFrame) -> None:
+    """Attach revenue after MLF x DLF (audit 2026-10, H4) as NEW arrays.
+
+    revenue_aud keeps its published meaning (spot x transmission MLF). The
+    distribution loss factor is applied only in revenue_loss_adjusted_aud,
+    with the DLF applied (revenue_dlf_value) and whether it was published
+    (revenue_dlf_status). Months aggregated before these columns existed
+    carry None, never a copy of revenue_aud.
+    """
+    if REVENUE_LOSS_ADJUSTED_COL not in monthly_data.columns:
+        return
+    if monthly_data[REVENUE_LOSS_ADJUSTED_COL].dropna().empty:
+        return
+    monthly_doc["revenue_loss_adjusted_aud"] = [
+        None if pd.isna(v) else round(float(v), 0)
+        for v in monthly_data[REVENUE_LOSS_ADJUSTED_COL]
+    ]
+    if REVENUE_DLF_VALUE_COL in monthly_data.columns:
+        monthly_doc["revenue_dlf_value"] = [
+            None if pd.isna(v) else float(v) for v in monthly_data[REVENUE_DLF_VALUE_COL]
+        ]
+    if REVENUE_DLF_STATUS_COL in monthly_data.columns:
+        monthly_doc["revenue_dlf_status"] = [
+            None if pd.isna(v) else str(v) for v in monthly_data[REVENUE_DLF_STATUS_COL]
         ]
 
 
@@ -227,6 +265,7 @@ def generate_generator_json(
         # provisional. Months without provenance columns (legacy aggregates
         # produced before S3-11) simply omit the arrays.
         _add_revenue_mlf_provenance(doc["monthly"], monthly_data)
+        _add_loss_adjusted_revenue(doc["monthly"], monthly_data)
         # Curtailment only for solar/wind
         # S3-01: curtailment_pct is a forecast-to-output shortfall proxy
         # (1 − SCADA/AVAILABILITY). The former grid/mechanical causal split
@@ -988,6 +1027,15 @@ def _aggregate_station_monthly(
         "revenue_aud": revenue,
         "capacity_factor": cap_factor,
     }
+    # H4: station revenue after MLF x DLF = sum of member units' values; None
+    # for a month where any member predates the field (never a partial sum).
+    if REVENUE_LOSS_ADJUSTED_COL in station_monthly.columns and \
+            station_monthly[REVENUE_LOSS_ADJUSTED_COL].notna().any():
+        loss_adj = []
+        for m in months:
+            vals = grouped.get_group(m)[REVENUE_LOSS_ADJUSTED_COL]
+            loss_adj.append(None if vals.isna().any() else round(float(vals.sum()), 0))
+        result["revenue_loss_adjusted_aud"] = loss_adj
     if has_curtailment:
         result["curtailment_pct"] = curtailment
         result["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
