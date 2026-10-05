@@ -317,7 +317,30 @@ def main() -> int:
             check(got["flags"] == want_partial and got["notes"] == sum(want_partial),
                   f"{punit}: partial days are drawn in the warn colour and named on hover",
                   f"{sum(got['flags'])} warn bars, {got['notes']} hover notes vs {sum(want_partial)} partial days")
+        # Offers box: a partial month (window: partial / source_complete: false) carries a "Partial
+        # month" pill and the observed/expected intervals; a complete month carries neither. BW02 is
+        # served once as published and once with its offers marked partial (48 intervals), so both
+        # cases are exercised whatever the data run holds.
+        bw = json.loads((ROOT / "docs" / "data" / "generators" / "BW02.json").read_text())
+        stub = dict(bw, offers=dict(bw["offers"], window="partial", source_complete=False, intervals_observed=48))
         dpg.close()
+        for label, payload in (("as published", bw), ("marked partial", stub)):
+            dpg = b.new_page(viewport={"width": 1440, "height": 960})
+            dpg.on("pageerror", lambda e: errors.append(str(e)[:160]))
+            # A closure, not a default argument: Playwright passes (route, request) to a two-parameter handler.
+            serve = (lambda body: lambda route: route.fulfill(status=200, content_type="application/json", body=body))
+            dpg.route("**/generators/BW02.json*", serve(json.dumps(payload)))
+            dpg.goto(BASE + "#BW02", wait_until="networkidle")
+            dpg.wait_for_timeout(2500)
+            of = payload["offers"]
+            is_partial = of.get("window") == "partial" or of.get("source_complete") is False
+            pill = dpg.query_selector("#offersBox [data-offers-partial]") is not None
+            box = dpg.inner_text("#offersBox") if dpg.query_selector("#offersBox") else ""
+            says = f"built from {of.get('intervals_observed', 0):,}" in box
+            check(pill == is_partial and says == is_partial,
+                  f"BW02 offers {label}: the partial-month flag shows only for a partial month",
+                  f"window {of.get('window')}, complete {of.get('source_complete')}: pill {pill}, intervals stated {says}")
+            dpg.close()
 
         # Phone: a swipe that starts on a chart scrolls the page
         ctx = b.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)

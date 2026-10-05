@@ -1616,8 +1616,20 @@ function renderCharts(data) {
             const pc = v => v != null ? Math.round(100 * v) + '%' : na;
             const dol = v => v != null ? (v < 0 ? '−$' : '$') + Math.abs(v).toLocaleString('en-AU', { maximumFractionDigits: 0 }) : na;
             ofBox.style.display = 'block';
+            // The payload marks a month built from part of its intervals (window: partial,
+            // source_complete: false). Say so: a 4-hour stub otherwise reads as the month's offers.
+            const partial = of.window === 'partial' || of.source_complete === false;
+            let partialNote = '';
+            if (partial) {
+                const [py, pm] = String(of.month || '').split('-').map(Number);
+                const full = py && pm ? new Date(Date.UTC(py, pm, 0)).getUTCDate() * 288 : null;
+                partialNote = ' Partial month: built from ' + (of.intervals_observed != null
+                    ? Number(of.intervals_observed).toLocaleString('en-AU') + (full ? ' of ' + full.toLocaleString('en-AU') : '') + ' five-minute intervals'
+                    : 'part of its intervals') + ', so these figures cover only that part.';
+            }
             ofBox.innerHTML = statGridHTML(
-                'Energy offers · ' + esc(fmtMonthLong(of.month || '')),
+                'Energy offers · ' + esc(fmtMonthLong(of.month || '')) +
+                    (partial ? ' <span class="pill pill-warn ml-1.5" data-offers-partial>Partial month</span>' : ''),
                 [
                     ['Average offered', mw(of.avg_offered_mw)],
                     ['95th percentile offered', mw(of.offered_mw_p95)],
@@ -1626,7 +1638,7 @@ function renderCharts(data) {
                     ['Days with a negative band', pc(of.negative_band_day_share)],
                 ],
                 'Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.' +
-                    (of.price_asof_month ? ' Prices as of ' + esc(fmtMonthLong(of.price_asof_month)) + '.' : ''));
+                    (of.price_asof_month ? ' Prices as of ' + esc(fmtMonthLong(of.price_asof_month)) + '.' : '') + partialNote);
         } else {
             ofBox.style.display = 'none';
         }
