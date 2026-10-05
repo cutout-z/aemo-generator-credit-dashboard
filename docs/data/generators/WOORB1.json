@@ -1,1 +1,1 @@
-{"duid":"WOORB1","station_name":"Wooreen Battery Energy Storage System","region":"VIC1","fuel_category":"Battery","capacity_mw":491.0,"technology":"Storage","connection_point":"","market":"NEM","lgc_eligible":false}
+{"duid":"WOORB1","station_name":"Wooreen Battery Energy Storage System","region":"VIC1","fuel_category":"Battery","capacity_mw":491.0,"technology":"Storage","connection_point":"VJL21W","market":"NEM","lgc_eligible":false,"mlf":{"years":["FY26-27"],"values":[0.9817]}}

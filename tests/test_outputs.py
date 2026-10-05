@@ -59,35 +59,11 @@ EXPECTED_JSON_KEYS = {
 MONTHLY_CF_BOUNDS: dict[str, float] = {"Hydro": 1.25}
 NON_HYDRO_MONTHLY_CF_BOUND = 1.10
 
-# The one month ever observed above those bounds (2022-06). This is NOT an AEMO
-# archive artifact (the earlier diagnosis was wrong): the raw June 2022 SCADA is
-# clean (BW01 466,485 MWh, CF 0.98). The MMSDM June 2022 DISPATCHLOAD archive
-# repeats 614,466 (SETTLEMENTDATE, DUID) rows with INTERVENTION=0, and the old
-# aggregate_month joined it onto SCADA without a dedupe, multiplying those
-# intervals' generation and revenue (BW01 published 547,389 MWh, CF 1.152; NEM
-# +18.2%). aggregate_month now dedupes and asserts the join preserves rows, but
-# the published 2022-06 rows are settled history and stay wrong until an audited
-# --full-refresh rewrite of that month. REMOVE this exemption in the same change
-# that publishes the rewritten 2022-06; never widen it to mask a new month.
-CF_SUSPENSION_ANOMALY_MONTH = "2022-06"
-
-# Settled battery months whose revenue_aud was never MLF-adjusted (implied factor
-# 1.000). Cause: the MLF source used until 2026-04-21 (src/download_mlf.py, removed
-# in 6b763d2d2) kept only DISPATCHTYPE == "GENERATOR" rows of DUDETAILSUMMARY, so
-# every BIDIRECTIONAL (post-IESS) battery got no factor and revenue x1.0 with no
-# provisional label. The current tracker-based lookup resolves all 26 (audit
-# 2026-10, H3); these rows are frozen by the settled-history guard. The rewrite
-# must run after the MLF tracker publishes its bidirectional fix, which takes the
-# export factor from SECONDARY_TLF; the pre-fix tracker carries the import factor
-# for FY24-25 and FY25-26. REMOVE this
-# exemption in the same change that publishes the audited rewrite of these months.
-UNADJUSTED_BATTERY_DUIDS = frozenset({
-    "BBATTERY1", "BHB1", "BLYTHB1", "BULBES1", "CAPBES1", "CHBESS1", "DPNTB1",
-    "ERB01", "GANNB1", "HBESS1", "HPR1", "KESSB1", "LBB1", "LVES1", "MANNUMB1",
-    "RESS1", "RIVNB2", "TARBESS1", "TB2B1", "TEMPB1", "ULPBESS1", "VBB1",
-    "WANDB1", "WDBESS1", "WDBESS2", "WTAHB1",
-})
-UNADJUSTED_BATTERY_LAST_MONTH = "2026-01"
+# History note (audit 2026-10): 2022-06 was once above these bounds because the old aggregate joined
+# a DISPATCHLOAD archive that repeats (SETTLEMENTDATE, DUID) rows (BW01 CF 1.152); 26 batteries'
+# settled revenue was never MLF-adjusted (the pre-2026-04 MLF source dropped BIDIRECTIONAL units).
+# The audited --full-refresh of 2026-10-05 rewrote both, and their exemptions were removed with it.
+# Do not re-add a month or a unit list here: a new offender is a new defect.
 
 
 def _unadjusted_revenue_offenders(
@@ -169,7 +145,6 @@ def _fuel_aware_monthly_cf_offenders(
     out["month"] = monthly["month"].astype(str)
     flagged = (
         out["cf"].notna()
-        & (out["month"] != CF_SUSPENSION_ANOMALY_MONTH)
         & (out["cf"] > out["bound"])
     )
     return out.loc[flagged, ["duid", "month", "cf", "fuel", "bound"]]
@@ -366,8 +341,9 @@ class TestValueBounds:
 
         The review reproduced a synthetic CF of 50.0 passing the old
         ``cf <= 100`` assertion. The fuel-aware policy must flag it, while
-        intentional hydro exceptions (<= 1.25), override-corrected
-        registrations and the documented 2022-06 anomaly month still pass.
+        intentional hydro exceptions (<= 1.25) and override-corrected
+        registrations still pass. 2022-06 has no exemption any more (audit
+        2026-10 rewrite): a non-hydro CF above 1.10 there fails like anywhere.
         """
         gen = pd.DataFrame(
             {
@@ -383,7 +359,7 @@ class TestValueBounds:
                 # GENX: percent-scale 50.0 (review repro). GENH: hydro 1.19
                 # (documented exception). HUMENSW: raw 1.9 from the stale 29 MW
                 # registration; ~41 GWh clears to ~0.95 under the 58 MW
-                # override. GENY: 2022-06 anomaly month (exempted).
+                # override. GENY: 1.1519 in 2022-06, the old double-counted BW01 value.
                 "generation_mwh": [0.0, 0.0, 41000.0, 0.0],
                 "capacity_factor": [50.0, 1.19, 1.9, 1.1519],
             }
@@ -391,8 +367,8 @@ class TestValueBounds:
         offenders = _fuel_aware_monthly_cf_offenders(monthly, gen)
         flagged = set(offenders["duid"])
         assert "GENX" in flagged, "CF 50.0 (percent-scale) must fail the monthly policy"
-        # GENY sits in the documented 2022-06 anomaly month: exempted.
-        assert "GENY" not in flagged
+        # GENY: 2022-06 is no longer exempt, so its impossible CF is flagged.
+        assert "GENY" in flagged
         # Intentional hydro exception preserved.
         assert "GENH" not in flagged
 
@@ -433,12 +409,8 @@ class TestValueBounds:
 
     def test_revenue_is_mlf_adjusted_where_a_factor_exists(self):
         """No settled row may carry unadjusted revenue (implied factor 1.000)
-        while its FY has a factor != 1, except the documented battery rows."""
-        offenders = _unadjusted_revenue_offenders(self.agg, _live_mlf_frame())
-        known = offenders["duid"].isin(UNADJUSTED_BATTERY_DUIDS) & (
-            offenders["month"] <= UNADJUSTED_BATTERY_LAST_MONTH
-        )
-        new = offenders[~known]
+        while its FY has a factor != 1."""
+        new = _unadjusted_revenue_offenders(self.agg, _live_mlf_frame())
         assert new.empty, (
             "revenue_aud not MLF-adjusted: "
             f"{new[['duid', 'month', 'implied', 'mlf']].head(10).to_dict('records')}"
