@@ -34,6 +34,7 @@ from .market_factors import (
 from .download_bids import fcas_bids_from_raw, fetch_bidperoffer_union
 from .fcas_factor import compute_fcas_factors
 from .factor_cache import merge_month_rows
+from .loss_factors import fetch_loss_factor_periods
 from .offer_curves import (
     OFFER_CURVES_CACHE,
     OFFER_CURVES_DAILY_CACHE,
@@ -559,6 +560,17 @@ def main():
     else:
         logger.info("No draft MLFs available")
 
+    # Dated loss factors (mid-year MLF revisions). Optional: without them
+    # revenue keeps the tracker's per-FY factor, and each row's
+    # revenue_mlf_source says which source was used.
+    try:
+        loss_factor_periods = fetch_loss_factor_periods(
+            str(data_dir), force=(args.full_refresh or args.refresh_mlf),
+        )
+    except Exception as e:
+        logger.warning(f"Loss-factor periods unavailable: {e}")
+        loss_factor_periods = None
+
     generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
     logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
 
@@ -660,6 +672,7 @@ def main():
                 # Aggregate
                 monthly = aggregate_month(
                     scada, prices, dispatchload, generators, mlf_lookup, year, month,
+                    loss_factor_periods=loss_factor_periods,
                 )
                 if not monthly.empty:
                     new_rows.append(monthly)

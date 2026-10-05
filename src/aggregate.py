@@ -19,6 +19,7 @@ import pandas as pd
 
 from . import config
 from .interval_days import INTERVALS_PER_DAY, interval_calendar_day_str
+from .loss_factors import fy_opening_tlf, interval_loss_factors
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ def aggregate_month(
     year: int,
     month: int,
     intermittent_scada: pd.DataFrame | None = None,
+    loss_factor_periods: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Aggregate a single month of 5-minute data to per-generator monthly metrics.
 
@@ -114,6 +116,17 @@ def aggregate_month(
             (every DUID unknown — unadjusted, provisional).
         year: Year being processed
         month: Month being processed
+        loss_factor_periods: DUDETAILSUMMARY factor periods
+            (loss_factors.fetch_loss_factor_periods) or None. Revenue applies
+            the transmission factor IN EFFECT on each interval's day, so a
+            mid-year revision counts from its effective date. For a DUID whose
+            tracker FY factor is exact, the dated values are trusted only when
+            the DUID's first period in the FY carries that same factor. A
+            disagreement leaves the tracker value in force and is logged. This
+            guards against a source that disagrees on which factor a unit
+            carries; for FY26-27 the tracker and DUDETAILSUMMARY swap the
+            generation and load factors of bidirectional units. A DUID with no
+            exact tracker factor uses the dated value wherever one exists.
 
     Returns:
         DataFrame with one row per DUID that had SCADA data this month.
@@ -125,8 +138,11 @@ def aggregate_month(
                  proxy) and price_mwh_* per-bin energy behind each share.
                  (S3-11) Every row also carries the MLF provenance used for its
                  revenue_aud: revenue_mlf_status (exact/prior-carry/unknown),
-                 revenue_mlf_source_fy_start (source FY or None), and
-                 revenue_mlf_value (applied factor, None when unadjusted).
+                 revenue_mlf_source_fy_start (source FY or None),
+                 revenue_mlf_value (applied factor, None when unadjusted;
+                 generation-weighted when the factor changed within the
+                 month), and revenue_mlf_source (dudetailsummary /
+                 mlf-tracker / mixed, None when unadjusted).
     """
     if scada.empty:
         return pd.DataFrame()
@@ -176,6 +192,13 @@ def aggregate_month(
     else:
         merged["AVAILABILITY"] = np.nan
 
+    # Transmission factor in effect per interval (NaN = no dated factor).
+    fy_start = year if month >= 7 else year - 1
+    lf = interval_loss_factors(merged[["SETTLEMENTDATE", "DUID"]], loss_factor_periods)
+    merged["_TLF"] = lf["TLF"].to_numpy()
+    opening_tlf = fy_opening_tlf(loss_factor_periods, fy_start)
+    disagree: list[str] = []
+
     rows = []
     for duid, group in merged.groupby("DUID"):
         capacity = duid_capacity.get(duid)
@@ -190,23 +213,55 @@ def aggregate_month(
             not isinstance(res, dict)
             or res.get("status") == MLF_STATUS_UNKNOWN
         ):
-            mlf_status = MLF_STATUS_UNKNOWN
-            mlf_source_fy_start = None
-            mlf_value = None
-            mlf = 1.0
+            tracker_status = MLF_STATUS_UNKNOWN
+            tracker_fy = None
+            tracker_mlf = None
         else:
-            mlf_status = res["status"]
-            mlf_source_fy_start = res.get("source_fy_start")
-            mlf_value = float(res["mlf"])
-            mlf = mlf_value
+            tracker_status = res["status"]
+            tracker_fy = res.get("source_fy_start")
+            tracker_mlf = float(res["mlf"])
+
+        # Dated factors replace the tracker's FY value where they apply.
+        dated = group["_TLF"]
+        if tracker_status == MLF_STATUS_EXACT and dated.notna().any():
+            opening = opening_tlf.get(duid)
+            if opening is None or abs(opening - tracker_mlf) > 5e-5:
+                disagree.append(duid)
+                dated = dated * np.nan
+        covered = dated.notna()
+        factor = dated.fillna(tracker_mlf if tracker_mlf is not None else 1.0)
+        if covered.all():
+            mlf_status, mlf_source_fy_start, mlf_source = (
+                MLF_STATUS_EXACT, fy_start, "dudetailsummary",
+            )
+        elif tracker_status == MLF_STATUS_UNKNOWN:
+            # Some (or all) intervals have no factor: provisional, as before.
+            mlf_status, mlf_source_fy_start, mlf_source = MLF_STATUS_UNKNOWN, None, None
+        else:
+            mlf_status, mlf_source_fy_start = tracker_status, tracker_fy
+            mlf_source = "mixed" if covered.any() else "mlf-tracker"
 
         # MWh: 5-minute intervals → divide by 12 to get MWh
-        mwh = group["SCADAVALUE"].clip(lower=0).sum() / 12.0
+        gen = group["SCADAVALUE"].clip(lower=0)
+        mwh = gen.sum() / 12.0
 
-        # Revenue: MWh_interval × RRP × MLF, summed
-        # (unknown status: ×1.0 — unadjusted spot revenue, provisional)
-        group_valid = group.dropna(subset=["RRP"])
-        revenue = (group_valid["SCADAVALUE"].clip(lower=0) / 12.0 * group_valid["RRP"] * mlf).sum()
+        # Applied factor for provenance: generation-weighted, so a month that
+        # straddles a revision records the blend its revenue actually used.
+        if mlf_status == MLF_STATUS_UNKNOWN:
+            mlf_value = None
+        elif gen.sum() > 0:
+            mlf_value = float((factor * gen).sum() / gen.sum())
+        else:
+            mlf_value = float(factor.mean())
+
+        # Revenue: MWh_interval × RRP × factor in effect, summed
+        # (unknown status: ×1.0 where no factor — unadjusted, provisional)
+        valid = group["RRP"].notna()
+        group_valid = group[valid]
+        revenue = (
+            group_valid["SCADAVALUE"].clip(lower=0) / 12.0
+            * group_valid["RRP"] * factor[valid]
+        ).sum()
 
         # Capacity factor — not capped; values > 1.0 indicate stale registration or headwater physics
         cap_factor = mwh / (capacity * hours_in_month) if capacity and capacity > 0 else None
@@ -282,6 +337,7 @@ def aggregate_month(
             REVENUE_MLF_STATUS_COL: mlf_status,
             REVENUE_MLF_SOURCE_FY_COL: mlf_source_fy_start,
             REVENUE_MLF_VALUE_COL: round(mlf_value, 6) if mlf_value is not None else None,
+            REVENUE_MLF_SOURCE_COL: mlf_source,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
             "curtailment_actual_mwh": curt_actual_mwh,
             "curtailment_potential_mwh": curt_potential_mwh,
@@ -300,6 +356,12 @@ def aggregate_month(
 
         rows.append(row)
 
+    if disagree:
+        logger.warning(
+            f"{month_label}: DUDETAILSUMMARY's opening FY factor disagrees with the "
+            f"MLF tracker for {len(disagree)} DUIDs — tracker FY value kept: "
+            f"{', '.join(sorted(disagree)[:20])}"
+        )
     result = pd.DataFrame(rows)
     logger.info(f"Aggregated {month_label}: {len(result)} generators with data")
     return result
@@ -405,6 +467,9 @@ MLF_STATUS_UNKNOWN = "unknown"
 REVENUE_MLF_STATUS_COL = "revenue_mlf_status"
 REVENUE_MLF_SOURCE_FY_COL = "revenue_mlf_source_fy_start"
 REVENUE_MLF_VALUE_COL = "revenue_mlf_value"
+# Where revenue_mlf_value came from: "dudetailsummary" (dated factors for every
+# interval), "mlf-tracker" (the tracker's FY factor), "mixed", or None.
+REVENUE_MLF_SOURCE_COL = "revenue_mlf_source"
 
 
 def build_mlf_lookup(

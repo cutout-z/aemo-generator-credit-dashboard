@@ -12,6 +12,7 @@ import pandas as pd
 
 from . import config
 from .aggregate import (
+    REVENUE_MLF_SOURCE_COL,
     REVENUE_MLF_SOURCE_FY_COL,
     REVENUE_MLF_STATUS_COL,
     REVENUE_MLF_VALUE_COL,
@@ -64,6 +65,13 @@ def _add_revenue_mlf_provenance(monthly_doc: dict, monthly_data: pd.DataFrame) -
         monthly_doc["revenue_mlf_value"] = [
             None if pd.isna(v) else float(v)
             for v in monthly_data[REVENUE_MLF_VALUE_COL]
+        ]
+    # Where the factor came from (dated DUDETAILSUMMARY periods vs the
+    # tracker's FY value). Rows aggregated before the column existed: None.
+    if REVENUE_MLF_SOURCE_COL in monthly_data.columns:
+        monthly_doc["revenue_mlf_source"] = [
+            None if pd.isna(v) else str(v)
+            for v in monthly_data[REVENUE_MLF_SOURCE_COL]
         ]
 
 
