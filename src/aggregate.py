@@ -143,6 +143,14 @@ def aggregate_month(
                  generation-weighted when the factor changed within the
                  month), and revenue_mlf_source (dudetailsummary /
                  mlf-tracker / mixed, None when unadjusted).
+                 DLF (audit 2026-10, H4): revenue_aud stays spot revenue x
+                 transmission MLF, which is its published meaning. The
+                 distribution loss factor is applied only in the NEW field
+                 revenue_loss_adjusted_aud (revenue_aud's factor x DLF per
+                 interval). revenue_dlf_value records the generation-weighted
+                 DLF applied, and revenue_dlf_status records whether it was
+                 "published" for every interval, "default" (1.0 throughout:
+                 no DUDETAILSUMMARY value) or "partial".
     """
     if scada.empty:
         return pd.DataFrame()
@@ -196,6 +204,7 @@ def aggregate_month(
     fy_start = year if month >= 7 else year - 1
     lf = interval_loss_factors(merged[["SETTLEMENTDATE", "DUID"]], loss_factor_periods)
     merged["_TLF"] = lf["TLF"].to_numpy()
+    merged["_DLF"] = lf["DLF"].to_numpy()
     opening_tlf = fy_opening_tlf(loss_factor_periods, fy_start)
     disagree: list[str] = []
 
@@ -262,6 +271,23 @@ def aggregate_month(
             group_valid["SCADAVALUE"].clip(lower=0) / 12.0
             * group_valid["RRP"] * factor[valid]
         ).sum()
+
+        # Distribution loss factor (embedded units; 1.0 where none published).
+        dlf_known = group["_DLF"].notna()
+        dlf = group["_DLF"].fillna(1.0)
+        revenue_loss_adjusted = (
+            group_valid["SCADAVALUE"].clip(lower=0) / 12.0
+            * group_valid["RRP"] * factor[valid] * dlf[valid]
+        ).sum()
+        if dlf_known.all():
+            dlf_status = DLF_STATUS_PUBLISHED
+        elif dlf_known.any():
+            dlf_status = DLF_STATUS_PARTIAL
+        else:
+            dlf_status = DLF_STATUS_DEFAULT
+        dlf_value = (
+            float((dlf * gen).sum() / gen.sum()) if gen.sum() > 0 else float(dlf.mean())
+        )
 
         # Capacity factor — not capped; values > 1.0 indicate stale registration or headwater physics
         cap_factor = mwh / (capacity * hours_in_month) if capacity and capacity > 0 else None
@@ -338,6 +364,9 @@ def aggregate_month(
             REVENUE_MLF_SOURCE_FY_COL: mlf_source_fy_start,
             REVENUE_MLF_VALUE_COL: round(mlf_value, 6) if mlf_value is not None else None,
             REVENUE_MLF_SOURCE_COL: mlf_source,
+            REVENUE_LOSS_ADJUSTED_COL: round(revenue_loss_adjusted, 0),
+            REVENUE_DLF_VALUE_COL: round(dlf_value, 6),
+            REVENUE_DLF_STATUS_COL: dlf_status,
             "curtailment_pct": round(curtailment, 4) if curtailment is not None else None,
             "curtailment_actual_mwh": curt_actual_mwh,
             "curtailment_potential_mwh": curt_potential_mwh,
@@ -470,6 +499,14 @@ REVENUE_MLF_VALUE_COL = "revenue_mlf_value"
 # Where revenue_mlf_value came from: "dudetailsummary" (dated factors for every
 # interval), "mlf-tracker" (the tracker's FY factor), "mixed", or None.
 REVENUE_MLF_SOURCE_COL = "revenue_mlf_source"
+# H4: revenue after BOTH loss factors (transmission x distribution). A separate
+# field so revenue_aud keeps its published "MLF-adjusted" meaning.
+REVENUE_LOSS_ADJUSTED_COL = "revenue_loss_adjusted_aud"
+REVENUE_DLF_VALUE_COL = "revenue_dlf_value"
+REVENUE_DLF_STATUS_COL = "revenue_dlf_status"
+DLF_STATUS_PUBLISHED = "published"
+DLF_STATUS_PARTIAL = "partial"
+DLF_STATUS_DEFAULT = "default"
 
 
 def build_mlf_lookup(
