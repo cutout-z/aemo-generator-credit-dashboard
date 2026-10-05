@@ -623,6 +623,27 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
     return pd.DataFrame(rows)
 
 
+def bound_published_curves(curves: pd.DataFrame, listed_duids, window_months: int) -> pd.DataFrame:
+    """The daily stacks the site publishes: the last ``window_months`` calendar months of days, and
+    only units the site lists (the generators index).
+
+    The daily frame covers whatever months the run processed. The daily lane processes two, but a
+    --full-refresh processes five years, and writing that straight out put about two years of day
+    stacks into every file (BW02: 62 days became 761) and 44 files for retired or pre-conversion
+    DUIDs the site never indexes (ADPBA1G, CAPBES1G/L ...). Bounding here keeps the published
+    files the same shape whatever window a run covers.
+    """
+    if curves is None or curves.empty:
+        return curves
+    out = curves[curves["duid"].isin(set(listed_duids))]
+    if out.empty:
+        return out
+    dates = pd.to_datetime(out["date"])
+    last = dates.max().to_period("M")
+    first_day = (last - (window_months - 1)).to_timestamp()
+    return out[dates >= first_day]
+
+
 def write_offer_curve_files(curves: pd.DataFrame, docs_data_dir: str) -> int:
     """Write compact per-DUID day-stack JSONs: docs/data/offer_curves/{DUID}.json.
 

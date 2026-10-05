@@ -46,6 +46,7 @@ from .offer_curves import (
     energy_volumes_from_raw,
     fetch_energy_prices,
     keep_most_complete_offer_rows,
+    bound_published_curves,
     write_offer_curve_files,
 )
 from .freshness import check_monthly_freshness, check_daily_freshness
@@ -971,7 +972,10 @@ def main():
         # (last-known-good) and the manifest records the lane as degraded —
         # they are never rewritten from stale frames.
         offer_curves_daily.to_feather(data_dir / OFFER_CURVES_DAILY_CACHE)
-        write_offer_curve_files(offer_curves_daily, str(docs_data_dir))
+        write_offer_curve_files(
+            bound_published_curves(offer_curves_daily, generators["DUID"], config.OFFER_CURVE_WINDOW_MONTHS),
+            str(docs_data_dir),
+        )
 
     factor_lanes = [
         fcas_lane, offer_lane, curve_lane,

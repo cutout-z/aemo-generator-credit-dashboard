@@ -314,3 +314,7 @@ MAX_RETRIES = 3
 RETRY_BACKOFF = 5  # seconds
 REQUEST_TIMEOUT = 60
 USER_AGENT = "Mozilla/5.0 AEMO-Generator-Credit-Dashboard"
+
+# Published daily offer stacks (docs/data/offer_curves/{DUID}.json): the last N calendar months of
+# days, whatever window a run processed (a --full-refresh processes five years).
+OFFER_CURVE_WINDOW_MONTHS = 2
