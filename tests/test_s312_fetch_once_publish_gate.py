@@ -27,13 +27,19 @@ from src.main import _run_optional_factor_lanes
 
 
 def _bidperoffer_raw(year: int, month: int) -> pd.DataFrame:
-    """One FCAS row + one ENERGY volume row for the month (union columns).
+    """One FCAS row + two ENERGY volume rows for the month (union columns).
 
     The ENERGY volume is stamped 01 00:05 (interval END) → calendar day 01,
-    matching the BIDDAYOFFER trading day so daily stacks have an intersection.
+    matching the BIDDAYOFFER trading day so daily stacks have an intersection;
+    a second interval on the month's final day makes the volume source
+    complete (a finished month with a partial source degrades the lane).
     """
     fcas_day = f"{year}-{month:02d}-15"
     vol_day = f"{year}-{month:02d}-01"
+    last_day = (
+        f"{year}-{month:02d}-"
+        f"{pd.Period(f'{year}-{month:02d}', freq='M').days_in_month}"
+    )
     fcas = {
         "INTERVAL_DATETIME": pd.to_datetime([f"{fcas_day} 12:00:00"]),
         "DUID": ["GEN1"], "BIDTYPE": ["RAISE6SEC"],
@@ -41,14 +47,14 @@ def _bidperoffer_raw(year: int, month: int) -> pd.DataFrame:
         "VERSIONNO": [1],
     }
     eng = {
-        "INTERVAL_DATETIME": pd.to_datetime([f"{vol_day} 00:05:00"]),
-        "DUID": ["GEN1"], "BIDTYPE": ["ENERGY"],
-        "MAXAVAIL": [0.0], "ENABLEMENTMIN": [0.0], "ENABLEMENTMAX": [0.0],
-        "VERSIONNO": [1],
+        "INTERVAL_DATETIME": pd.to_datetime([f"{vol_day} 00:05:00", f"{last_day} 12:00:00"]),
+        "DUID": ["GEN1"] * 2, "BIDTYPE": ["ENERGY"] * 2,
+        "MAXAVAIL": [0.0] * 2, "ENABLEMENTMIN": [0.0] * 2, "ENABLEMENTMAX": [0.0] * 2,
+        "VERSIONNO": [1] * 2,
     }
     for i in range(1, 11):
         fcas[f"BANDAVAIL{i}"] = [0.0]
-        eng[f"BANDAVAIL{i}"] = [10.0 if i == 1 else 0.0]
+        eng[f"BANDAVAIL{i}"] = [10.0 if i == 1 else 0.0] * 2
     return pd.concat([pd.DataFrame(fcas), pd.DataFrame(eng)], ignore_index=True)
 
 
