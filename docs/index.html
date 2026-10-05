@@ -1024,22 +1024,34 @@ function renderKPIs(data) {
         setKPI('kpiGen', KPI_DASH, `No generation reported in ${monthsPhrase}`);
     }
 
-    // Revenue: SCADA MWh × regional price × MLF. Months without a factor are unadjusted and
-    // provisional by contract (S3-11) — say so, with a word and not only a colour.
-    const rev = present(inWindow('revenue_aud'));
+    // Revenue: SCADA MWh × regional price × MLF × DLF — the price the unit is actually paid at its
+    // connection point. revenue_loss_adjusted_aud carries MLF × DLF; months aggregated before that
+    // field existed carry null there and fall back to revenue_aud (MLF only), and the note says how
+    // many months rest on which basis. Months without an MLF are unadjusted and provisional by
+    // contract (S3-11) — say so, with a word and not only a colour.
+    const revMlf = inWindow('revenue_aud');
+    const revDlf = inWindow('revenue_loss_adjusted_aud');
+    const hasDlf = i => revDlf[i] != null && !isNaN(revDlf[i]);
+    const revBasis = revMlf.map((v, i) => hasDlf(i) ? revDlf[i] : v);
+    const rev = present(revBasis);
     if (rev.length) {
         const [v, u] = fmtAUDParts(rev.reduce((a, b) => a + b, 0));
         const [revV, revU] = [v, u];
         const status = inWindow('revenue_mlf_status');
         const provisional = status.filter(st => st === 'unknown').length;
+        const nDlf = revBasis.filter((v, i) => v != null && !isNaN(v) && hasDlf(i)).length;
+        const mlfKnown = status.length && status.every(st => st === 'exact' || st === 'prior-carry');
+        // Without MLF provenance the MLF-only months make no adjustment claim; MLF × DLF months do,
+        // because that field only exists where the factors were applied.
+        const basis = nDlf === rev.length ? 'MLF × DLF-adjusted'
+            : nDlf ? `MLF × DLF for ${nDlf} of ${rev.length} months, MLF only for the rest`
+            : mlfKnown ? 'MLF-adjusted (DLF not yet applied)' : '';
         let sub;
         if (provisional) {
             sub = `<span class="pill pill-warn mr-1.5 align-middle"><span class="badge-dot"></span>Provisional</span>` +
                   (provisional === n ? 'not MLF-adjusted' : `${provisional} of ${n} months not MLF-adjusted`);
-        } else if (status.length && status.every(st => st === 'exact' || st === 'prior-carry')) {
-            sub = 'MLF-adjusted · excl. FCAS and contracts';
         } else {
-            sub = 'Excl. FCAS and contracts';
+            sub = basis ? `${basis} · excl. FCAS and contracts` : 'Excl. FCAS and contracts';
         }
         if (data.fuel_category === 'Battery') sub += ' · charging cost not netted';
         setKPI('kpiRev', kpiValueHTML(revV, revU, true), sub);
@@ -2297,7 +2309,14 @@ function buildMonthlyRows(data) {
         const row = {
             'Month': month,
             'Generation (MWh)': m.generation_mwh ? m.generation_mwh[i] : null,
-            'Revenue (AUD)': m.revenue_aud ? m.revenue_aud[i] : null,
+            // MLF × DLF first (what the unit is paid at its connection point); blank for months
+            // aggregated before the field existed. The MLF-only figure stays alongside.
+            ...(m.revenue_loss_adjusted_aud ? {
+                'Revenue after MLF × DLF (AUD)': m.revenue_loss_adjusted_aud[i],
+                'Revenue DLF Factor': (m.revenue_dlf_value || [])[i] ?? '',
+                'Revenue DLF Status': (m.revenue_dlf_status || [])[i] || '',
+            } : {}),
+            'Revenue, MLF only (AUD)': m.revenue_aud ? m.revenue_aud[i] : null,
             'Capacity Factor': m.capacity_factor ? m.capacity_factor[i] : null,
             'Captured Price ($/MWh)': m.captured_price ? m.captured_price[i] : null,
             'Avg Regional RRP ($/MWh)': m.avg_rrp ? m.avg_rrp[i] : null,
