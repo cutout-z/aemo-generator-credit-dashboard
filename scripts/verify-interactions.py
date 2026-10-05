@@ -342,6 +342,47 @@ def main() -> int:
                   f"window {of.get('window')}, complete {of.get('source_complete')}: pill {pill}, intervals stated {says}")
             dpg.close()
 
+        # Revenue KPI: MLF × DLF wherever a month carries revenue_loss_adjusted_aud, MLF only where it
+        # does not, and the note states the basis. BW02 is served with the field absent, on the last
+        # two months only, and on every month (at 90% of revenue_aud, so a wrong basis shows).
+        base_m = bw["monthly"]
+        n_months = len(base_m["months"])
+        cases = (("absent", None), ("last 2 months", 2), ("every month", n_months))
+        for label, k in cases:
+            m = dict(base_m)
+            m.pop("revenue_loss_adjusted_aud", None)
+            if k:
+                m["revenue_loss_adjusted_aud"] = [None] * (n_months - k) + [
+                    None if v is None else round(v * 0.9) for v in base_m["revenue_aud"][-k:]]
+            payload = dict(bw, monthly=m)
+            dpg = b.new_page(viewport={"width": 1440, "height": 960})
+            dpg.on("pageerror", lambda e: errors.append(str(e)[:160]))
+            serve = (lambda body: lambda route: route.fulfill(status=200, content_type="application/json", body=body))
+            dpg.route("**/generators/BW02.json*", serve(json.dumps(payload)))
+            dpg.goto(BASE + "#BW02", wait_until="networkidle")
+            dpg.wait_for_timeout(2500)
+            win = dpg.evaluate("KPI_WINDOW")
+            mlf = base_m["revenue_aud"][-win:]
+            dlf = (m.get("revenue_loss_adjusted_aud") or [None] * n_months)[-win:]
+            used = [d if d is not None else v for v, d in zip(mlf, dlf)]
+            total = sum(v for v in used if v is not None)
+            n_rev = sum(v is not None for v in used)
+            n_dlf = sum(d is not None for v, d in zip(mlf, dlf) if (d if d is not None else v) is not None)
+            want_val = "".join(dpg.evaluate("t => fmtAUDParts(t)", total))
+            got_val = dpg.inner_text("#kpiRev").replace("\n", "").replace(" ", "")
+            sub = dpg.inner_text("#kpiRevSub")
+            st = (base_m.get("revenue_mlf_status") or [])[-win:]
+            mlf_known = bool(st) and all(x in ("exact", "prior-carry") for x in st)
+            want_sub = ("MLF × DLF-adjusted" if n_dlf == n_rev else
+                        f"MLF × DLF for {n_dlf} of {n_rev} months" if n_dlf else
+                        "MLF-adjusted (DLF not yet applied)" if mlf_known else "Excl. FCAS and contracts")
+            if "unknown" in st:
+                want_sub = "Provisional"          # the provisional note takes precedence, as on the page
+            check(got_val == want_val.replace(" ", "") and want_sub in sub,
+                  f"revenue KPI with MLF × DLF {label}: total and basis recomputed from the payload",
+                  f"page {got_val} / {sub[:60]!r} vs {want_val} / {want_sub!r}")
+            dpg.close()
+
         # Phone: a swipe that starts on a chart scrolls the page
         ctx = b.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)
         ph = ctx.new_page()
