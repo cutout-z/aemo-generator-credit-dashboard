@@ -101,10 +101,12 @@ def test_fy_curtailment_is_ratio_of_energy_sums(tmp_path):
     assert row["metric_version"] == config.CURTAILMENT_METRIC_VERSION
     assert row["months_covered"] == 2
     assert row["generation_mwh"] == 100
-    # Downstream consumer schema (AEMO Renewable Generator Dashboard) intact
+    # Downstream consumer schema (AEMO Renewable Generator Dashboard) intact;
+    # the partial-FY columns (audit 2026-10, L3) are appended after it.
     assert set(df.columns) == {
         "duid", "fy_start", "fy_label", "curtailment_pct",
         "metric_version", "generation_mwh", "months_covered",
+        "first_month", "last_month", "fy_complete",
     }
 
 

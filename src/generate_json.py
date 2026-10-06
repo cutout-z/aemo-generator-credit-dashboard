@@ -577,6 +577,11 @@ def write_curtailment_by_fy(
             "metric_version": config.CURTAILMENT_METRIC_VERSION,
             "generation_mwh": round(float(group["generation_mwh"].sum()), 0),
             "months_covered": int(len(group)),
+            # Partial FYs said explicitly (L3): the current FY, the first FY of
+            # the history window, and a unit's commissioning or retirement FY.
+            "first_month": str(group["month"].min()),
+            "last_month": str(group["month"].max()),
+            "fy_complete": bool(group["month"].nunique() >= 12),
         })
 
     if not rows:
@@ -587,6 +592,7 @@ def write_curtailment_by_fy(
         pd.DataFrame(columns=[
             "duid", "fy_start", "fy_label", "curtailment_pct",
             "metric_version", "generation_mwh", "months_covered",
+            "first_month", "last_month", "fy_complete",
         ]).to_csv(out_path, index=False)
         return out_path
     result = pd.DataFrame(rows).sort_values(["duid", "fy_start"])
