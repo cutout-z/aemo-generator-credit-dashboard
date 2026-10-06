@@ -889,13 +889,15 @@ def _generate_station_files(
                     agg_spec["intervals_observed"] = ("intervals_observed", "sum")
                     agg_spec["intervals_expected"] = ("intervals_expected", "sum")
                 grouped_daily = station_daily.groupby("date").agg(**agg_spec).reset_index()
-                # Recompute CF from total generation and total capacity
-                if total_capacity and total_capacity > 0:
-                    grouped_daily["daily_capacity_factor"] = (
-                        grouped_daily["daily_generation_mwh"] / (total_capacity * 24)
-                    ).round(4)
-                else:
-                    grouped_daily["daily_capacity_factor"] = None
+                # CF over the capacity of the members that reported that day
+                # (see _aggregate_station_monthly).
+                basis = station_daily.groupby("date")["duid"].agg(
+                    lambda d: reporting_capacity(d, capacity_by_duid, total_capacity)
+                )
+                basis = grouped_daily["date"].map(basis).astype(float)
+                grouped_daily["daily_capacity_factor"] = (
+                    grouped_daily["daily_generation_mwh"] / (basis * 24)
+                ).where(basis > 0).round(4)
                 grouped_daily = grouped_daily.sort_values("date")
                 doc["daily"] = {
                     "dates": grouped_daily["date"].tolist(),
@@ -952,6 +954,20 @@ def _generate_station_files(
         logger.info(f"Added {len(station_entries)} {market} station entries to index.json")
 
     return count
+
+
+def reporting_capacity(
+    duids, capacity_by_duid: dict[str, float] | None, total_capacity: float | None,
+) -> float | None:
+    """Registered MW of the members present in ``duids`` (each counted once).
+
+    Falls back to the station total when no per-unit capacities are known.
+    """
+    if not capacity_by_duid:
+        return float(total_capacity) if total_capacity else None
+    caps = [capacity_by_duid.get(d) for d in pd.unique(pd.Series(list(duids)))]
+    caps = [float(c) for c in caps if c is not None and not pd.isna(c)]
+    return sum(caps) if caps else None
 
 
 def _aggregate_station_monthly(
@@ -1024,17 +1040,23 @@ def _aggregate_station_monthly(
         act_sum = float(energy["_eligible_actual_mwh"].sum())
         return round(max(0.0, 1.0 - act_sum / pot_sum), 4)
 
+    capacity_basis = []
     for m in months:
         month_data = grouped.get_group(m)
         total_gen = month_data["generation_mwh"].sum()
         gen_mwh.append(round(total_gen, 0))
         revenue.append(round(month_data["revenue_aud"].sum(), 0))
 
-        # Capacity factor from total generation
+        # Capacity factor over the capacity of the members that REPORTED this
+        # month. A registered unit that never sends SCADA (Snuggery: 63 of
+        # 126 MW) contributes no generation, so counting its nameplate halved
+        # the station's CF.
         year, mon = int(m[:4]), int(m[5:])
         hours = monthrange(year, mon)[1] * 24
-        if total_capacity and total_capacity > 0:
-            cap_factor.append(round(total_gen / (total_capacity * hours), 4))
+        basis = reporting_capacity(month_data["duid"], capacity_by_duid, total_capacity)
+        capacity_basis.append(round(basis, 3) if basis else None)
+        if basis and basis > 0:
+            cap_factor.append(round(total_gen / (basis * hours), 4))
         else:
             cap_factor.append(None)
 
@@ -1072,6 +1094,8 @@ def _aggregate_station_monthly(
         "generation_mwh": gen_mwh,
         "revenue_aud": revenue,
         "capacity_factor": cap_factor,
+        # MW behind each month's capacity factor (members that reported).
+        "capacity_basis_mw": capacity_basis,
     }
     # H4: station revenue after MLF x DLF = sum of member units' values; None
     # for a month where any member predates the field (never a partial sum).
