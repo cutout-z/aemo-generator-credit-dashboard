@@ -757,6 +757,29 @@ def _safe_station_filename(name: str) -> str:
     return f"station_{safe}"
 
 
+def station_fuel_mix(group: pd.DataFrame) -> tuple[str, str, dict[str, float]]:
+    """(dominant fuel, its technology, {fuel: MW}) for a station's member units.
+
+    The station's fuel is the fuel with the most registered capacity, never the
+    first-listed unit's: Moorabool Wind Farm lists its 2 MW battery before its
+    312 MW wind unit and published as "Battery" (curtailment panels hidden,
+    "not LGC-eligible"). Ties break alphabetically so the choice is stable.
+    The technology is that of the largest unit of the dominant fuel.
+    """
+    fuels = group["FUEL_CATEGORY"].map(_text)
+    caps = pd.to_numeric(group["CAPACITY_MW"], errors="coerce").fillna(0.0)
+    mix = caps.groupby(fuels).sum()
+    mix = mix[mix.index != ""]
+    if mix.empty:
+        return _text(group["FUEL_CATEGORY"].iloc[0]), _text(group["TECHNOLOGY"].iloc[0]), {}
+    ranked = sorted(mix.items(), key=lambda kv: (-kv[1], kv[0]))
+    fuel = ranked[0][0]
+    members = group[fuels == fuel]
+    lead = members.loc[pd.to_numeric(members["CAPACITY_MW"], errors="coerce").fillna(0.0).idxmax()]
+    technology = _text(lead.get("TECHNOLOGY", ""))
+    return fuel, technology, {k: round(float(v), 3) for k, v in ranked}
+
+
 def _generate_station_files(
     generators: pd.DataFrame,
     monthly_aggregates: pd.DataFrame | None,
@@ -786,8 +809,8 @@ def _generate_station_files(
         duids = group["DUID"].tolist()
         total_capacity = group["CAPACITY_MW"].sum() if "CAPACITY_MW" in group.columns else 0
         region = _text(group["REGION"].iloc[0])
-        fuel = _text(group["FUEL_CATEGORY"].iloc[0])
-        technology = _text(group["TECHNOLOGY"].iloc[0])
+        fuel, technology, fuel_mix = station_fuel_mix(group)
+        member_fuels = set(fuel_mix)
         connection_points = group.get("CONNECTION_POINT", pd.Series()).tolist()
         capacity_by_duid = group.set_index("DUID")["CAPACITY_MW"].to_dict()
 
@@ -804,6 +827,9 @@ def _generate_station_files(
             "connection_points": [_text(cp) for cp in connection_points if _text(cp)],
             "lgc_eligible": fuel in config.LGC_ELIGIBLE_FUEL_TYPES,
         }
+        if len(fuel_mix) > 1:
+            # Mixed station (hybrid): every member fuel with its registered MW.
+            doc["fuel_mix"] = fuel_mix
 
         # Aggregate monthly data across DUIDs
         if monthly_aggregates is not None and not monthly_aggregates.empty:
@@ -811,6 +837,7 @@ def _generate_station_files(
             if not station_monthly.empty:
                 doc["monthly"] = _aggregate_station_monthly(
                     station_monthly, total_capacity, fuel, capacity_by_duid,
+                    member_fuels=member_fuels,
                 )
 
         # Per-DUID MLFs
@@ -932,8 +959,14 @@ def _aggregate_station_monthly(
     total_capacity: float,
     fuel: str,
     capacity_by_duid: dict[str, float] | None = None,
+    member_fuels: set[str] | None = None,
 ) -> dict:
-    """Aggregate monthly metrics across multiple DUIDs for a station."""
+    """Aggregate monthly metrics across multiple DUIDs for a station.
+
+    Curtailment is published when ANY member is solar or wind (a hybrid's
+    battery must not hide its wind farm's curtailment); only the members that
+    carry curtailment rows contribute to it.
+    """
     from calendar import monthrange
 
     if capacity_by_duid:
@@ -955,8 +988,9 @@ def _aggregate_station_monthly(
     avg_rrp = []
     pcr = []
 
-    has_curtailment = "curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
-    has_econ_curt = "econ_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
+    curtailable = bool(({fuel} | set(member_fuels or ())) & set(config.CURTAILMENT_FUEL_TYPES))
+    has_curtailment = "curtailment_pct" in station_monthly.columns and curtailable
+    has_econ_curt = "econ_curtailment_pct" in station_monthly.columns and curtailable
     has_price = "captured_price" in station_monthly.columns
 
     def weighted_pct(month_data: pd.DataFrame, col: str) -> float | None:
