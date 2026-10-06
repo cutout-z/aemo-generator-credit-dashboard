@@ -332,9 +332,10 @@ def _offer_frames(complete=True, boundary_midnight=False):
         **{f"PRICEBAND{i}": [10.0 * i, 20.0 * i, 30.0 * i] for i in range(1, 11)},
     })
     vrows = []
-    # Day 1 volumes: 3 intervals ending 00:05/00:10/00:15.
+    # Day 1 volumes: 3 intervals ending 04:05/04:10/04:15 (the start of the
+    # 1 July trading day; daily stacks group volumes by trading day).
     for i in range(3):
-        vrows.append(("2026-07-01 00:%02d:00" % (5 + 5 * i), 10.0))
+        vrows.append(("2026-07-01 04:%02d:00" % (5 + 5 * i), 10.0))
     if boundary_midnight:
         # The interval ending 2026-08-01 00:00 is 31 July's final 5 minutes.
         vrows.append(("2026-08-01 00:00:00", 10.0))

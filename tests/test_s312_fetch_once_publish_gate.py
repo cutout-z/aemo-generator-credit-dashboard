@@ -29,7 +29,7 @@ from src.main import _run_optional_factor_lanes
 def _bidperoffer_raw(year: int, month: int) -> pd.DataFrame:
     """One FCAS row + two ENERGY volume rows for the month (union columns).
 
-    The ENERGY volume is stamped 01 00:05 (interval END) → calendar day 01,
+    The ENERGY volume is stamped 01 04:05 (interval END) → trading day 01,
     matching the BIDDAYOFFER trading day so daily stacks have an intersection;
     a second interval on the month's final day makes the volume source
     complete (a finished month with a partial source degrades the lane).
@@ -47,7 +47,7 @@ def _bidperoffer_raw(year: int, month: int) -> pd.DataFrame:
         "VERSIONNO": [1],
     }
     eng = {
-        "INTERVAL_DATETIME": pd.to_datetime([f"{vol_day} 00:05:00", f"{last_day} 12:00:00"]),
+        "INTERVAL_DATETIME": pd.to_datetime([f"{vol_day} 04:05:00", f"{last_day} 12:00:00"]),
         "DUID": ["GEN1"] * 2, "BIDTYPE": ["ENERGY"] * 2,
         "MAXAVAIL": [0.0] * 2, "ENABLEMENTMIN": [0.0] * 2, "ENABLEMENTMAX": [0.0] * 2,
         "VERSIONNO": [1] * 2,
@@ -279,7 +279,7 @@ class TestOfferCurveFilesPublishGate:
             "DUID": ["T1"], "SETTLEMENTDATE": pd.to_datetime(["2026-07-01"]),
             **{f"PRICEBAND{i}": [float(i)] for i in range(1, 11)},
         })
-        vols = {"DUID": ["T1"], "INTERVAL_DATETIME": pd.to_datetime(["2026-07-01 00:05"])}
+        vols = {"DUID": ["T1"], "INTERVAL_DATETIME": pd.to_datetime(["2026-07-01 04:05"])}
         for i in range(1, 11):
             vols[f"BANDAVAIL{i}"] = [10.0] if i == 1 else [0.0]
         return compute_offer_curves_daily(prices, pd.DataFrame(vols), "2026-07")

@@ -33,7 +33,7 @@ from pathlib import Path
 import pandas as pd
 
 from .download_bids import fetch_bidperoffer_union
-from .interval_days import interval_calendar_day, interval_month
+from .interval_days import interval_calendar_day, interval_month, interval_trading_day_str
 from .semantic_publish import write_json_if_facts_changed
 
 logger = logging.getLogger(__name__)
@@ -579,10 +579,9 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
 
     BIDDAYOFFER_D carries one row per DUID/day (version-deduped upstream), so
     the day's prices are that row's bands; volumes are averaged across the
-    day's intervals. S3-05: volume intervals are END-stamped — the day a
-    volume belongs to is interval_calendar_day(INTERVAL_DATETIME), so the
-    interval ending at midnight joins the preceding calendar day. Price days
-    keep their BIDDAYOFFER_D trading-day date. Zero-width bands are dropped
+    day's intervals. Volume intervals are END-stamped and grouped by the
+    TRADING day they belong to (interval_trading_day_str: 04:05 to 04:00 next
+    day), the same day BIDDAYOFFER_D keys its prices by. Zero-width bands are dropped
     HERE (cum == previous cum), so downstream files stay compact and axes
     stay sane.
     """
@@ -598,7 +597,14 @@ def compute_offer_curves_daily(prices: pd.DataFrame, volumes: pd.DataFrame, mont
     pr = prices.copy()
     vr = volumes.copy()
     pr["date"] = pd.to_datetime(pr["SETTLEMENTDATE"]).dt.strftime("%Y-%m-%d")
-    vr["date"] = interval_calendar_day(pd.to_datetime(vr["INTERVAL_DATETIME"])).astype(str)
+    # Volumes join their prices on the TRADING day (04:00-04:00), the key
+    # BIDDAYOFFER_D uses. Calendar days paired each day's prices with volumes
+    # shifted by four hours (audit 2026-10, L10). Only this month's trading
+    # days are kept: the fetch window also carries the previous month's last
+    # trading day (4 hours of volumes), which must not become a stub stack.
+    vr["date"] = interval_trading_day_str(vr["INTERVAL_DATETIME"])
+    pr = pr[pr["date"].str[:7] == month]
+    vr = vr[vr["date"].str[:7] == month]
     pv = pr.groupby(["DUID", "date"])[BAND_PRICE_COLS].mean()
     vv = vr.groupby(["DUID", "date"])[BAND_AVAIL_COLS].mean().clip(lower=0)
     # BANDAVAIL tranches are INCREMENTAL (each band = additional MW on top of

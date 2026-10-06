@@ -53,3 +53,17 @@ def interval_month(ts: pd.Series) -> pd.Series:
     if t.empty:
         return t.dt.to_period("M").astype(str)
     return (t - pd.Timedelta(minutes=1)).dt.to_period("M").astype(str)
+
+
+def interval_trading_day_str(ts: pd.Series) -> pd.Series:
+    """NEM trading day (``YYYY-MM-DD``) an interval-END timestamp belongs to.
+
+    A trading day runs 04:00 to 04:00: its first interval ends at 04:05 and its
+    last at 04:00 the next calendar day. BIDDAYOFFER_D prices are keyed by
+    trading day, so per-interval offer volumes (BIDPEROFFER_D) must be grouped
+    the same way before the two are paired: ``(end - 4h01m).date()``.
+    """
+    t = pd.to_datetime(ts)
+    if t.empty:
+        return t.dt.date.astype(str)
+    return (t - pd.Timedelta(hours=4, minutes=1)).dt.date.astype(str)
