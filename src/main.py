@@ -151,8 +151,21 @@ def _constraint_months_to_process(
     return sorted(set(tail) | set(catch_up))
 
 
+def _constraints_or_cached(constraints: pd.DataFrame, cache_path: Path) -> tuple[pd.DataFrame, bool]:
+    """The constraint frame to publish: this run's, or the cached aggregates when the run has none.
+
+    A constraints run whose GENCONDATA / SPDCONNECTIONPOINTCONSTRAINT fetch came back empty
+    used to publish every unit file without its constraints block (2026-10-06, 559fd1115).
+    Returns (frame, retained) where retained says the cached history was used instead.
+    """
+    if (constraints is None or constraints.empty) and Path(cache_path).exists():
+        return pd.read_feather(cache_path), True
+    return (constraints if constraints is not None else pd.DataFrame()), False
+
+
 def _constraint_lane(
     constraints: pd.DataFrame, monthly: pd.DataFrame, *, skipped: bool, error: str | None = None,
+    retained: bool = False,
 ) -> LaneRun:
     """Run-manifest record for the binding-constraint data, with a freshness check.
 
@@ -168,6 +181,9 @@ def _constraint_lane(
     if skipped:
         lane.status = STATUS_SKIPPED
         lane.note = "explicit --skip-constraints; cached constraint history kept"
+    if retained:
+        lane.retained = True
+        lane.note = "no new constraint data this run; cached constraint history kept"
     if error:
         lane.status = STATUS_DEGRADED
         lane.error = error
@@ -1007,10 +1023,9 @@ def main():
         except Exception as e:
             logger.error(f"Constraint aggregation failed: {e}")
             constraint_error = f"constraint aggregation failed: {e}"
-            if constraint_path.exists():
-                all_constraints = pd.read_feather(constraint_path)
-    elif constraint_path.exists():
-        all_constraints = pd.read_feather(constraint_path)
+    all_constraints, constraints_retained = _constraints_or_cached(all_constraints, constraint_path)
+    if constraints_retained and not args.skip_constraints:
+        logger.warning(f"No constraint data this run; keeping the cached aggregates ({len(all_constraints)} rows)")
 
     # Step 3b-fix: apply capacity overrides retroactively so retained history
     # (monthly + daily CF) is consistent with corrected registration. This is
@@ -1316,6 +1331,7 @@ def main():
     constraint_lane = _constraint_lane(
         all_constraints, all_monthly,
         skipped=bool(args.skip_constraints), error=constraint_error,
+        retained=constraints_retained and not args.skip_constraints,
     )
     all_lanes = factor_lanes + [market_lane, constraint_lane]
     manifest = build_manifest(

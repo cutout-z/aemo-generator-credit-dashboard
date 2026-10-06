@@ -51,3 +51,29 @@ def test_incremental_constraint_months_catch_up_after_a_gap():
     assert pipeline._constraint_months_to_process(window, "2026-09", 2) == [(2026, 8), (2026, 9)]
     # Nothing cached: the whole window.
     assert pipeline._constraint_months_to_process(window, None, 2) == window
+
+
+def test_a_run_with_no_constraint_data_keeps_the_cached_aggregates(tmp_path):
+    """559fd1115 published every unit without its constraints block: the constraints lane's
+    GENCONDATA fetch came back empty and the cached aggregates were not loaded."""
+    cons, gen = _frames()
+    path = tmp_path / "constraint_aggregates.feather"
+    cons.to_feather(path)
+    frame, retained = pipeline._constraints_or_cached(pd.DataFrame(), path)
+    assert retained and frame.equals(cons)
+    lane = pipeline._constraint_lane(frame, gen, skipped=False,
+                                     error="GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable",
+                                     retained=True)
+    rec = lane.manifest_record()
+    assert rec["retained_last_good"] is True and rec["asof_month"] == "2026-03"
+    assert lane.status == STATUS_DEGRADED
+
+
+def test_fresh_constraint_data_is_used_as_is(tmp_path):
+    cons, _ = _frames()
+    path = tmp_path / "constraint_aggregates.feather"
+    pd.DataFrame({"duid": ["OLD"], "month": ["2020-01"]}).to_feather(path)
+    frame, retained = pipeline._constraints_or_cached(cons, path)
+    assert not retained and frame is cons
+    frame, retained = pipeline._constraints_or_cached(pd.DataFrame(), tmp_path / "missing.feather")
+    assert not retained and frame.empty
