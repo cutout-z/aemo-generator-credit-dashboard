@@ -352,6 +352,7 @@ The current CF > 1.0 audit list covers the TAS/NSW hydro peakers KAREEYA1–4, P
 ## Known Limitations
 
 - **Revenue is 100% merchant assumption**: Does not include PPA, FCAS, or LGC income — useful as a stress-test floor, not actual revenue
+- **Battery revenue is gross discharge revenue**: SCADA is clipped at zero, so a battery's revenue is what it earned discharging; what it paid to charge is not netted (Aug 2026 fleet: $49.7M gross vs $29.0M net, 513 GWh out, 605 GWh in). The page says so on the revenue KPI of a battery unit or a station with a battery member, and the export's `Revenue Basis` column carries the same note
 - **Pre-Aug 2024 curtailment is unsplit**: Before August 2024, curtailment cannot be separated into grid vs. mechanical components (INTERMITTENT_GEN_SCADA data not available)
 - **Economic curtailment is estimated**: Based on RRP < $0 proxy — cannot distinguish voluntary bid-off from AEMO dispatch instructions without bid data
 - **FCAS participation factors are offer-based estimates**: Derived from BIDPEROFFER_D offers (services offered, offered MW) — actual enablement, output and revenue require participant-only data. The regional FCAS price chart is regional-average by design

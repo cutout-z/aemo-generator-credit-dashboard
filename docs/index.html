@@ -998,6 +998,16 @@ function setKPIsLoading() {
     }
 }
 
+// Battery revenue is spot revenue on DISCHARGE only: what the unit paid for the energy it charged
+// is not netted (Aug 2026 fleet: $49.7M gross vs $29.0M net). Said wherever revenue is shown or
+// exported, for a battery unit and for a station with a battery member.
+function revenueBasisNote(data) {
+    if (!data) return '';
+    if (data.fuel_category === 'Battery') return 'discharge only, charging cost not netted';
+    if (data.fuel_mix && data.fuel_mix.Battery) return 'battery discharge gross, charging cost not netted';
+    return '';
+}
+
 function renderKPIs(data) {
     const row = document.getElementById('kpiRow');
     const foot = document.getElementById('kpiFoot');
@@ -1053,7 +1063,8 @@ function renderKPIs(data) {
         } else {
             sub = basis ? `${basis} · excl. FCAS and contracts` : 'Excl. FCAS and contracts';
         }
-        if (data.fuel_category === 'Battery') sub += ' · charging cost not netted';
+        const batteryNote = revenueBasisNote(data);
+        if (batteryNote) sub += ' · ' + batteryNote;
         setKPI('kpiRev', kpiValueHTML(revV, revU, true), sub);
     } else {
         setKPI('kpiRev', KPI_DASH, `No revenue reported in ${monthsPhrase}`);
@@ -2396,6 +2407,7 @@ function buildInfoRows(data) {
         'Nameplate (MW)': data.capacity_mw != null ? data.capacity_mw : '',
         'Connection Point': data.connection_point || '',
         'LGC Eligible': data.lgc_eligible ? 'Yes' : 'No',
+        'Revenue Basis': revenueBasisNote(data) || 'spot energy revenue',
     }];
 }
 
