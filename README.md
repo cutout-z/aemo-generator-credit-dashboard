@@ -62,7 +62,7 @@ All metrics are computed at monthly granularity from 5-minute interval data.
 | **Curtailment proxy (%)** | `1 - (Σ SCADA / Σ AVAILABILITY)` | Solar and wind only. A forecast-to-output shortfall against DISPATCHLOAD `AVAILABILITY` (bid-in availability, which includes outages), not measured curtailment. No grid/mechanical split is published. |
 | **Estimated Economic Curtailment (%)** | `Σ (AVAILABILITY − SCADA) during RRP < $0 / Σ AVAILABILITY` | Solar and wind only. Proxy for voluntary bid-off during negative price periods. It is the negative-price part of the curtailment proxy and is capped at it. |
 | **Captured Price (AUD/MWh)** | `sum(SCADAVALUE × RRP) / sum(SCADAVALUE)` | Volume-weighted average price received when actually generating. |
-| **Avg Regional RRP (AUD/MWh)** | `mean(RRP)` | Time-weighted average spot price for the generator's region. |
+| **Avg Regional RRP (AUD/MWh)** | `mean(RRP)` over the intervals the unit reported SCADA | The regional time-weighted average for a unit that reports every interval; a unit with gaps is compared with its own intervals only (Aug 2026: 116 of 122 NSW units at $75.71, ERB02 $72.14). |
 | **Price Capture Ratio** | `Captured_Price / Avg_RRP` | >1.0 = captures premium prices. <1.0 = captures below-average prices (common for solar). |
 | **Price Distribution** | Generation-weighted histogram across 6 bins | Bins: `<0`, `0–50`, `50–100`, `100–200`, `200–300`, `300+` AUD/MWh. |
 | **LGC Eligibility** | `fuel_type in {Solar, Wind, Hydro, Other Renewable}` | For eligible generators, 1 MWh ≈ 1 LGC created. Volume only, no revenue estimation. |

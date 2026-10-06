@@ -34,6 +34,12 @@ def function_source(name: str, html: str | None = None) -> str:
                 continue
             if ch == quote:
                 quote = None
+        elif html.startswith("//", j):
+            j = html.index("\n", j)
+            continue
+        elif html.startswith("/*", j):
+            j = html.index("*/", j) + 2
+            continue
         elif ch in "'\"`":
             quote = ch
         elif ch == "{":

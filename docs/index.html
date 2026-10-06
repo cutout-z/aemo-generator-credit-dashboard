@@ -390,7 +390,7 @@
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Captured = Σ(MWh × RRP) / Σ(MWh)</div>
-                        Volume-weighted average price received vs. simple time-weighted regional average. Ratio &lt; 1.0 means the generator captures below-average prices (common for solar due to price cannibalisation).
+                        Volume-weighted average price received vs. the simple average regional price over the intervals this unit reported SCADA. For a unit that reports every interval that is the regional time-weighted average; a unit with gaps (new, retiring or offline telemetry) is compared with its own intervals only. Ratio &lt; 1.0 means the generator captures below-average prices (common for solar due to price cannibalisation).
                     </div>
                 </div>
                 <div id="chartPriceCapture"><div class="placeholder">No data yet</div></div>
@@ -1533,11 +1533,11 @@ function renderCharts(data) {
         }), PLOTLY_CONFIG);
     }
 
-    // Price capture: this unit's captured price against the regional time-weighted average
+    // Price capture: this unit's captured price against the regional average over its own intervals
     if (monthly && monthly.captured_price && monthly.captured_price.some(v => v != null)) {
         const pcTraces = [
             monthLine(monthly.captured_price, 'Captured price', C('info'), '$,.2f'),
-            { ...monthLine(monthly.avg_rrp, 'Regional average price', C('neutral'), '$,.2f'), line: { color: C('neutral'), width: 1.5 } },
+            { ...monthLine(monthly.avg_rrp, 'Regional average (unit intervals)', C('neutral'), '$,.2f'), line: { color: C('neutral'), width: 1.5 } },
         ];
         Plotly.newPlot('chartPriceCapture', pcTraces, chartLayout({
             height: H.lg,
@@ -2330,7 +2330,7 @@ function buildMonthlyRows(data) {
             'Revenue, MLF only (AUD)': m.revenue_aud ? m.revenue_aud[i] : null,
             'Capacity Factor': m.capacity_factor ? m.capacity_factor[i] : null,
             'Captured Price ($/MWh)': m.captured_price ? m.captured_price[i] : null,
-            'Avg Regional RRP ($/MWh)': m.avg_rrp ? m.avg_rrp[i] : null,
+            'Avg Regional RRP, unit intervals ($/MWh)': m.avg_rrp ? m.avg_rrp[i] : null,
             'Price Capture Ratio': m.price_capture_ratio ? m.price_capture_ratio[i] : null,
         };
         if (m.curtailment_pct) row['Curtailment Proxy'] = m.curtailment_pct[i];
