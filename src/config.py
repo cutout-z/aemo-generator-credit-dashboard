@@ -324,6 +324,19 @@ CAPACITY_OVERRIDES: dict[str, float] = {
     "BARRON-2": 33.2,
 }
 
+# ─── Unit lineage (renamed / converted / merged DUIDs) ─────────────────────
+# {predecessor DUID: successor DUID}. The predecessor's history is aggregated
+# under its own DUID and published as part of the successor's series (see
+# src/lineage.py for the evidence behind each pair). A DUID still in the
+# Registration List is never treated as a predecessor.
+DUID_SUCCESSORS: dict[str, str] = {
+    # IESS conversion 12 Sep 2024: generator HPRG1 (+ load HPRL1) -> HPR1.
+    "HPRG1": "HPR1",
+    # WKIEWA1 re-registered as the aggregated units 1-4 (80 MW) in 2026;
+    # WKIEWA2's SCADA ends June 2026.
+    "WKIEWA2": "WKIEWA1",
+}
+
 # ─── Network ────────────────────────────────────────────────────────────────
 
 MAX_RETRIES = 3

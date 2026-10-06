@@ -264,6 +264,14 @@ def generate_generator_json(
         # spot revenue (status "unknown", value None) and must be read as
         # provisional. Months without provenance columns (legacy aggregates
         # produced before S3-11) simply omit the arrays.
+        # Lineage (renamed/merged units): which DUID(s) each month came from.
+        if "source_duids" in monthly_data.columns and monthly_data["source_duids"].notna().any():
+            sources = [None if pd.isna(v) else str(v) for v in monthly_data["source_duids"]]
+            if any(v not in (None, duid) for v in sources):
+                doc["monthly"]["source_duids"] = sources
+                doc["predecessors"] = sorted({
+                    d for v in sources if v for d in v.split("+") if d != duid
+                })
         _add_revenue_mlf_provenance(doc["monthly"], monthly_data)
         _add_loss_adjusted_revenue(doc["monthly"], monthly_data)
         # Curtailment only for solar/wind

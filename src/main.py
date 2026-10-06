@@ -27,6 +27,7 @@ from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .fetch_mlf import fetch_mlf_data
 from .audit_cf import audit_capacity_factors, log_audit_results
 from .generate_json import generate_all
+from .lineage import merge_lineage_daily, merge_lineage_monthly, with_predecessor_units
 from .processed_cache import publish_processed_cache, restore_processed_cache
 from .market_factors import (
     build_market_factors, build_quarterly_summary, check_qed_divergence,
@@ -644,6 +645,9 @@ def main():
 
     generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
     logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
+    # Aggregation also keeps predecessors of renamed/merged units (lineage);
+    # publication folds them into their successor and never lists them.
+    aggregation_units = with_predecessor_units(generators)
 
     # Step 3: Monthly SCADA + price aggregation
     aggregates_path = data_dir / "monthly_aggregates.feather"
@@ -746,7 +750,7 @@ def main():
                     year, month, prices, data_dir, rebuild=args.full_refresh,
                 )
                 monthly = aggregate_month(
-                    scada, settled, dispatchload, generators, mlf_lookup, year, month,
+                    scada, settled, dispatchload, aggregation_units, mlf_lookup, year, month,
                     loss_factor_periods=loss_factor_periods,
                 )
                 settled = None
@@ -754,7 +758,7 @@ def main():
                     new_rows.append(monthly)
 
                 # Daily aggregation for capacity factor chart
-                daily = aggregate_month_daily(scada, generators, year, month)
+                daily = aggregate_month_daily(scada, aggregation_units, year, month)
                 if not daily.empty:
                     new_daily_rows.append(daily)
 
@@ -1190,8 +1194,8 @@ def main():
 
     # Step 4: Generate JSON output
     logger.info("=== Step 4: Generating JSON output ===")
-    monthly_agg = all_monthly if not all_monthly.empty else None
-    daily_agg = all_daily if not all_daily.empty else None
+    monthly_agg = merge_lineage_monthly(all_monthly, generators) if not all_monthly.empty else None
+    daily_agg = merge_lineage_daily(all_daily, generators) if not all_daily.empty else None
     constraint_agg = all_constraints if not all_constraints.empty else None
     count = generate_all(generators, monthly_agg, mlf_history,
                          draft_mlfs=draft_mlfs, draft_fy_label=draft_fy_label,
