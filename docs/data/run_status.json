@@ -10,52 +10,53 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-06T02:45:40Z",
+  "finished_utc": "2026-10-06T23:27:36Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [
-   "constraints: degraded \u2014 GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable; no constraint data"
+   "offer_factors: degraded \u2014 partial source for finished month(s) 2026-09",
+   "constraints: degraded \u2014 constraint data ends 2026-03, 5 months behind generation (2026-08)"
   ],
   "result": "degraded",
-  "started_utc": "2026-10-06T02:44:19Z"
+  "started_utc": "2026-10-06T23:15:13Z"
  },
  "schema_version": 1,
  "sources": {
   "aer_qa": {
-   "asof_month": null,
-   "attempted_months": 0,
+   "asof_month": "2026Q2",
+   "attempted_months": 1,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-aer-qa",
+   "months_with_data": 1,
+   "note": "edition unchanged (content hashes match the cache)",
    "retained_last_good": false,
-   "status": "skipped"
+   "status": "ok"
   },
   "constraints": {
-   "asof_month": null,
+   "asof_month": "2026-03",
    "attempted_months": 0,
-   "error": "GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable; no constraint data",
-   "months_with_data": 0,
-   "note": null,
+   "error": "constraint data ends 2026-03, 5 months behind generation (2026-08)",
+   "months_with_data": 24,
+   "note": "explicit --skip-constraints; cached constraint history kept",
    "retained_last_good": false,
    "status": "degraded"
   },
   "fcas_factors": {
    "asof_month": "2026-09",
-   "attempted_months": 0,
+   "attempted_months": 3,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-fcas-factors; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 3,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
   },
   "geninfo": {
    "asof_month": "2026-07",
-   "attempted_months": 0,
+   "attempted_months": 1,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-geninfo; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 1,
+   "note": "same edition, source unchanged (size + last-modified match)",
+   "retained_last_good": false,
+   "status": "ok"
   },
   "market_factors": {
    "asof_month": "2026-08",
@@ -68,30 +69,30 @@
   },
   "network_outages": {
    "asof_month": "2026-08",
-   "attempted_months": 0,
+   "attempted_months": 2,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-network-outages; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 2,
+   "note": "same month, source unchanged (size + last-modified match)",
+   "retained_last_good": false,
+   "status": "ok"
   },
   "offer_curves": {
    "asof_month": "2026-08",
-   "attempted_months": 0,
+   "attempted_months": 3,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-offer-factors; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 2,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
   },
   "offer_factors": {
    "asof_month": "2026-09",
-   "attempted_months": 0,
-   "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-offer-factors; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "attempted_months": 3,
+   "error": "partial source for finished month(s) 2026-09",
+   "months_with_data": 3,
+   "note": null,
+   "retained_last_good": false,
+   "status": "degraded"
   }
  }
 }
