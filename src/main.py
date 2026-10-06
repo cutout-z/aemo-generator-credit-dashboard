@@ -230,6 +230,23 @@ def _market_lane(
     return lane
 
 
+DAILY_WINDOW_DAYS = 365
+
+
+def trim_daily_window(daily: pd.DataFrame, days: int = DAILY_WINDOW_DAYS) -> pd.DataFrame:
+    """Keep the last ``days`` days of daily rows, counted back from the NEWEST DAY.
+
+    The cut used to be today - 365, but the newest day trails today by the
+    MMSDM publication lag (~35 days), so the "Last 12 Months" chart showed
+    about 332 days (5 Oct 2026: 2025-10-05..2026-08-31).
+    """
+    if daily is None or daily.empty or "date" not in daily.columns:
+        return daily
+    latest = pd.Timestamp(str(daily["date"].astype(str).max()))
+    cutoff = (latest - timedelta(days=days)).strftime("%Y-%m-%d")
+    return daily[daily["date"].astype(str) >= cutoff]
+
+
 def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
     """Determine which (year, month) pairs to process."""
     now = datetime.now()
@@ -867,9 +884,7 @@ def main():
                 all_daily = pd.concat([existing_daily, new_daily], ignore_index=True)
             else:
                 all_daily = new_daily
-            # Trim to last 12 months
-            cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-            all_daily = all_daily[all_daily["date"] >= cutoff]
+            all_daily = trim_daily_window(all_daily)
             all_daily = all_daily.sort_values(["duid", "date"]).reset_index(drop=True)
             all_daily.to_feather(daily_path)
             logger.info(f"Saved {len(all_daily)} daily aggregate rows to {daily_path}")
