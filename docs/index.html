@@ -481,7 +481,7 @@
                     <h3>Regional Price Spreads (BESS Arbitrage)</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
-                        Daily top/bottom capture-window VWAPs of 5-minute regional prices — the realisable discharge-value and charge-cost windows. The 1h/2h/4h/8h selector takes the top and bottom (duration × 12) five-minute intervals of each day, matching the cycling window of that battery duration; wider windows blend in mid-priced hours, so the realisable spread falls as duration grows. 'Decile' (fixed top/bottom 10% ≈ 2.4h) is the legacy 1–2h-battery proxy, kept for continuity with the AEMO QED benchmark. Market-level data: applies to every unit in the region.
+                        Daily top/bottom capture-window average prices: the simple mean of the 5-minute regional prices in each window (each interval weighted equally, not by volume) — the realisable discharge-value and charge-cost windows. A day runs 00:05–24:00 (interval-ending), so the interval ending at midnight belongs to the day it closes. The 1h/2h/4h/8h selector takes the top and bottom (duration × 12) five-minute intervals of each day, matching the cycling window of that battery duration; wider windows blend in mid-priced hours, so the realisable spread falls as duration grows. 'Decile' (fixed top/bottom 10% ≈ 2.4h) is the legacy 1–2h-battery proxy, kept for continuity with the AEMO QED benchmark. Market-level data: applies to every unit in the region.
                         <div class="tooltip-caveat">Derived from AEMO DISPATCHPRICE 5-minute data. Quarterly context: AEMO QED reported NEM fleet charge/discharge spreads of $121/MWh in Q1 2026 and $51/MWh in Q2 2026.</div>
                     </div>
                 </div>
@@ -2575,17 +2575,17 @@ function renderSpreadChart(region) {
         label = dur + ' window';
     }
     const spreadTraces = [
-        { x: xs, y: high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Discharge-window VWAP', line: { color: C('good'), width: 1.5 },
-          hovertemplate: 'Discharge VWAP: $%{y:,.0f}/MWh<extra></extra>' },
-        { x: xs, y: low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Charge-window VWAP', line: { color: C('bad'), width: 1.5 },
-          hovertemplate: 'Charge VWAP: $%{y:,.0f}/MWh<extra></extra>' },
+        { x: xs, y: high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Discharge-window average', line: { color: C('good'), width: 1.5 },
+          hovertemplate: 'Discharge-window average: $%{y:,.0f}/MWh<extra></extra>' },
+        { x: xs, y: low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Charge-window average', line: { color: C('bad'), width: 1.5 },
+          hovertemplate: 'Charge-window average: $%{y:,.0f}/MWh<extra></extra>' },
         { x: xs, y: spread.slice(sCut), type: 'scatter', mode: 'lines', name: 'Spread (right axis)', yaxis: 'y2', line: { color: C('info'), width: 1.2, dash: 'dot' },
           hovertemplate: 'Spread: $%{y:,.0f}/MWh<extra></extra>' },
     ];
     Plotly.newPlot('chartMarketSpread', spreadTraces, chartLayout({
         height: H.lg,
         xaxis: { type: 'date' },
-        yaxis: { title: { text: 'VWAP $/MWh · ' + label } },
+        yaxis: { title: { text: 'Window average $/MWh · ' + label } },
         yaxis2: {
             title: { text: 'Spread $/MWh' }, overlaying: 'y', side: 'right', showgrid: false, zeroline: false,
             tickfont: { size: 11, color: C('faint') }, automargin: true,

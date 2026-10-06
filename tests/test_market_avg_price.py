@@ -38,6 +38,7 @@ def test_months_without_avg_price_are_listed_for_backfill(tmp_path):
     old = pd.DataFrame({
         "date": ["2024-08-01", "2024-08-02", "2026-08-01"], "region": "NSW1",
         "spread_8h": [1.0, 1.0, 1.0], "avg_price": [None, None, 50.0],
+        "day_basis": "interval-ending",
     })
     old.to_feather(tmp_path / mf.MARKET_FACTORS_CACHE)
     assert mf.months_needing_backfill(str(tmp_path)) == [(2024, 8)]

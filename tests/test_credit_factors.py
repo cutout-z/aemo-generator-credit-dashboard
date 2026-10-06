@@ -25,7 +25,9 @@ from src import freshness
 
 
 def _price_frame(rrp_values, region="NSW1", date="2026-07-15"):
-    ts = pd.Timestamp(date)
+    # Interval-ENDING stamps: the day's first interval ends at 00:05 (the one
+    # ending at 00:00 belongs to the previous day).
+    ts = pd.Timestamp(date) + pd.Timedelta(minutes=5)
     # Tile to >=96 intervals so fixtures clear the 72-interval partial-day filter
     reps = max(1, -(-96 // max(1, len(rrp_values))))
     rrp_values = list(rrp_values) * reps

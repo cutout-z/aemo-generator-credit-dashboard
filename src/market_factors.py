@@ -21,6 +21,7 @@ import pandas as pd
 
 from . import config
 from .download_dispatch import fetch_dispatch_price_month
+from .interval_days import interval_calendar_day_str
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ QED_DIVERGENCE_RATIO_MAX = 2.5  # derived above 250% of QED -> investigate
 def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
     """Compute per-region per-day spread metrics from 5-minute DISPATCHPRICE rows.
 
+    The "vwap_*" fields are SIMPLE means of the window's 5-minute prices (each
+    interval weighted equally; there is no volume), kept under their published
+    names.
+
     Pure function — no I/O, unit-testable.
 
     Args:
@@ -59,7 +64,10 @@ def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = prices.copy()
-    df["date"] = df["SETTLEMENTDATE"].dt.date.astype(str)
+    # Interval-ENDING days: the interval ending at 00:00 is the previous day's
+    # last five minutes. dt.date put it in the next day, so every day had 287
+    # of its own intervals plus the previous day's last one.
+    df["date"] = interval_calendar_day_str(df["SETTLEMENTDATE"])
 
     out = []
     for (region, date_str), g in df.groupby(["REGIONID", "date"]):
@@ -77,6 +85,7 @@ def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
         row = {
             "date": date_str,
             "region": region,
+            "day_basis": DAY_BASIS,
             # Time-weighted (simple interval) mean price of the day: the
             # like-for-like counterpart the AER VWA cross-check divides by.
             "avg_price": round(float(rrp.mean()), 2),
@@ -103,7 +112,10 @@ def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
 
 # A cached month missing any of these is recomputed whenever its prices can be
 # read (raw cache, or a re-download for months_needing_backfill).
-DAILY_FACTOR_REQUIRED_COLS = ("spread_8h", "avg_price")
+DAILY_FACTOR_REQUIRED_COLS = ("spread_8h", "avg_price", "day_basis")
+# Days are interval-ending calendar days (interval_days); rows without this
+# marker were built on the old timestamp-date basis and are recomputed.
+DAY_BASIS = "interval-ending"
 
 
 def months_needing_backfill(data_dir: str) -> list[tuple[int, int]]:
