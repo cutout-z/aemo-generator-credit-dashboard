@@ -412,7 +412,7 @@
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
-                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros, and zero-output days are shown, not trimmed. Bars in the warn colour are partial days (fewer 5-min intervals reported than expected).
+                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown, zero-output days included; days with no reported data are gaps, not zeros, and are left out of the average. Bars in the warn colour are partial days (fewer 5-min intervals reported than expected).
                         <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
                     </div>
                 </div>
@@ -1006,6 +1006,13 @@ function revenueBasisNote(data) {
     if (data.fuel_category === 'Battery') return 'discharge only, charging cost not netted';
     if (data.fuel_mix && data.fuel_mix.Battery) return 'battery discharge gross, charging cost not netted';
     return '';
+}
+
+// Mean of the days that have data. A zero-output day is data and counts; a missing day (null) does
+// not. Averaging only days with output read LNGS1 as 330 MWh/day when it averaged 6.
+function dailyAverage(values) {
+    const days = (values || []).filter(v => v != null && !isNaN(v));
+    return days.length ? days.reduce((a, b) => a + b, 0) / days.length : 0;
 }
 
 function renderKPIs(data) {
@@ -1819,11 +1826,10 @@ function renderCharts(data) {
         const dayNote = dates.map((_, i) => partial[i]
             ? `<br>Partial day: ${obs[sliceStart + i]} of ${exp[sliceStart + i]} intervals` : '');
 
-        // Averages
-        const validGen = genMwh.filter(v => v != null && v > 0);
-        const avgGen = validGen.length > 0 ? validGen.reduce((a, b) => a + b, 0) / validGen.length : 0;
-        const validCF = cfValues.filter(v => v != null && v > 0);
-        const avgCF = validCF.length > 0 ? validCF.reduce((a, b) => a + b, 0) / validCF.length : 0;
+        // Averages over every day with data, zero-output days included
+        const avgGen = dailyAverage(genMwh);
+        const avgCF = dailyAverage(cfValues);
+        const validCF = cfValues.filter(v => v != null);
         const genRef = referenceLine(avgGen, `Average ${avgGen.toFixed(0)} MWh`, 'y');
         const cfRef = referenceLine(avgCF, `Average ${avgCF.toFixed(1)}%`, 'y2');
 
