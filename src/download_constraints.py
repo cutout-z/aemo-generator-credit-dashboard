@@ -120,6 +120,34 @@ def fetch_gencondata(cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
     return df
 
 
+def spdcp_mapping_asof(spdcp: pd.DataFrame, asof) -> dict[str, set]:
+    """{CONNECTIONPOINTID: {GENCONID}} for the constraint versions in force at ``asof``.
+
+    For each constraint the version in force is its latest EFFECTIVEDATE on or
+    before ``asof`` (highest VERSIONNO on that date); its connection points are
+    the rows of that version only. A frame without version columns (an old
+    cache) maps every row, as before.
+    """
+    if spdcp is None or spdcp.empty:
+        return {}
+    if not {"EFFECTIVEDATE", "VERSIONNO"} <= set(spdcp.columns):
+        return spdcp.groupby("CONNECTIONPOINTID")["GENCONID"].apply(set).to_dict()
+    df = spdcp.copy()
+    df["EFFECTIVEDATE"] = pd.to_datetime(df["EFFECTIVEDATE"]).astype("datetime64[ns]")
+    df = df[df["EFFECTIVEDATE"] <= pd.Timestamp(asof)]
+    if df.empty:
+        return {}
+    df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
+    latest = (
+        df[["GENCONID", "EFFECTIVEDATE", "VERSIONNO"]]
+        .drop_duplicates()
+        .sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO"])
+        .drop_duplicates(subset=["GENCONID"], keep="last")
+    )
+    current = df.merge(latest, on=["GENCONID", "EFFECTIVEDATE", "VERSIONNO"], how="inner")
+    return current.groupby("CONNECTIONPOINTID")["GENCONID"].apply(set).to_dict()
+
+
 def fetch_spdconnectionpointconstraint(
     cache_dir: str, rebuild: bool = False,
 ) -> pd.DataFrame:
@@ -127,7 +155,10 @@ def fetch_spdconnectionpointconstraint(
 
     This maps connection points to the constraints that affect them.
     """
-    cache_path = Path(cache_dir) / "spdcp_constraint.feather"
+    # All versions are kept (audit 2026-10, L8), so the cache has a new name: a
+    # spdcp_constraint.feather written by the old latest-pair dedupe is not
+    # read as if it carried version history.
+    cache_path = Path(cache_dir) / "spdcp_constraint_versions.feather"
     if cache_path.exists() and not rebuild:
         logger.info("Loading cached SPDCONNECTIONPOINTCONSTRAINT")
         return pd.read_feather(cache_path)
@@ -159,11 +190,15 @@ def fetch_spdconnectionpointconstraint(
     # Filter to ENERGY bid type (most relevant for generation)
     df = df[df["BIDTYPE"].str.upper() == "ENERGY"].copy()
 
-    # Keep latest version per (connection_point, constraint)
+    # Keep EVERY version: which connection points a constraint covers is
+    # resolved per month (spdcp_mapping_asof). The old dedupe kept the latest
+    # row per (connection point, constraint) pair, so a connection point that a
+    # later version dropped stayed mapped to that constraint forever.
     df["EFFECTIVEDATE"] = pd.to_datetime(df["EFFECTIVEDATE"])
     df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
-    df = df.sort_values(["CONNECTIONPOINTID", "GENCONID", "EFFECTIVEDATE", "VERSIONNO"])
-    df = df.drop_duplicates(subset=["CONNECTIONPOINTID", "GENCONID"], keep="last")
+    df = df.drop_duplicates(
+        subset=["CONNECTIONPOINTID", "GENCONID", "EFFECTIVEDATE", "VERSIONNO"], keep="last",
+    ).sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO", "CONNECTIONPOINTID"])
 
     logger.info(
         f"SPDCONNECTIONPOINTCONSTRAINT: {len(df)} mappings, "

@@ -713,8 +713,12 @@ def aggregate_constraints_month(
         label=f"DISPATCHCONSTRAINT {month_label}", value_cols=["MARGINALVALUE"],
     )
 
-    # Build connection point → set of constraint IDs
-    cp_to_constraints = spdcp.groupby("CONNECTIONPOINTID")["GENCONID"].apply(set).to_dict()
+    # Connection point → constraint IDs, for the constraint versions in force
+    # at the end of this month (a later version that drops a connection point
+    # must not keep it mapped; audit 2026-10, L8).
+    from .download_constraints import spdcp_mapping_asof
+    month_end = pd.Timestamp(year, month, monthrange(year, month)[1], 23, 59, 59)
+    cp_to_constraints = spdcp_mapping_asof(spdcp, month_end)
 
     # Build constraint ID → description lookup
     desc_lookup = {}
