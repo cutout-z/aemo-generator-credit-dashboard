@@ -377,8 +377,8 @@
                     <h3>Estimated Economic Curtailment</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
-                        <div class="tooltip-formula">Econ curtailment = forgone generation during RRP &lt; $0 / total UIGF</div>
-                        Estimates energy not generated during negative spot price periods — a proxy for voluntary economic curtailment where generators bid off to avoid paying to export.
+                        <div class="tooltip-formula">Econ curtailment = shortfall below AVAILABILITY during RRP &lt; $0 / total AVAILABILITY</div>
+                        Estimates energy not generated during negative spot price periods — a proxy for voluntary economic curtailment where generators bid off to avoid paying to export. It is the negative-price part of the curtailment proxy, so it never exceeds it.
                         <div class="tooltip-caveat">Proxy only: cannot distinguish voluntary bid-off from AEMO dispatch instructions without bid data.</div>
                     </div>
                 </div>
