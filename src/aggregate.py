@@ -19,7 +19,7 @@ import pandas as pd
 
 from . import config
 from .interval_days import INTERVALS_PER_DAY, interval_calendar_day_str
-from .loss_factors import fy_opening_tlf, interval_loss_factors
+from .loss_factors import fy_tlf_values, interval_loss_factors
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +265,7 @@ def aggregate_month(
     lf = interval_loss_factors(merged[["SETTLEMENTDATE", "DUID"]], loss_factor_periods)
     merged["_TLF"] = lf["TLF"].to_numpy()
     merged["_DLF"] = lf["DLF"].to_numpy()
-    opening_tlf = fy_opening_tlf(loss_factor_periods, fy_start)
+    fy_tlfs = fy_tlf_values(loss_factor_periods, fy_start)
     disagree: list[str] = []
 
     rows = []
@@ -290,11 +290,15 @@ def aggregate_month(
             tracker_fy = res.get("source_fy_start")
             tracker_mlf = float(res["mlf"])
 
-        # Dated factors replace the tracker's FY value where they apply.
+        # Dated factors replace the tracker's FY value where they apply. The
+        # two sources agree when the tracker's value is one of the factors the
+        # DUID carried during the FY: the opening value or a mid-year revision
+        # (the tracker reports QPSFB1 FY25-26 at its revised 0.9176, so a
+        # check against the opening 1.019 alone kept 0.9176 for January).
         dated = group["_TLF"]
         if tracker_status == MLF_STATUS_EXACT and dated.notna().any():
-            opening = opening_tlf.get(duid)
-            if opening is None or abs(opening - tracker_mlf) > 5e-5:
+            known = fy_tlfs.get(duid, [])
+            if not any(abs(v - tracker_mlf) <= 5e-5 for v in known):
                 disagree.append(duid)
                 dated = dated * np.nan
         covered = dated.notna()
@@ -454,7 +458,7 @@ def aggregate_month(
 
     if disagree:
         logger.warning(
-            f"{month_label}: DUDETAILSUMMARY's opening FY factor disagrees with the "
+            f"{month_label}: no DUDETAILSUMMARY factor in the FY matches the "
             f"MLF tracker for {len(disagree)} DUIDs — tracker FY value kept: "
             f"{', '.join(sorted(disagree)[:20])}"
         )
