@@ -185,6 +185,51 @@ def _constraint_lane(
     return lane
 
 
+# Market spreads come from the same monthly DISPATCHPRICE archive as the
+# generation data, so they should end within days of the daily aggregates.
+MARKET_MAX_LAG_DAYS = 7
+
+
+def _market_lane(
+    market_factors: pd.DataFrame,
+    months: list[tuple[int, int]],
+    daily: pd.DataFrame,
+    error: str | None = None,
+) -> LaneRun:
+    """Run-manifest record for the market-spread lane (market_daily.json).
+
+    It used to be written as ok with asof_month null and 0 attempted months
+    whatever happened, so a stalled spread series was invisible. It now
+    records the months it read, its as-of month, and is degraded when its last
+    day trails the daily generation data by more than MARKET_MAX_LAG_DAYS.
+    """
+    lane = LaneRun(source="market_factors")
+    lane.frame = market_factors if market_factors is not None else pd.DataFrame()
+    lane.attempted_months = len(months)
+    if lane.frame is not None and not lane.frame.empty and "date" in lane.frame.columns:
+        present = set(lane.frame["date"].astype(str).str[:7])
+        lane.months_with_data = sum(f"{y}-{m:02d}" in present for y, m in months)
+    if error:
+        lane.status = STATUS_DEGRADED
+        lane.error = error
+    last_market = None
+    if lane.frame is not None and not lane.frame.empty and "date" in lane.frame.columns:
+        last_market = pd.Timestamp(str(lane.frame["date"].astype(str).max()))
+    last_daily = None
+    if daily is not None and not daily.empty and "date" in daily.columns:
+        last_daily = pd.Timestamp(str(daily["date"].astype(str).max()))
+    if last_daily is not None and (
+        last_market is None or (last_daily - last_market).days > MARKET_MAX_LAG_DAYS
+    ):
+        lag = "no market spread data" if last_market is None else (
+            f"market spreads end {last_market.date()}, "
+            f"{(last_daily - last_market).days} days before the daily data ({last_daily.date()})"
+        )
+        lane.status = STATUS_DEGRADED
+        lane.error = "; ".join(e for e in (lane.error, lag) if e)
+    return lane
+
+
 def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
     """Determine which (year, month) pairs to process."""
     now = datetime.now()
@@ -1002,7 +1047,8 @@ def main():
     logger.info("=== Step 3d: Market spread factors ===")
     market_factors = pd.DataFrame()
     market_quarterly = pd.DataFrame()
-    market_lane = LaneRun(source="market_factors")
+    market_months: list[tuple[int, int]] = []
+    market_error = None
     try:
         available_price_months = []
         for mdir in sorted((data_dir / "nemosis_cache").glob(
@@ -1017,9 +1063,8 @@ def main():
         ]
         if backfill:
             logger.info("Market factors: backfilling %d month(s) lacking avg_price", len(backfill))
-        market_factors = build_market_factors(
-            str(data_dir), sorted(set(available_price_months) | set(backfill)),
-        )
+        market_months = sorted(set(available_price_months) | set(backfill))
+        market_factors = build_market_factors(str(data_dir), market_months)
         market_quarterly = build_quarterly_summary(market_factors)
         check_qed_divergence(market_quarterly)
     except Exception as e:
@@ -1027,10 +1072,9 @@ def main():
         # published market_daily.json is left untouched on failure — but the
         # failure is recorded for the operator channel, never hidden.
         logger.error("Market factor computation failed: %s", e)
-        market_lane.status = STATUS_DEGRADED
-        market_lane.error = str(e)
+        market_error = str(e)
         market_quarterly = pd.DataFrame()
-    market_lane.frame = market_factors
+    market_lane = _market_lane(market_factors, market_months, all_daily, market_error)
 
     # Step 3e/3e2/3e3: Per-DUID optional-source factor facts.
     # S3-12: the month-outer driver fetches BIDPEROFFER_D + BIDDAYOFFER_D once
@@ -1175,8 +1219,8 @@ def main():
     # The daily commit is not a freshness signal: the pipeline re-processes the
     # most recent archive months, so a total download failure still "succeeds".
     logger.info("=== Step 3f: Freshness guards ===")
-    check_monthly_freshness(all_monthly)
-    check_daily_freshness(all_daily)
+    monthly_age_days = check_monthly_freshness(all_monthly)
+    daily_age_days = check_daily_freshness(all_daily)
 
     # Step 3g: Factor-block continuity guard — reject publication when a
     # populated factor metric would vanish without a documented reason.
@@ -1263,7 +1307,10 @@ def main():
         {lane.source: lane for lane in all_lanes if lane is not None},
         mode="full_refresh" if args.full_refresh else "incremental",
         months_back=None if args.full_refresh else args.months_back,
-        guards={"monthly_freshness": "pass", "daily_freshness": "pass"},
+        guards={
+            "monthly_freshness": "pass", "daily_freshness": "pass",
+            "monthly_age_days": monthly_age_days, "daily_age_days": daily_age_days,
+        },
         outputs={
             "generator_files": int(count),
             "processed_cache_snapshot": not args.no_processed_cache_snapshot,
