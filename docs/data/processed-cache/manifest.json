@@ -57,13 +57,8 @@
     },
     {
       "name": "market_factors_daily.feather",
-      "sha256": "fd151bce9106c8982d4dbb69e6a2381144e82beba81f171bc54da7ba5e35c89d",
-      "size_bytes": 346098
-    },
-    {
-      "name": "mlf_history.feather",
-      "sha256": "4930a14856256781d16743f4e5fe135aad47b27dd80c660e689fc44565a4d574",
-      "size_bytes": 69578
+      "sha256": "2c9c6ff264aad1f26d0686afd0972600085f1fa2e878194c25d57b59958b220f",
+      "size_bytes": 379234
     },
     {
       "name": "mlf_tracker_summary.csv",
