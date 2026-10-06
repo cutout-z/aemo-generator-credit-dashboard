@@ -394,6 +394,13 @@ def aggregate_month(
                     if total_avail_all > 0 and avail_during_neg > 0:
                         forgone = max(0.0, avail_during_neg - actual_during_neg)
                         econ_curtailment = forgone / total_avail_all
+            # The economic estimate is the negative-price PART of the total
+            # shortfall, so it can never exceed it. Without this cap, output
+            # above AVAILABILITY in positive-price intervals nets the total
+            # down while the negative-price shortfall stays: MIDDLSF1 Dec 2024
+            # published 0% total and 20% economic (1,663 such month rows).
+            if econ_curtailment is not None and curtailment is not None:
+                econ_curtailment = min(econ_curtailment, curtailment)
 
         # Captured price (volume-weighted average RRP)
         captured = None

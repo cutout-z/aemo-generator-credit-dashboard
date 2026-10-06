@@ -274,7 +274,13 @@ def generate_generator_json(
             doc["monthly"]["curtailment_pct"] = monthly_data["curtailment_pct"].round(4).tolist()
             doc["monthly"]["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
         if "econ_curtailment_pct" in monthly_data.columns:
-            doc["monthly"]["econ_curtailment_pct"] = monthly_data["econ_curtailment_pct"].round(4).tolist()
+            econ = monthly_data["econ_curtailment_pct"]
+            if "curtailment_pct" in monthly_data.columns:
+                # Rows aggregated before the cap in aggregate_month: economic
+                # curtailment is part of the total shortfall, never above it.
+                total = monthly_data["curtailment_pct"]
+                econ = econ.where(econ.isna() | total.isna() | (econ <= total), total)
+            doc["monthly"]["econ_curtailment_pct"] = econ.round(4).tolist()
         # Price capture
         if "captured_price" in monthly_data.columns:
             doc["monthly"]["captured_price"] = monthly_data["captured_price"].round(2).tolist()
@@ -1002,7 +1008,13 @@ def _aggregate_station_monthly(
             curtailment.append(station_curtailment(month_data))
 
         if has_econ_curt:
-            econ_curtailment.append(weighted_pct(month_data, "econ_curtailment_pct"))
+            econ = weighted_pct(month_data, "econ_curtailment_pct")
+            # Economic curtailment is part of the total shortfall (see
+            # aggregate_month), at station level too.
+            total = curtailment[-1] if has_curtailment else None
+            if econ is not None and total is not None:
+                econ = min(econ, total)
+            econ_curtailment.append(econ)
 
         # Price capture: generation-weighted
         if has_price:
