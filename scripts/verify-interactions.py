@@ -199,34 +199,50 @@ def main() -> int:
         title = pg.evaluate("document.getElementById('chartMarketSpread').layout.yaxis.title.text")
         check("4h" in title, "battery-duration switch", title)
 
-        # Offer-day select redraws the bid stack. The target day is chosen from the unit's own offer
-        # file so its stack really differs from the day on screen: a wind farm often bids the same
-        # stack for weeks (CLRKCWF1's first and last days are identical), and comparing those two
-        # proves nothing either way. Selecting back must restore the first drawing.
-        days = pg.eval_on_selector_all("#offerCurveDay option", "e => e.map(o => o.value)")
-        shown_day = pg.input_value("#offerCurveDay") if days else None
-        raw_days = {d["date"]: d["stack"] for d in json.loads(
-            (ROOT / "docs" / "data" / "offer_curves" / f"{UNIT}.json").read_text())["days"]}
+        # Offer-day select redraws the bid stack. The check needs a unit whose published days carry
+        # at least two different stacks: a wind farm often bids the same stack for weeks, and since the
+        # offer files hold a bounded two-month window CLRKCWF1's days can all be identical. Comparing
+        # identical stacks proves nothing, so the unit is UNIT when its days differ, else the first
+        # listed unit (sorted) whose days do. Selecting back must restore the first drawing.
+        def offer_days(unit):
+            path = ROOT / "docs" / "data" / "offer_curves" / f"{unit}.json"
+            return {d["date"]: d["stack"] for d in json.loads(path.read_text())["days"]} if path.exists() else {}
+        def varied(unit):
+            return len({json.dumps(v) for v in offer_days(unit).values()}) > 1
+        listed = {p.stem for p in (ROOT / "docs" / "data" / "generators").glob("*.json")}
+        offer_unit = UNIT if varied(UNIT) else next(
+            (p.stem for p in sorted((ROOT / "docs" / "data" / "offer_curves").glob("*.json"))
+             if p.stem in listed and varied(p.stem)), None)
+        opg = pg
+        if offer_unit not in (None, UNIT):
+            opg = b.new_page(viewport={"width": 1440, "height": 960})
+            opg.goto(BASE + "#" + offer_unit, wait_until="networkidle")
+            opg.wait_for_timeout(1500)
+        days = opg.eval_on_selector_all("#offerCurveDay option", "e => e.map(o => o.value)") if offer_unit else []
+        shown_day = opg.input_value("#offerCurveDay") if days else None
+        raw_days = offer_days(offer_unit) if offer_unit else {}
         stacks = {k: json.dumps(v) for k, v in raw_days.items()}
         # What drawBidStack plots for a day: a step from (first price, 0) through each (price, cumulative MW).
         expect = lambda day: [[[raw_days[day][0][0]] + [p for p, _ in raw_days[day]], [0] + [c for _, c in raw_days[day]]]]
         other = next((d for d in days if shown_day in stacks and d in stacks and stacks[d] != stacks[shown_day]), None)
         draw = "JSON.stringify(document.getElementById('offerCurveChart').data.map(t => [t.x, t.y]))"
         if other is None:
-            check(False, "offer-day select", f"{len(days)} days on the page, none with a stack unlike {shown_day}: pick another UNIT")
+            check(False, "offer-day select", f"{offer_unit}: {len(days)} days on the page, none with a stack unlike {shown_day}")
         else:
-            before = pg.evaluate(draw)
-            pg.select_option("#offerCurveDay", other)
-            pg.wait_for_timeout(600)
-            after = pg.evaluate(draw)
-            pg.select_option("#offerCurveDay", shown_day)
-            pg.wait_for_timeout(600)
-            back = pg.evaluate(draw)
+            before = opg.evaluate(draw)
+            opg.select_option("#offerCurveDay", other)
+            opg.wait_for_timeout(600)
+            after = opg.evaluate(draw)
+            opg.select_option("#offerCurveDay", shown_day)
+            opg.wait_for_timeout(600)
+            back = opg.evaluate(draw)
             check(before != after and back == before, "offer-day select",
-                  f"{shown_day} → {other} redraws: {before != after}; back restores: {back == before}")
+                  f"{offer_unit} {shown_day} → {other} redraws: {before != after}; back restores: {back == before}")
             check(json.loads(before) == expect(shown_day) and json.loads(after) == expect(other),
                   "offer-day bid stack equals the unit's offer file",
-                  f"{shown_day}: {len(raw_days[shown_day])} bands, {other}: {len(raw_days[other])} bands")
+                  f"{offer_unit} {shown_day}: {len(raw_days[shown_day])} bands, {other}: {len(raw_days[other])} bands")
+        if opg is not pg:
+            opg.close()
 
         # Drag-to-reorder within a group (synthetic HTML5 drag events), refused across groups
         order = "[...document.querySelectorAll('.panel-group')].map(g => [...g.querySelectorAll('.chart-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.id || p.querySelector('h3').textContent))"
