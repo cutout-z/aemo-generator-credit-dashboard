@@ -125,6 +125,65 @@ def _settlement_prices_for(
     return settlement_prices(year, month, prices, trading)
 
 
+# Constraint data may trail the generation data by this many whole months
+# before the run reports the constraints lane degraded (operator alert).
+CONSTRAINT_MAX_LAG_MONTHS = 2
+
+
+def _month_index(label: str) -> int:
+    return int(label[:4]) * 12 + int(label[5:7]) - 1
+
+
+def _constraint_months_to_process(
+    window: list[tuple[int, int]], cached_latest: str | None, months_back: int,
+) -> list[tuple[int, int]]:
+    """Constraint months for an incremental run: the overlap window, extended
+    back to the month after the newest cached one, so a lane that was skipped
+    for months catches up instead of leaving a gap."""
+    if not window:
+        return []
+    if cached_latest is None:
+        return list(window)  # no history: backfill the whole window
+    tail = list(window[-months_back:]) if months_back > 0 else []
+    nxt = _month_index(cached_latest) + 1
+    catch_up = [ym for ym in window if (ym[0] * 12 + ym[1] - 1) >= nxt]
+    return sorted(set(tail) | set(catch_up))
+
+
+def _constraint_lane(
+    constraints: pd.DataFrame, monthly: pd.DataFrame, *, skipped: bool, error: str | None = None,
+) -> LaneRun:
+    """Run-manifest record for the binding-constraint data, with a freshness check.
+
+    The daily lanes pass --skip-constraints, so constraint history stopped at
+    2026-03 while generation ran to 2026-08 and nothing said so. The lane now
+    reports its as-of month, and is degraded (an operator alert) once it
+    trails the newest generation month by more than CONSTRAINT_MAX_LAG_MONTHS.
+    """
+    lane = LaneRun(source="constraints")
+    lane.frame = constraints if constraints is not None else pd.DataFrame()
+    if constraints is not None and not constraints.empty and "month" in constraints.columns:
+        lane.months_with_data = int(constraints["month"].nunique())
+    if skipped:
+        lane.status = STATUS_SKIPPED
+        lane.note = "explicit --skip-constraints; cached constraint history kept"
+    if error:
+        lane.status = STATUS_DEGRADED
+        lane.error = error
+    asof = lane.asof_month()
+    latest_gen = None
+    if monthly is not None and not monthly.empty and "month" in monthly.columns:
+        latest_gen = str(sorted(monthly["month"].dropna().astype(str).unique())[-1])
+    if latest_gen and (asof is None or _month_index(latest_gen) - _month_index(asof) > CONSTRAINT_MAX_LAG_MONTHS):
+        lag = "no constraint data" if asof is None else (
+            f"constraint data ends {asof}, "
+            f"{_month_index(latest_gen) - _month_index(asof)} months behind generation ({latest_gen})"
+        )
+        lane.status = STATUS_DEGRADED
+        lane.error = "; ".join(e for e in (lane.error, lag) if e)
+    return lane
+
+
 def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
     """Determine which (year, month) pairs to process."""
     now = datetime.now()
@@ -806,6 +865,7 @@ def main():
     # Step 3b: Binding constraint aggregation
     constraint_path = data_dir / "constraint_aggregates.feather"
     all_constraints = pd.DataFrame()
+    constraint_error = None
     if args.skip_constraints:
         logger.info("=== Step 3b: Loading cached constraints (--skip-constraints) ===")
         if constraint_path.exists():
@@ -825,14 +885,17 @@ def main():
                     config.CONSTRAINTS_HISTORY_MONTHS, args.full_refresh
                 )
                 if not args.full_refresh:
-                    # If no existing constraint data, backfill the full history window;
-                    # otherwise only reprocess the requested overlap period.
-                    months_back = (
-                        config.CONSTRAINTS_HISTORY_MONTHS
-                        if not constraint_path.exists()
-                        else args.months_back
+                    # No existing constraint data: backfill the full history
+                    # window. Otherwise reprocess the overlap period AND every
+                    # month after the newest cached one (catch-up after skips).
+                    cached_latest = None
+                    if constraint_path.exists():
+                        cached = pd.read_feather(constraint_path, columns=["month"])
+                        if not cached.empty:
+                            cached_latest = str(sorted(cached["month"].astype(str).unique())[-1])
+                    constraint_months = _constraint_months_to_process(
+                        constraint_months, cached_latest, args.months_back,
                     )
-                    constraint_months = constraint_months[-months_back:]
 
                 constraint_rows = []
                 for year, month in constraint_months:
@@ -876,8 +939,12 @@ def main():
                     all_constraints = pd.read_feather(constraint_path)
             else:
                 logger.warning("Skipping constraints: GENCONDATA or SPDCP unavailable")
+                constraint_error = "GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable"
         except Exception as e:
             logger.error(f"Constraint aggregation failed: {e}")
+            constraint_error = f"constraint aggregation failed: {e}"
+            if constraint_path.exists():
+                all_constraints = pd.read_feather(constraint_path)
     elif constraint_path.exists():
         all_constraints = pd.read_feather(constraint_path)
 
@@ -1183,7 +1250,11 @@ def main():
     # raised and aborted the run before this point). Committed with the rest of
     # docs/data on the NAS; the Mac-side staleness check surfaces degraded or
     # errored lanes as alerts.
-    all_lanes = factor_lanes + [market_lane]
+    constraint_lane = _constraint_lane(
+        all_constraints, all_monthly,
+        skipped=bool(args.skip_constraints), error=constraint_error,
+    )
+    all_lanes = factor_lanes + [market_lane, constraint_lane]
     manifest = build_manifest(
         {lane.source: lane for lane in all_lanes if lane is not None},
         mode="full_refresh" if args.full_refresh else "incremental",
