@@ -2411,13 +2411,17 @@ function buildInfoRows(data) {
     }];
 }
 
+// Regional FCAS prices are the region's market averages (the same for every unit there), not
+// this unit's FCAS revenue: the column names say so, for unit and station exports alike.
 function buildFCASRows(data) {
     const f = data && data.fcas;
     if (!f || !f.months) return [];
     const services = Object.keys(f.services || {});
     return f.months.map((month, i) => {
         const row = { 'Month': month };
-        services.forEach(s => { row[s] = (f.services[s] || [])[i] != null ? f.services[s][i] : ''; });
+        services.forEach(s => {
+            row[s + ' (regional average)'] = (f.services[s] || [])[i] != null ? f.services[s][i] : '';
+        });
         return row;
     });
 }
@@ -2508,7 +2512,7 @@ function buildExportSections(data) {
         ['Monthly', buildMonthlyRows(data)],
         ['Daily', buildDailyRows(data)],
         ['MLF', buildMLFRows(data)],
-        ['FCAS', buildFCASRows(data)],
+        ['FCAS Regional Average', buildFCASRows(data)],
         ['FCAS Participation', buildFCASParticipationRows(data)],
         ['Offers', buildOffersRows(data)],
         ['Offer Curve', buildOfferCurveRows(data)],

@@ -926,7 +926,16 @@ def _generate_station_files(
                         fcas_services[service] = []
                     fcas_services[service].append(price)
             if fcas_services:
-                doc["fcas"] = {"months": fcas_months, "services": fcas_services}
+                # Same regional market averages as the unit docs, same label.
+                doc["fcas"] = {
+                    "scope": "regional_average",
+                    "note": (
+                        "Regional FCAS market price averages — identical for all "
+                        "generators in this region. Not unit-level revenue."
+                    ),
+                    "months": fcas_months,
+                    "services": fcas_services,
+                }
 
         # Daily data: sum across station DUIDs
         if daily_aggregates is not None and not daily_aggregates.empty:
