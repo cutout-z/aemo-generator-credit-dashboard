@@ -31,7 +31,7 @@ from src.aer_qa import (
     SOURCE_LEGACY,
     AerQaError,
     build_checks,
-    compare_band_contains,
+    compare_price_ratio,
     compare_share_ratio,
     coverage_shortfall,
     expected_reference_quarter,
@@ -117,16 +117,23 @@ SERIES_BODIES = {
 }
 
 OUR_ROWS = [
+    # avg_price: the region's 2026Q2 time-weighted mean from the published
+    # monthly aggregates (BW01/STAN-1/LYA1/TORRB2/GORDON avg_rrp, day-weighted).
     {"region": "NSW1", "quarter": "2026Q2", "avg_vwap_low": 31.2,
-     "avg_vwap_high": 118.92, "neg_price_share": 0.03, "days_covered": 91},
+     "avg_vwap_high": 118.92, "neg_price_share": 0.03, "days_covered": 91,
+     "avg_price": 75.1, "avg_price_days": 91},
     {"region": "QLD1", "quarter": "2026Q2", "avg_vwap_low": 17.72,
-     "avg_vwap_high": 114.29, "neg_price_share": 0.07, "days_covered": 91},
+     "avg_vwap_high": 114.29, "neg_price_share": 0.07, "days_covered": 91,
+     "avg_price": 67.1, "avg_price_days": 91},
     {"region": "SA1", "quarter": "2026Q2", "avg_vwap_low": 20.32,
-     "avg_vwap_high": 272.8, "neg_price_share": 0.21, "days_covered": 91},
+     "avg_vwap_high": 272.8, "neg_price_share": 0.21, "days_covered": 91,
+     "avg_price": 86.4, "avg_price_days": 91},
     {"region": "VIC1", "quarter": "2026Q2", "avg_vwap_low": 13.0,
-     "avg_vwap_high": 109.5, "neg_price_share": 0.21, "days_covered": 91},
+     "avg_vwap_high": 109.5, "neg_price_share": 0.21, "days_covered": 91,
+     "avg_price": 55.9, "avg_price_days": 91},
     {"region": "TAS1", "quarter": "2026Q2", "avg_vwap_low": 65.63,
-     "avg_vwap_high": 118.29, "neg_price_share": 0.0, "days_covered": 91},
+     "avg_vwap_high": 118.29, "neg_price_share": 0.0, "days_covered": 91,
+     "avg_price": 86.2, "avg_price_days": 91},
     # Quarter the AER edition does not cover yet (2026 Q3 blank in the VWA CSV).
     {"region": "NSW1", "quarter": "2026Q3", "avg_vwap_low": 39.06,
      "avg_vwap_high": 127.61, "neg_price_share": 0.01, "days_covered": 32},
@@ -278,19 +285,58 @@ def test_resolve_falls_back_to_seed_when_page_fetch_raises():
 
 # ─── Comparators ───────────────────────────────────────────────────────────
 
-def test_band_contains_pass_warn_and_slack():
-    ok = compare_band_contains(78, 31.2, 118.92, tolerance_ratio=0.15)
-    assert ok["outcome"] == OUTCOME_PASS
-    warn = compare_band_contains(500, 31.2, 118.92, tolerance_ratio=0.15)
-    assert warn["outcome"] == OUTCOME_WARN and "OUTSIDE" in warn["detail"]
-    # 120 is above the band but inside the 15% slack (band width 87.7 → 13.2).
-    assert compare_band_contains(120, 31.2, 118.92, tolerance_ratio=0.15)["outcome"] == OUTCOME_PASS
-    assert compare_band_contains(120, 31.2, 118.92, tolerance_ratio=0.0)["outcome"] == OUTCOME_WARN
+def test_price_ratio_pass_and_warn():
+    # NSW1 2026Q2: AER VWA 78 over our time-weighted 75.1 = 1.039.
+    ok = compare_price_ratio(78, 75.1, ratio_min=0.95, ratio_max=1.8)
+    assert ok["outcome"] == OUTCOME_PASS and "1.039" in ok["detail"]
+    # A derivation that doubled our prices (ratio 0.52) or halved them (2.08).
+    assert compare_price_ratio(78, 150.2, ratio_min=0.95, ratio_max=1.8)["outcome"] == OUTCOME_WARN
+    assert compare_price_ratio(78, 37.55, ratio_min=0.95, ratio_max=1.8)["outcome"] == OUTCOME_WARN
 
 
-def test_band_contains_skips_missing_values():
-    assert compare_band_contains(None, 1, 2, tolerance_ratio=0.1)["outcome"] == "skip"
-    assert compare_band_contains(1, None, None, tolerance_ratio=0.1)["outcome"] == "skip"
+def test_price_ratio_skips_missing_values():
+    assert compare_price_ratio(None, 75.1, ratio_min=0.95, ratio_max=1.8)["outcome"] == "skip"
+    missing = compare_price_ratio(78, None, ratio_min=0.95, ratio_max=1.8)
+    assert missing["outcome"] == "skip" and "avg_price" in missing["detail"]
+
+
+def test_vwa_check_can_fail_where_the_old_decile_band_could_not():
+    """Audit 2026-10 (M6): NSW1 2024Q4's decile band [-6.82, 682.35] +/-15% passed
+    any published value from about -110 to 785. The same quarter with our
+    average price doubled must warn now."""
+    reference = parse_aer_csv(
+        VWA_CSV.replace("2026 Q2,69,78,60,95,87", "2026 Q2,69,170,60,95,87"),
+        "vwap_region_quarter",
+    )
+    row = {"region": "NSW1", "quarter": "2026Q2", "avg_vwap_low": -6.82,
+           "avg_vwap_high": 682.35, "days_covered": 91,
+           "avg_price": 286.2, "avg_price_days": 91}
+    checks = build_checks(reference, {("NSW1", "2026Q2"): row}, reference_quarter="2026Q2")
+    [check] = [c for c in checks["vwap_region_quarter"]["checks"] if c.get("region") == "NSW1"]
+    assert check["outcome"] == OUTCOME_WARN
+    # The same quarter at its real time-weighted average (143.1) passes: 1.188.
+    row["avg_price"] = 143.1
+    checks = build_checks(reference, {("NSW1", "2026Q2"): row}, reference_quarter="2026Q2")
+    [check] = [c for c in checks["vwap_region_quarter"]["checks"] if c.get("region") == "NSW1"]
+    assert check["outcome"] == OUTCOME_PASS
+
+
+def test_vwa_check_without_avg_price_history_is_a_skip_not_a_pass():
+    reference = parse_aer_csv(VWA_CSV, "vwap_region_quarter")
+    legacy = {"region": "NSW1", "quarter": "2026Q2", "avg_vwap_low": 31.2,
+              "avg_vwap_high": 118.92, "days_covered": 91}
+    checks = build_checks(reference, {("NSW1", "2026Q2"): legacy}, reference_quarter="2026Q2")
+    vwap = checks["vwap_region_quarter"]
+    assert vwap["counts"][OUTCOME_PASS] == 0
+    assert vwap["counts"]["skip"] == 1
+
+
+def test_vwa_check_partial_avg_price_window_is_partial_coverage():
+    reference = parse_aer_csv(VWA_CSV, "vwap_region_quarter")
+    row = {"region": "NSW1", "quarter": "2026Q2", "days_covered": 91,
+           "avg_price": 75.1, "avg_price_days": 23}
+    checks = build_checks(reference, {("NSW1", "2026Q2"): row}, reference_quarter="2026Q2")
+    assert checks["vwap_region_quarter"]["counts"][OUTCOME_PARTIAL_COVERAGE] == 1
 
 
 def test_share_ratio_band_and_noise_floor():

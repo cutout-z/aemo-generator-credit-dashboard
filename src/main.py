@@ -30,7 +30,7 @@ from .generate_json import generate_all
 from .processed_cache import publish_processed_cache, restore_processed_cache
 from .market_factors import (
     build_market_factors, build_quarterly_summary, check_qed_divergence,
-    QED_NEM_SPREAD_AUD_MWH,
+    months_needing_backfill, QED_NEM_SPREAD_AUD_MWH,
 )
 from .download_bids import fcas_bids_from_raw, fetch_bidperoffer_union
 from .fcas_factor import compute_fcas_factors
@@ -938,7 +938,17 @@ def main():
                 "PUBLIC_ARCHIVE#DISPATCHPRICE#FILE01#*.parquet")):
             stem = mdir.name.split("#")[-1]
             available_price_months.append((int(stem[:4]), int(stem[4:6])))
-        market_factors = build_market_factors(str(data_dir), available_price_months)
+        # Months whose accumulated factors predate a column (avg_price) are
+        # re-fetched once so the AER price check has history to compare.
+        backfill = [
+            ym for ym in months_needing_backfill(str(data_dir))
+            if ym not in available_price_months
+        ]
+        if backfill:
+            logger.info("Market factors: backfilling %d month(s) lacking avg_price", len(backfill))
+        market_factors = build_market_factors(
+            str(data_dir), sorted(set(available_price_months) | set(backfill)),
+        )
         market_quarterly = build_quarterly_summary(market_factors)
         check_qed_divergence(market_quarterly)
     except Exception as e:

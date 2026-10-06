@@ -136,7 +136,7 @@ The AER re-publishes a small quarterly CSV suite ~6–8 weeks after quarter end 
 
 | AER series | Compared against | Band |
 |---|---|---|
-| Quarterly regional VWA spot price | our derived quarterly band `[avg_vwap_low, avg_vwap_high]` | the published price must land inside the band, ±15 % of band width |
+| Quarterly regional VWA spot price | our quarterly time-weighted average price `avg_price` (mean of the daily 5-minute means) | AER VWA ÷ `avg_price` must be 0.95–1.8 (the 2026-08 edition's 40 region-quarters ran 1.005–1.635); a quarter whose factor history predates `avg_price` is `skip`, never a pass |
 | Count of 30-min prices below $0 | our `neg_price_share` (share of 5-min intervals) | ratio 0.5–2.0; a quarter with <50 intervals on both sides is `below_noise_floor`, not a warn; a quarter our aggregate only partly spans is `partial_coverage`, not a warn |
 | Count of 30-min prices above $5,000 | no counterpart column in our artifact | ingested and published as **reference only** (`not_comparable` + reason) |
 | NEM total FCAS cost ($m) | no counterpart (we track FCAS *price* factors, not cost totals) | reference only |

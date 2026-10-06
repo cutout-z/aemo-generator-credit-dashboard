@@ -35,10 +35,14 @@ Access notes (live-verified 2026-09-19 from the Mac checkout):
 
 Comparators (``config.AER_QA_BANDS``):
 
-- ``band_contains`` (VWA spot price): AER's published quarterly regional VWA must
-  land inside our derived quarterly price band ``[avg_vwap_low, avg_vwap_high]``
-  (the bottom- and top-decile VWAPs), with a proportional slack. A regulator
-  number outside both deciles means our price derivation has drifted.
+- ``price_ratio`` (VWA spot price): AER's published quarterly regional VWA divided
+  by our time-weighted average price for the quarter (``avg_price``, the mean of
+  the daily 5-minute means) must sit in ``[ratio_min, ratio_max]``. Demand
+  weighting puts the VWA above the time-weighted mean (ratio 1.005-1.635 over the
+  2026-08 edition), so a ratio outside the band means our price derivation has
+  drifted. It replaced ``band_contains`` (VWA inside the bottom/top-decile band
+  +/-15%), which was so wide it could not fail. Quarters whose factor history
+  predates ``avg_price`` are ``skip`` with the reason, never a pass.
 - ``share_ratio`` (below-$0 count): AER's count of 30-minute trading intervals is
   converted to a share of the quarter's trading intervals (48/day) and compared
   ratio-wise against our ``neg_price_share`` (share of 5-minute dispatch
@@ -115,7 +119,7 @@ SERIES_NEG_PRICE = "neg_price_count"
 SERIES_HIGH_PRICE = "high_price_count_5000"
 SERIES_FCAS_COST = "fcas_total_cost"
 
-COMPARATOR_BAND = "band_contains"
+COMPARATOR_PRICE = "price_ratio"
 COMPARATOR_SHARE = "share_ratio"
 
 OUTCOME_PASS = "pass"
@@ -474,28 +478,24 @@ def latest_quarter(frame: pd.DataFrame) -> str | None:
 
 # ─── Comparators ───────────────────────────────────────────────────────────
 
-def compare_band_contains(aer_value, ours_lo, ours_hi, *, tolerance_ratio: float) -> dict:
-    """AER's single published value must sit in our derived ``[lo, hi]`` band.
-
-    ``tolerance_ratio`` is proportional slack on the band width (``0.15`` = 15%),
-    so a regulator value just outside a narrow band is not a false alarm.
-    """
-    if aer_value is None or ours_lo is None or ours_hi is None:
-        return {"outcome": OUTCOME_SKIP, "detail": "value missing on one side"}
-    lo, hi = float(min(ours_lo, ours_hi)), float(max(ours_lo, ours_hi))
-    slack = abs(hi - lo) * float(tolerance_ratio)
-    value = float(aer_value)
-    if lo - slack <= value <= hi + slack:
-        return {
-            "outcome": OUTCOME_PASS,
-            "detail": f"published {value:g} inside derived band "
-                      f"[{lo:g}, {hi:g}] (slack {slack:.2f})",
-        }
-    return {
-        "outcome": OUTCOME_WARN,
-        "detail": f"published {value:g} OUTSIDE derived band "
-                  f"[{lo:g}, {hi:g}] (slack {slack:.2f})",
-    }
+def compare_price_ratio(aer_value, our_avg_price, *, ratio_min: float, ratio_max: float) -> dict:
+    """AER's VWA over our time-weighted average price must sit in the ratio band."""
+    if aer_value is None:
+        return {"outcome": OUTCOME_SKIP, "detail": "AER value missing"}
+    if our_avg_price is None or pd.isna(our_avg_price):
+        return {"outcome": OUTCOME_SKIP,
+                "detail": "derived time-weighted average missing (factor history "
+                          "predates avg_price)"}
+    value, ours = float(aer_value), float(our_avg_price)
+    if ours <= 0:
+        return {"outcome": OUTCOME_WARN,
+                "detail": f"derived average {ours:g} is not positive against AER {value:g}"}
+    ratio = value / ours
+    detail = f"AER VWA {value:g} / derived average {ours:g} = ratio {ratio:.3f}"
+    if ratio_min <= ratio <= ratio_max:
+        return {"outcome": OUTCOME_PASS, "detail": detail + " in band"}
+    return {"outcome": OUTCOME_WARN,
+            "detail": detail + f" OUTSIDE [{ratio_min}, {ratio_max}]"}
 
 
 def compare_share_ratio(
@@ -726,10 +726,10 @@ def build_checks(
                     "aer_value": None if aer_value is None else float(aer_value),
                 }
                 ours: dict = {}
-                if comparator == COMPARATOR_BAND:
+                if comparator == COMPARATOR_PRICE:
                     ours = {
-                        "avg_vwap_low": row.get("avg_vwap_low"),
-                        "avg_vwap_high": row.get("avg_vwap_high"),
+                        "avg_price": row.get("avg_price"),
+                        "avg_price_days": _whole_days(row.get("avg_price_days")),
                     }
                 elif comparator == COMPARATOR_SHARE:
                     ours = {
@@ -742,15 +742,20 @@ def build_checks(
                     check["our_source"] = row["_source"]
                 if row.get("days_covered") is not None:
                     check["our_days_covered"] = _whole_days(row.get("days_covered"))
-                shortfall = coverage_shortfall(quarter, row)
+                coverage_row = row
+                if comparator == COMPARATOR_PRICE and row.get("avg_price_days") is not None:
+                    # The average spans only the days that carry avg_price.
+                    coverage_row = {"days_covered": row.get("avg_price_days")}
+                shortfall = coverage_shortfall(quarter, coverage_row)
                 if shortfall:
                     # Not like-for-like: the AER figure is a whole quarter, our
                     # window is not. Recorded, counted, never a data-quality warn.
                     verdict = {"outcome": OUTCOME_PARTIAL_COVERAGE, "detail": shortfall}
-                elif comparator == COMPARATOR_BAND:
-                    verdict = compare_band_contains(
-                        aer_value, row.get("avg_vwap_low"), row.get("avg_vwap_high"),
-                        tolerance_ratio=float(band.get("tolerance_ratio", 0.0)),
+                elif comparator == COMPARATOR_PRICE:
+                    verdict = compare_price_ratio(
+                        aer_value, row.get("avg_price"),
+                        ratio_min=float(band.get("ratio_min", 0.0)),
+                        ratio_max=float(band.get("ratio_max", 1e9)),
                     )
                 elif comparator == COMPARATOR_SHARE:
                     verdict = compare_share_ratio(

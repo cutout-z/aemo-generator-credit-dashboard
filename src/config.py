@@ -206,9 +206,18 @@ AER_QA_SEED_URLS = {
 # counterpart column" — the reason is published, never a silent pass.
 AER_QA_BANDS = {
     "vwap_region_quarter": {
-        "comparator": "band_contains",
-        # Proportional slack on our derived [avg_vwap_low, avg_vwap_high] band.
-        "tolerance_ratio": 0.15,
+        # AER volume-weighted average / our time-weighted average price for the
+        # same region and quarter. Demand weighting lifts the VWA above the
+        # time-weighted mean: across the 40 region-quarters of the AER 2026-08
+        # edition (2024Q3-2026Q2) the ratio ran 1.005 (TAS1) to 1.635 (SA1
+        # 2026Q1), median 1.13. The band admits all of them and flags a
+        # derivation that halves or doubles the price. (The old check -- AER
+        # VWA inside [bottom-decile, top-decile] +/-15% of the width -- passed
+        # anything from about -110 to 785 $/MWh for NSW1 2024Q4 and could not
+        # fail.)
+        "comparator": "price_ratio",
+        "ratio_min": 0.95,
+        "ratio_max": 1.8,
     },
     "neg_price_count": {
         "comparator": "share_ratio",
