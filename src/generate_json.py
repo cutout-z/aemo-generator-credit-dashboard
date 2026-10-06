@@ -629,8 +629,10 @@ def generate_all(
 
     # Write per-generator files
     count = 0
+    written: set[str] = set()
     for _, row in generators.iterrows():
         duid = str(row["DUID"])
+        written.add(f"{_safe_filename(duid)}.json")
         metadata = {
             "station_name": _text(row.get("STATION_NAME", "")),
             "region": _text(row.get("REGION", "")),
@@ -751,10 +753,44 @@ def generate_all(
         daily_aggregates=daily_aggregates,
         constraint_data=constraint_data,
         market=market,
+        written=written,
     )
     logger.info(f"Wrote {station_count} station aggregate files")
 
+    prune_orphan_files(gen_dir, written, market=market)
     return count
+
+
+def prune_orphan_files(gen_dir: str | Path, written: set[str], *, market: str = "NEM") -> list[str]:
+    """Delete this market's generator/station files that this run did not write.
+
+    Nothing reads them (the page only opens files named in index.json) and
+    nothing updates them, so they are stale copies: 450 GENSETID-era unit stubs,
+    TORRB1 and WKIEWA2 (no longer registered) and the West Kiewa station file
+    (one unit since the merge) sat in docs/data/generators with data frozen at
+    2026-03..2026-07 (audit 2026-10, M8). Files of another market, and files
+    that do not parse, are left alone. Returns the removed file names.
+    """
+    if not written:
+        logger.warning("No generator files written this run; orphan pruning skipped")
+        return []
+    removed: list[str] = []
+    for path in sorted(Path(gen_dir).glob("*.json")):
+        if path.name in written:
+            continue
+        try:
+            doc_market = json.loads(path.read_text()).get("market")
+        except (OSError, ValueError, AttributeError):
+            logger.warning("Orphan check: %s unreadable, left in place", path.name)
+            continue
+        if doc_market not in (None, "", market):
+            continue
+        path.unlink()
+        removed.append(path.name)
+    if removed:
+        logger.info("Removed %d orphan generator/station files (e.g. %s)",
+                    len(removed), ", ".join(removed[:5]))
+    return removed
 
 
 def _safe_station_filename(name: str) -> str:
@@ -800,8 +836,12 @@ def _generate_station_files(
     daily_aggregates: pd.DataFrame | None = None,
     constraint_data: pd.DataFrame | None = None,
     market: str = "NEM",
+    written: set[str] | None = None,
 ) -> int:
-    """Generate station-level aggregation files for multi-DUID stations."""
+    """Generate station-level aggregation files for multi-DUID stations.
+
+    ``written`` collects the file names produced (for orphan pruning).
+    """
     # Group generators by station name
     station_groups = generators.groupby("STATION_NAME")
     multi_duid = {name: group for name, group in station_groups if len(group) > 1}
@@ -930,6 +970,8 @@ def _generate_station_files(
 
         json_path = out_dir / f"{file_key}.json"
         json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
+        if written is not None:
+            written.add(json_path.name)
         count += 1
 
         # Add to station index
