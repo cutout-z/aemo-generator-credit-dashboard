@@ -273,6 +273,13 @@ MONTHLY_AGGREGATES_CACHE = "data/monthly_aggregates.feather"
 # How many years of SCADA/price history to process
 HISTORY_YEARS = 5
 
+# Five-minute settlement started on 1 October 2021. Before it, energy was
+# settled at the 30-minute TRADING price (the average of the six dispatch
+# prices in the trading interval, subject to caps), so revenue and captured
+# price for earlier months use TRADINGPRICE, not DISPATCHPRICE
+# (aggregate.settlement_prices).
+FIVE_MINUTE_SETTLEMENT_START = (2021, 10)
+
 # Default months to reprocess on incremental run (overlap for late data)
 DEFAULT_MONTHS_BACK = 2
 

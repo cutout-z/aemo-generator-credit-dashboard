@@ -67,6 +67,66 @@ def dedupe_interval_keys(
     return df.drop_duplicates(subset=keys, keep="last")
 
 
+def settles_on_trading_price(year: int, month: int) -> bool:
+    """True for months settled at the 30-minute trading price (before 5MS)."""
+    return (year, month) < tuple(config.FIVE_MINUTE_SETTLEMENT_START)
+
+
+def settlement_prices(
+    year: int,
+    month: int,
+    dispatch_prices: pd.DataFrame,
+    trading_prices: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """The regional energy price each 5-minute interval was SETTLED at.
+
+    From October 2021 (five-minute settlement) that is the dispatch price, so
+    ``dispatch_prices`` is returned unchanged. Earlier months were settled at
+    the 30-minute trading price: every dispatch interval takes the RRP of the
+    trading interval that contains it (the trading interval ENDING at the
+    dispatch interval's end rounded up to the half hour). Valuing those months
+    at the 5-minute price misstated revenue, for example OAKEY1 in September
+    2021: captured price -$18.00 at dispatch prices, $313.76 at the trading
+    prices it was paid.
+
+    Only RRP is replaced; the FCAS columns are left as dispatched (they feed
+    the regional FCAS price averages, not revenue). A dispatch interval with no
+    trading price keeps its dispatch RRP and is counted in a warning.
+    """
+    if not settles_on_trading_price(year, month):
+        return dispatch_prices
+    if trading_prices is None or trading_prices.empty:
+        raise RuntimeError(
+            f"{year}-{month:02d} was settled at 30-minute trading prices but no "
+            "TRADINGPRICE rows were supplied; refusing to value it at dispatch prices"
+        )
+    out = dispatch_prices.copy()
+    key = pd.to_datetime(out["SETTLEMENTDATE"]).astype("datetime64[ns]").dt.ceil("30min")
+    trading = dedupe_interval_keys(
+        trading_prices[["SETTLEMENTDATE", "REGIONID", "RRP"]],
+        ["SETTLEMENTDATE", "REGIONID"],
+        label=f"TRADINGPRICE {year}-{month:02d}", value_cols=["RRP"],
+    )
+    lookup = pd.Series(
+        trading["RRP"].to_numpy(),
+        index=pd.MultiIndex.from_arrays([
+            pd.to_datetime(trading["SETTLEMENTDATE"]).astype("datetime64[ns]"),
+            trading["REGIONID"].astype(str),
+        ]),
+    )
+    trp = lookup.reindex(
+        pd.MultiIndex.from_arrays([key, out["REGIONID"].astype(str)])
+    ).to_numpy()
+    missing = pd.isna(trp)
+    if missing.any():
+        logger.warning(
+            f"{year}-{month:02d}: {int(missing.sum()):,} dispatch intervals have no "
+            "trading price — kept their dispatch RRP"
+        )
+    out["RRP"] = np.where(missing, out["RRP"].to_numpy(dtype=float), trp)
+    return out
+
+
 def _merge_preserving_rows(
     left: pd.DataFrame,
     right: pd.DataFrame,

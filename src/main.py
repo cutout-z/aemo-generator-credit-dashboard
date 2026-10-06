@@ -14,12 +14,13 @@ from . import config
 from .aggregate import (
     aggregate_constraints_month, aggregate_fcas_prices,
     aggregate_month, aggregate_month_daily, build_mlf_lookup,
+    settlement_prices, settles_on_trading_price,
 )
 from .download_constraints import (
     fetch_binding_constraints_month, fetch_gencondata,
     fetch_spdconnectionpointconstraint,
 )
-from .download_dispatch import fetch_dispatch_price_month
+from .download_dispatch import fetch_dispatch_price_month, fetch_trading_price_month
 from .download_intermittent import fetch_intermittent_month  # noqa: F401  (S3-01: retained for cache-migration tooling; unused by pipeline)
 from .download_metadata import fetch_generators
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
@@ -112,6 +113,16 @@ def _dataframe_fingerprint(df: pd.DataFrame) -> int:
         return 0
     stable = df.copy().sort_values(list(df.columns)).reset_index(drop=True)
     return int(pd.util.hash_pandas_object(stable, index=False).sum())
+
+
+def _settlement_prices_for(
+    year: int, month: int, prices: pd.DataFrame, data_dir: Path, rebuild: bool,
+) -> pd.DataFrame:
+    """Prices revenue is valued at: dispatch prices from 5MS, trading before."""
+    if not settles_on_trading_price(year, month):
+        return prices
+    trading = fetch_trading_price_month(year, month, str(data_dir), rebuild=rebuild)
+    return settlement_prices(year, month, prices, trading)
 
 
 def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
@@ -670,11 +681,16 @@ def main():
                 fy_start = year if month >= 7 else year - 1
                 mlf_lookup = build_mlf_lookup(mlf_history, fy_start)
 
-                # Aggregate
+                # Aggregate. Revenue uses the price each interval was settled
+                # at: the 30-minute trading price before October 2021.
+                settled = _settlement_prices_for(
+                    year, month, prices, data_dir, rebuild=args.full_refresh,
+                )
                 monthly = aggregate_month(
-                    scada, prices, dispatchload, generators, mlf_lookup, year, month,
+                    scada, settled, dispatchload, generators, mlf_lookup, year, month,
                     loss_factor_periods=loss_factor_periods,
                 )
+                settled = None
                 if not monthly.empty:
                     new_rows.append(monthly)
 
