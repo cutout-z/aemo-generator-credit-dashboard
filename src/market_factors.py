@@ -21,6 +21,7 @@ import pandas as pd
 
 from . import config
 from .download_dispatch import fetch_dispatch_price_month
+from .interval_days import interval_calendar_day_str
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ QED_DIVERGENCE_RATIO_MAX = 2.5  # derived above 250% of QED -> investigate
 def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
     """Compute per-region per-day spread metrics from 5-minute DISPATCHPRICE rows.
 
+    The "vwap_*" fields are SIMPLE means of the window's 5-minute prices (each
+    interval weighted equally; there is no volume), kept under their published
+    names.
+
     Pure function — no I/O, unit-testable.
 
     Args:
@@ -59,7 +64,10 @@ def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = prices.copy()
-    df["date"] = df["SETTLEMENTDATE"].dt.date.astype(str)
+    # Interval-ENDING days: the interval ending at 00:00 is the previous day's
+    # last five minutes. dt.date put it in the next day, so every day had 287
+    # of its own intervals plus the previous day's last one.
+    df["date"] = interval_calendar_day_str(df["SETTLEMENTDATE"])
 
     out = []
     for (region, date_str), g in df.groupby(["REGIONID", "date"]):
@@ -77,6 +85,10 @@ def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
         row = {
             "date": date_str,
             "region": region,
+            "day_basis": DAY_BASIS,
+            # Time-weighted (simple interval) mean price of the day: the
+            # like-for-like counterpart the AER VWA cross-check divides by.
+            "avg_price": round(float(rrp.mean()), 2),
             "neg_price_share": round(float((rrp < 0).mean()), 4),
             "price_std": round(float(rrp.std()), 2),
             "intervals": int(n),
@@ -96,6 +108,35 @@ def compute_daily_spreads(prices: pd.DataFrame) -> pd.DataFrame:
         out.append(row)
 
     return pd.DataFrame(out)
+
+
+# A cached month missing any of these is recomputed whenever its prices can be
+# read (raw cache, or a re-download for months_needing_backfill).
+DAILY_FACTOR_REQUIRED_COLS = ("spread_8h", "avg_price", "day_basis")
+# Days are interval-ending calendar days (interval_days); rows without this
+# marker were built on the old timestamp-date basis and are recomputed.
+DAY_BASIS = "interval-ending"
+
+
+def months_needing_backfill(data_dir: str) -> list[tuple[int, int]]:
+    """Months in the accumulated daily factors that lack a required column.
+
+    The raw price cache is pruned after 120 days, so a column added later
+    (avg_price, for the AER cross-check) would otherwise never reach older
+    months. Listing them lets the pipeline re-fetch those months' DISPATCHPRICE
+    once (about 2 MB a month) and fill them in.
+    """
+    path = Path(data_dir) / MARKET_FACTORS_CACHE
+    if not path.exists():
+        return []
+    df = pd.read_feather(path)
+    if df.empty or "date" not in df.columns:
+        return []
+    incomplete = pd.Series(False, index=df.index)
+    for col in DAILY_FACTOR_REQUIRED_COLS:
+        incomplete |= df[col].isna() if col in df.columns else True
+    months = sorted({d[:7] for d in df.loc[incomplete, "date"].astype(str)})
+    return [(int(m[:4]), int(m[5:7])) for m in months]
 
 
 def build_market_factors(data_dir: str, months: list[tuple[int, int]]) -> pd.DataFrame:
@@ -124,8 +165,16 @@ def build_market_factors(data_dir: str, months: list[tuple[int, int]]) -> pd.Dat
         # Skip months already computed (settled market data never changes),
         # unless they predate the duration columns — recompute those from the
         # raw price cache so by_duration backfills wherever prices survive.
-        already = not existing.empty and (existing["date"].str.startswith(month_label)).any()
-        if already and "spread_8h" in existing.columns:
+        in_month = (
+            existing["date"].str.startswith(month_label)
+            if not existing.empty else pd.Series(dtype=bool)
+        )
+        already = bool(in_month.any())
+        complete = already and all(
+            col in existing.columns and existing.loc[in_month, col].notna().all()
+            for col in DAILY_FACTOR_REQUIRED_COLS
+        )
+        if complete:
             continue
         # else fall through: fetch_dispatch_price_month(rebuild=False) uses the
         # raw cache only and raises if pruned — months keep decile-only history.
@@ -167,14 +216,23 @@ def build_quarterly_summary(daily: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     df = daily.copy()
     df["quarter"] = df["date"].map(quarter_label)
-    grouped = df.groupby(["region", "quarter"]).agg(
+    spec = dict(
         avg_spread_decile=("spread_decile", "mean"),
         avg_spread_max=("spread_max", "mean"),
         avg_vwap_high=("vwap_high", "mean"),
         avg_vwap_low=("vwap_low", "mean"),
         neg_price_share=("neg_price_share", "mean"),
         days_covered=("date", "nunique"),
-    ).reset_index().round(2)
+    )
+    if "avg_price" in df.columns:
+        spec["avg_price"] = ("avg_price", "mean")
+        spec["avg_price_days"] = ("avg_price", "count")
+    grouped = df.groupby(["region", "quarter"]).agg(**spec).reset_index()
+    # Dollar fields to the cent; the negative-price SHARE keeps 4 dp — rounded
+    # to 2 dp it moved the AER ratio check by up to 8% (TAS1 2025Q4 0.0639 -> 0.06).
+    share = grouped["neg_price_share"].round(4)
+    grouped = grouped.round(2)
+    grouped["neg_price_share"] = share
     return grouped
 
 

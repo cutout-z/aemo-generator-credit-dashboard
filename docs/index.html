@@ -377,8 +377,8 @@
                     <h3>Estimated Economic Curtailment</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
-                        <div class="tooltip-formula">Econ curtailment = forgone generation during RRP &lt; $0 / total UIGF</div>
-                        Estimates energy not generated during negative spot price periods — a proxy for voluntary economic curtailment where generators bid off to avoid paying to export.
+                        <div class="tooltip-formula">Econ curtailment = shortfall below AVAILABILITY during RRP &lt; $0 / total AVAILABILITY</div>
+                        Estimates energy not generated during negative spot price periods — a proxy for voluntary economic curtailment where generators bid off to avoid paying to export. It is the negative-price part of the curtailment proxy, so it never exceeds it.
                         <div class="tooltip-caveat">Proxy only: cannot distinguish voluntary bid-off from AEMO dispatch instructions without bid data.</div>
                     </div>
                 </div>
@@ -390,7 +390,7 @@
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Captured = Σ(MWh × RRP) / Σ(MWh)</div>
-                        Volume-weighted average price received vs. simple time-weighted regional average. Ratio &lt; 1.0 means the generator captures below-average prices (common for solar due to price cannibalisation).
+                        Volume-weighted average price received vs. the simple average regional price over the intervals this unit reported SCADA. For a unit that reports every interval that is the regional time-weighted average; a unit with gaps (new, retiring or offline telemetry) is compared with its own intervals only. Ratio &lt; 1.0 means the generator captures below-average prices (common for solar due to price cannibalisation).
                     </div>
                 </div>
                 <div id="chartPriceCapture"><div class="placeholder">No data yet</div></div>
@@ -412,7 +412,7 @@
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
                         <div class="tooltip-formula">Daily MWh = Σ (SCADAVALUE / 12) per day</div>
-                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown (days with output only); days with no reported data are gaps, not zeros, and zero-output days are shown, not trimmed. Bars in the warn colour are partial days (fewer 5-min intervals reported than expected).
+                        Top: daily generation (MWh). Bottom: daily capacity factor (%). The dashed line in each is the average over the days shown, zero-output days included; days with no reported data are gaps, not zeros, and are left out of the average. Bars in the warn colour are partial days (fewer 5-min intervals reported than expected).
                         <div class="tooltip-caveat">Daily data only available for last 12 months. Requires pipeline re-run to populate.</div>
                     </div>
                 </div>
@@ -481,7 +481,7 @@
                     <h3>Regional Price Spreads (BESS Arbitrage)</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
-                        Daily top/bottom capture-window VWAPs of 5-minute regional prices — the realisable discharge-value and charge-cost windows. The 1h/2h/4h/8h selector takes the top and bottom (duration × 12) five-minute intervals of each day, matching the cycling window of that battery duration; wider windows blend in mid-priced hours, so the realisable spread falls as duration grows. 'Decile' (fixed top/bottom 10% ≈ 2.4h) is the legacy 1–2h-battery proxy, kept for continuity with the AEMO QED benchmark. Market-level data: applies to every unit in the region.
+                        Daily top/bottom capture-window average prices: the simple mean of the 5-minute regional prices in each window (each interval weighted equally, not by volume) — the realisable discharge-value and charge-cost windows. A day runs 00:05–24:00 (interval-ending), so the interval ending at midnight belongs to the day it closes. The 1h/2h/4h/8h selector takes the top and bottom (duration × 12) five-minute intervals of each day, matching the cycling window of that battery duration; wider windows blend in mid-priced hours, so the realisable spread falls as duration grows. 'Decile' (fixed top/bottom 10% ≈ 2.4h) is the legacy 1–2h-battery proxy, kept for continuity with the AEMO QED benchmark. Market-level data: applies to every unit in the region.
                         <div class="tooltip-caveat">Derived from AEMO DISPATCHPRICE 5-minute data. Quarterly context: AEMO QED reported NEM fleet charge/discharge spreads of $121/MWh in Q1 2026 and $51/MWh in Q2 2026.</div>
                     </div>
                 </div>
@@ -998,6 +998,23 @@ function setKPIsLoading() {
     }
 }
 
+// Battery revenue is spot revenue on DISCHARGE only: what the unit paid for the energy it charged
+// is not netted (Aug 2026 fleet: $49.7M gross vs $29.0M net). Said wherever revenue is shown or
+// exported, for a battery unit and for a station with a battery member.
+function revenueBasisNote(data) {
+    if (!data) return '';
+    if (data.fuel_category === 'Battery') return 'discharge only, charging cost not netted';
+    if (data.fuel_mix && data.fuel_mix.Battery) return 'battery discharge gross, charging cost not netted';
+    return '';
+}
+
+// Mean of the days that have data. A zero-output day is data and counts; a missing day (null) does
+// not. Averaging only days with output read LNGS1 as 330 MWh/day when it averaged 6.
+function dailyAverage(values) {
+    const days = (values || []).filter(v => v != null && !isNaN(v));
+    return days.length ? days.reduce((a, b) => a + b, 0) / days.length : 0;
+}
+
 function renderKPIs(data) {
     const row = document.getElementById('kpiRow');
     const foot = document.getElementById('kpiFoot');
@@ -1053,7 +1070,8 @@ function renderKPIs(data) {
         } else {
             sub = basis ? `${basis} · excl. FCAS and contracts` : 'Excl. FCAS and contracts';
         }
-        if (data.fuel_category === 'Battery') sub += ' · charging cost not netted';
+        const batteryNote = revenueBasisNote(data);
+        if (batteryNote) sub += ' · ' + batteryNote;
         setKPI('kpiRev', kpiValueHTML(revV, revU, true), sub);
     } else {
         setKPI('kpiRev', KPI_DASH, `No revenue reported in ${monthsPhrase}`);
@@ -1522,11 +1540,11 @@ function renderCharts(data) {
         }), PLOTLY_CONFIG);
     }
 
-    // Price capture: this unit's captured price against the regional time-weighted average
+    // Price capture: this unit's captured price against the regional average over its own intervals
     if (monthly && monthly.captured_price && monthly.captured_price.some(v => v != null)) {
         const pcTraces = [
             monthLine(monthly.captured_price, 'Captured price', C('info'), '$,.2f'),
-            { ...monthLine(monthly.avg_rrp, 'Regional average price', C('neutral'), '$,.2f'), line: { color: C('neutral'), width: 1.5 } },
+            { ...monthLine(monthly.avg_rrp, 'Regional average (unit intervals)', C('neutral'), '$,.2f'), line: { color: C('neutral'), width: 1.5 } },
         ];
         Plotly.newPlot('chartPriceCapture', pcTraces, chartLayout({
             height: H.lg,
@@ -1808,11 +1826,10 @@ function renderCharts(data) {
         const dayNote = dates.map((_, i) => partial[i]
             ? `<br>Partial day: ${obs[sliceStart + i]} of ${exp[sliceStart + i]} intervals` : '');
 
-        // Averages
-        const validGen = genMwh.filter(v => v != null && v > 0);
-        const avgGen = validGen.length > 0 ? validGen.reduce((a, b) => a + b, 0) / validGen.length : 0;
-        const validCF = cfValues.filter(v => v != null && v > 0);
-        const avgCF = validCF.length > 0 ? validCF.reduce((a, b) => a + b, 0) / validCF.length : 0;
+        // Averages over every day with data, zero-output days included
+        const avgGen = dailyAverage(genMwh);
+        const avgCF = dailyAverage(cfValues);
+        const validCF = cfValues.filter(v => v != null);
         const genRef = referenceLine(avgGen, `Average ${avgGen.toFixed(0)} MWh`, 'y');
         const cfRef = referenceLine(avgCF, `Average ${avgCF.toFixed(1)}%`, 'y2');
 
@@ -2319,7 +2336,7 @@ function buildMonthlyRows(data) {
             'Revenue, MLF only (AUD)': m.revenue_aud ? m.revenue_aud[i] : null,
             'Capacity Factor': m.capacity_factor ? m.capacity_factor[i] : null,
             'Captured Price ($/MWh)': m.captured_price ? m.captured_price[i] : null,
-            'Avg Regional RRP ($/MWh)': m.avg_rrp ? m.avg_rrp[i] : null,
+            'Avg Regional RRP, unit intervals ($/MWh)': m.avg_rrp ? m.avg_rrp[i] : null,
             'Price Capture Ratio': m.price_capture_ratio ? m.price_capture_ratio[i] : null,
         };
         if (m.curtailment_pct) row['Curtailment Proxy'] = m.curtailment_pct[i];
@@ -2396,16 +2413,21 @@ function buildInfoRows(data) {
         'Nameplate (MW)': data.capacity_mw != null ? data.capacity_mw : '',
         'Connection Point': data.connection_point || '',
         'LGC Eligible': data.lgc_eligible ? 'Yes' : 'No',
+        'Revenue Basis': revenueBasisNote(data) || 'spot energy revenue',
     }];
 }
 
+// Regional FCAS prices are the region's market averages (the same for every unit there), not
+// this unit's FCAS revenue: the column names say so, for unit and station exports alike.
 function buildFCASRows(data) {
     const f = data && data.fcas;
     if (!f || !f.months) return [];
     const services = Object.keys(f.services || {});
     return f.months.map((month, i) => {
         const row = { 'Month': month };
-        services.forEach(s => { row[s] = (f.services[s] || [])[i] != null ? f.services[s][i] : ''; });
+        services.forEach(s => {
+            row[s + ' (regional average)'] = (f.services[s] || [])[i] != null ? f.services[s][i] : '';
+        });
         return row;
     });
 }
@@ -2496,7 +2518,7 @@ function buildExportSections(data) {
         ['Monthly', buildMonthlyRows(data)],
         ['Daily', buildDailyRows(data)],
         ['MLF', buildMLFRows(data)],
-        ['FCAS', buildFCASRows(data)],
+        ['FCAS Regional Average', buildFCASRows(data)],
         ['FCAS Participation', buildFCASParticipationRows(data)],
         ['Offers', buildOffersRows(data)],
         ['Offer Curve', buildOfferCurveRows(data)],
@@ -2563,17 +2585,17 @@ function renderSpreadChart(region) {
         label = dur + ' window';
     }
     const spreadTraces = [
-        { x: xs, y: high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Discharge-window VWAP', line: { color: C('good'), width: 1.5 },
-          hovertemplate: 'Discharge VWAP: $%{y:,.0f}/MWh<extra></extra>' },
-        { x: xs, y: low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Charge-window VWAP', line: { color: C('bad'), width: 1.5 },
-          hovertemplate: 'Charge VWAP: $%{y:,.0f}/MWh<extra></extra>' },
+        { x: xs, y: high.slice(sCut), type: 'scatter', mode: 'lines', name: 'Discharge-window average', line: { color: C('good'), width: 1.5 },
+          hovertemplate: 'Discharge-window average: $%{y:,.0f}/MWh<extra></extra>' },
+        { x: xs, y: low.slice(sCut), type: 'scatter', mode: 'lines', name: 'Charge-window average', line: { color: C('bad'), width: 1.5 },
+          hovertemplate: 'Charge-window average: $%{y:,.0f}/MWh<extra></extra>' },
         { x: xs, y: spread.slice(sCut), type: 'scatter', mode: 'lines', name: 'Spread (right axis)', yaxis: 'y2', line: { color: C('info'), width: 1.2, dash: 'dot' },
           hovertemplate: 'Spread: $%{y:,.0f}/MWh<extra></extra>' },
     ];
     Plotly.newPlot('chartMarketSpread', spreadTraces, chartLayout({
         height: H.lg,
         xaxis: { type: 'date' },
-        yaxis: { title: { text: 'VWAP $/MWh · ' + label } },
+        yaxis: { title: { text: 'Window average $/MWh · ' + label } },
         yaxis2: {
             title: { text: 'Spread $/MWh' }, overlaying: 'y', side: 'right', showgrid: false, zeroline: false,
             tickfont: { size: 11, color: C('faint') }, automargin: true,

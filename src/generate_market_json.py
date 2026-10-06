@@ -110,7 +110,10 @@ def publish_market_json(
         "updated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "description": (
             "Regional daily price-spread factors from AEMO 5-minute DISPATCHPRICE "
-            "data. spread_decile uses a fixed top/bottom-10% window (~2.4h, a "
+            "data. vwap_high/vwap_low are simple means of the window's 5-minute "
+            "prices (each interval weighted equally, not volume-weighted); days "
+            "are interval-ending (00:05-24:00). spread_decile uses a fixed "
+            "top/bottom-10% window (~2.4h, a "
             "1-2h battery proxy); by_duration provides 1h/2h/4h/8h capture "
             "windows for duration-matched BESS analysis. Market-level: applies "
             "to every unit in the region."

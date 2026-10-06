@@ -72,3 +72,50 @@ def fetch_dispatch_price_month(
 
     logger.info(f"DISPATCHPRICE {year}-{month:02d}: {len(prices):,} rows")
     return prices
+
+
+def fetch_trading_price_month(
+    year: int,
+    month: int,
+    cache_dir: str,
+    rebuild: bool = False,
+) -> pd.DataFrame:
+    """Download TRADINGPRICE (30-minute regional RRP) for a single month via NEMOSIS.
+
+    Before five-minute settlement (1 Oct 2021) energy was settled at the
+    30-minute trading price, not the 5-minute dispatch price, so revenue for
+    those months must use this table (see aggregate.settlement_prices).
+
+    Returns DataFrame with columns: SETTLEMENTDATE (end of the 30-minute
+    trading interval), REGIONID, RRP.
+    """
+    nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
+    Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
+
+    start_time = f"{year}/{month:02d}/01 00:00:00"
+    if month == 12:
+        end_time = f"{year + 1}/01/01 00:00:00"
+    else:
+        end_time = f"{year}/{month + 1:02d}/01 00:00:00"
+
+    logger.info(f"Fetching TRADINGPRICE for {year}-{month:02d}...")
+    prices = dynamic_data_compiler(
+        start_time=start_time,
+        end_time=end_time,
+        table_name="TRADINGPRICE",
+        raw_data_location=nemosis_cache,
+        select_columns=["SETTLEMENTDATE", "REGIONID", "RRP"],
+        fformat="parquet",
+        rebuild=rebuild,
+    )
+    if prices is None or prices.empty:
+        logger.warning(f"No TRADINGPRICE data for {year}-{month:02d}")
+        return pd.DataFrame()
+
+    prices["SETTLEMENTDATE"] = pd.to_datetime(prices["SETTLEMENTDATE"])
+    prices["RRP"] = pd.to_numeric(prices["RRP"], errors="coerce")
+    prices = prices.dropna(subset=["RRP"]).drop_duplicates(
+        subset=["SETTLEMENTDATE", "REGIONID"], keep="last"
+    )
+    logger.info(f"TRADINGPRICE {year}-{month:02d}: {len(prices):,} rows")
+    return prices

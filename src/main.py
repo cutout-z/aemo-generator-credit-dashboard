@@ -14,22 +14,24 @@ from . import config
 from .aggregate import (
     aggregate_constraints_month, aggregate_fcas_prices,
     aggregate_month, aggregate_month_daily, build_mlf_lookup,
+    settlement_prices, settles_on_trading_price,
 )
 from .download_constraints import (
     fetch_binding_constraints_month, fetch_gencondata,
     fetch_spdconnectionpointconstraint,
 )
-from .download_dispatch import fetch_dispatch_price_month
+from .download_dispatch import fetch_dispatch_price_month, fetch_trading_price_month
 from .download_intermittent import fetch_intermittent_month  # noqa: F401  (S3-01: retained for cache-migration tooling; unused by pipeline)
 from .download_metadata import fetch_generators
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .fetch_mlf import fetch_mlf_data
 from .audit_cf import audit_capacity_factors, log_audit_results
 from .generate_json import generate_all
+from .lineage import merge_lineage_daily, merge_lineage_monthly, with_predecessor_units
 from .processed_cache import publish_processed_cache, restore_processed_cache
 from .market_factors import (
     build_market_factors, build_quarterly_summary, check_qed_divergence,
-    QED_NEM_SPREAD_AUD_MWH,
+    months_needing_backfill, QED_NEM_SPREAD_AUD_MWH,
 )
 from .download_bids import fcas_bids_from_raw, fetch_bidperoffer_union
 from .fcas_factor import compute_fcas_factors
@@ -112,6 +114,137 @@ def _dataframe_fingerprint(df: pd.DataFrame) -> int:
         return 0
     stable = df.copy().sort_values(list(df.columns)).reset_index(drop=True)
     return int(pd.util.hash_pandas_object(stable, index=False).sum())
+
+
+def _settlement_prices_for(
+    year: int, month: int, prices: pd.DataFrame, data_dir: Path, rebuild: bool,
+) -> pd.DataFrame:
+    """Prices revenue is valued at: dispatch prices from 5MS, trading before."""
+    if not settles_on_trading_price(year, month):
+        return prices
+    trading = fetch_trading_price_month(year, month, str(data_dir), rebuild=rebuild)
+    return settlement_prices(year, month, prices, trading)
+
+
+# Constraint data may trail the generation data by this many whole months
+# before the run reports the constraints lane degraded (operator alert).
+CONSTRAINT_MAX_LAG_MONTHS = 2
+
+
+def _month_index(label: str) -> int:
+    return int(label[:4]) * 12 + int(label[5:7]) - 1
+
+
+def _constraint_months_to_process(
+    window: list[tuple[int, int]], cached_latest: str | None, months_back: int,
+) -> list[tuple[int, int]]:
+    """Constraint months for an incremental run: the overlap window, extended
+    back to the month after the newest cached one, so a lane that was skipped
+    for months catches up instead of leaving a gap."""
+    if not window:
+        return []
+    if cached_latest is None:
+        return list(window)  # no history: backfill the whole window
+    tail = list(window[-months_back:]) if months_back > 0 else []
+    nxt = _month_index(cached_latest) + 1
+    catch_up = [ym for ym in window if (ym[0] * 12 + ym[1] - 1) >= nxt]
+    return sorted(set(tail) | set(catch_up))
+
+
+def _constraint_lane(
+    constraints: pd.DataFrame, monthly: pd.DataFrame, *, skipped: bool, error: str | None = None,
+) -> LaneRun:
+    """Run-manifest record for the binding-constraint data, with a freshness check.
+
+    The daily lanes pass --skip-constraints, so constraint history stopped at
+    2026-03 while generation ran to 2026-08 and nothing said so. The lane now
+    reports its as-of month, and is degraded (an operator alert) once it
+    trails the newest generation month by more than CONSTRAINT_MAX_LAG_MONTHS.
+    """
+    lane = LaneRun(source="constraints")
+    lane.frame = constraints if constraints is not None else pd.DataFrame()
+    if constraints is not None and not constraints.empty and "month" in constraints.columns:
+        lane.months_with_data = int(constraints["month"].nunique())
+    if skipped:
+        lane.status = STATUS_SKIPPED
+        lane.note = "explicit --skip-constraints; cached constraint history kept"
+    if error:
+        lane.status = STATUS_DEGRADED
+        lane.error = error
+    asof = lane.asof_month()
+    latest_gen = None
+    if monthly is not None and not monthly.empty and "month" in monthly.columns:
+        latest_gen = str(sorted(monthly["month"].dropna().astype(str).unique())[-1])
+    if latest_gen and (asof is None or _month_index(latest_gen) - _month_index(asof) > CONSTRAINT_MAX_LAG_MONTHS):
+        lag = "no constraint data" if asof is None else (
+            f"constraint data ends {asof}, "
+            f"{_month_index(latest_gen) - _month_index(asof)} months behind generation ({latest_gen})"
+        )
+        lane.status = STATUS_DEGRADED
+        lane.error = "; ".join(e for e in (lane.error, lag) if e)
+    return lane
+
+
+# Market spreads come from the same monthly DISPATCHPRICE archive as the
+# generation data, so they should end within days of the daily aggregates.
+MARKET_MAX_LAG_DAYS = 7
+
+
+def _market_lane(
+    market_factors: pd.DataFrame,
+    months: list[tuple[int, int]],
+    daily: pd.DataFrame,
+    error: str | None = None,
+) -> LaneRun:
+    """Run-manifest record for the market-spread lane (market_daily.json).
+
+    It used to be written as ok with asof_month null and 0 attempted months
+    whatever happened, so a stalled spread series was invisible. It now
+    records the months it read, its as-of month, and is degraded when its last
+    day trails the daily generation data by more than MARKET_MAX_LAG_DAYS.
+    """
+    lane = LaneRun(source="market_factors")
+    lane.frame = market_factors if market_factors is not None else pd.DataFrame()
+    lane.attempted_months = len(months)
+    if lane.frame is not None and not lane.frame.empty and "date" in lane.frame.columns:
+        present = set(lane.frame["date"].astype(str).str[:7])
+        lane.months_with_data = sum(f"{y}-{m:02d}" in present for y, m in months)
+    if error:
+        lane.status = STATUS_DEGRADED
+        lane.error = error
+    last_market = None
+    if lane.frame is not None and not lane.frame.empty and "date" in lane.frame.columns:
+        last_market = pd.Timestamp(str(lane.frame["date"].astype(str).max()))
+    last_daily = None
+    if daily is not None and not daily.empty and "date" in daily.columns:
+        last_daily = pd.Timestamp(str(daily["date"].astype(str).max()))
+    if last_daily is not None and (
+        last_market is None or (last_daily - last_market).days > MARKET_MAX_LAG_DAYS
+    ):
+        lag = "no market spread data" if last_market is None else (
+            f"market spreads end {last_market.date()}, "
+            f"{(last_daily - last_market).days} days before the daily data ({last_daily.date()})"
+        )
+        lane.status = STATUS_DEGRADED
+        lane.error = "; ".join(e for e in (lane.error, lag) if e)
+    return lane
+
+
+DAILY_WINDOW_DAYS = 365
+
+
+def trim_daily_window(daily: pd.DataFrame, days: int = DAILY_WINDOW_DAYS) -> pd.DataFrame:
+    """Keep the last ``days`` days of daily rows, counted back from the NEWEST DAY.
+
+    The cut used to be today - 365, but the newest day trails today by the
+    MMSDM publication lag (~35 days), so the "Last 12 Months" chart showed
+    about 332 days (5 Oct 2026: 2025-10-05..2026-08-31).
+    """
+    if daily is None or daily.empty or "date" not in daily.columns:
+        return daily
+    latest = pd.Timestamp(str(daily["date"].astype(str).max()))
+    cutoff = (latest - timedelta(days=days)).strftime("%Y-%m-%d")
+    return daily[daily["date"].astype(str) >= cutoff]
 
 
 def _months_to_process(months_back: int, full_refresh: bool) -> list[tuple[int, int]]:
@@ -574,6 +707,9 @@ def main():
 
     generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
     logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
+    # Aggregation also keeps predecessors of renamed/merged units (lineage);
+    # publication folds them into their successor and never lists them.
+    aggregation_units = with_predecessor_units(generators)
 
     # Step 3: Monthly SCADA + price aggregation
     aggregates_path = data_dir / "monthly_aggregates.feather"
@@ -670,16 +806,21 @@ def main():
                 fy_start = year if month >= 7 else year - 1
                 mlf_lookup = build_mlf_lookup(mlf_history, fy_start)
 
-                # Aggregate
+                # Aggregate. Revenue uses the price each interval was settled
+                # at: the 30-minute trading price before October 2021.
+                settled = _settlement_prices_for(
+                    year, month, prices, data_dir, rebuild=args.full_refresh,
+                )
                 monthly = aggregate_month(
-                    scada, prices, dispatchload, generators, mlf_lookup, year, month,
+                    scada, settled, dispatchload, aggregation_units, mlf_lookup, year, month,
                     loss_factor_periods=loss_factor_periods,
                 )
+                settled = None
                 if not monthly.empty:
                     new_rows.append(monthly)
 
                 # Daily aggregation for capacity factor chart
-                daily = aggregate_month_daily(scada, generators, year, month)
+                daily = aggregate_month_daily(scada, aggregation_units, year, month)
                 if not daily.empty:
                     new_daily_rows.append(daily)
 
@@ -743,9 +884,7 @@ def main():
                 all_daily = pd.concat([existing_daily, new_daily], ignore_index=True)
             else:
                 all_daily = new_daily
-            # Trim to last 12 months
-            cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-            all_daily = all_daily[all_daily["date"] >= cutoff]
+            all_daily = trim_daily_window(all_daily)
             all_daily = all_daily.sort_values(["duid", "date"]).reset_index(drop=True)
             all_daily.to_feather(daily_path)
             logger.info(f"Saved {len(all_daily)} daily aggregate rows to {daily_path}")
@@ -790,6 +929,7 @@ def main():
     # Step 3b: Binding constraint aggregation
     constraint_path = data_dir / "constraint_aggregates.feather"
     all_constraints = pd.DataFrame()
+    constraint_error = None
     if args.skip_constraints:
         logger.info("=== Step 3b: Loading cached constraints (--skip-constraints) ===")
         if constraint_path.exists():
@@ -809,14 +949,17 @@ def main():
                     config.CONSTRAINTS_HISTORY_MONTHS, args.full_refresh
                 )
                 if not args.full_refresh:
-                    # If no existing constraint data, backfill the full history window;
-                    # otherwise only reprocess the requested overlap period.
-                    months_back = (
-                        config.CONSTRAINTS_HISTORY_MONTHS
-                        if not constraint_path.exists()
-                        else args.months_back
+                    # No existing constraint data: backfill the full history
+                    # window. Otherwise reprocess the overlap period AND every
+                    # month after the newest cached one (catch-up after skips).
+                    cached_latest = None
+                    if constraint_path.exists():
+                        cached = pd.read_feather(constraint_path, columns=["month"])
+                        if not cached.empty:
+                            cached_latest = str(sorted(cached["month"].astype(str).unique())[-1])
+                    constraint_months = _constraint_months_to_process(
+                        constraint_months, cached_latest, args.months_back,
                     )
-                    constraint_months = constraint_months[-months_back:]
 
                 constraint_rows = []
                 for year, month in constraint_months:
@@ -860,8 +1003,12 @@ def main():
                     all_constraints = pd.read_feather(constraint_path)
             else:
                 logger.warning("Skipping constraints: GENCONDATA or SPDCP unavailable")
+                constraint_error = "GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable"
         except Exception as e:
             logger.error(f"Constraint aggregation failed: {e}")
+            constraint_error = f"constraint aggregation failed: {e}"
+            if constraint_path.exists():
+                all_constraints = pd.read_feather(constraint_path)
     elif constraint_path.exists():
         all_constraints = pd.read_feather(constraint_path)
 
@@ -915,14 +1062,24 @@ def main():
     logger.info("=== Step 3d: Market spread factors ===")
     market_factors = pd.DataFrame()
     market_quarterly = pd.DataFrame()
-    market_lane = LaneRun(source="market_factors")
+    market_months: list[tuple[int, int]] = []
+    market_error = None
     try:
         available_price_months = []
         for mdir in sorted((data_dir / "nemosis_cache").glob(
                 "PUBLIC_ARCHIVE#DISPATCHPRICE#FILE01#*.parquet")):
             stem = mdir.name.split("#")[-1]
             available_price_months.append((int(stem[:4]), int(stem[4:6])))
-        market_factors = build_market_factors(str(data_dir), available_price_months)
+        # Months whose accumulated factors predate a column (avg_price) are
+        # re-fetched once so the AER price check has history to compare.
+        backfill = [
+            ym for ym in months_needing_backfill(str(data_dir))
+            if ym not in available_price_months
+        ]
+        if backfill:
+            logger.info("Market factors: backfilling %d month(s) lacking avg_price", len(backfill))
+        market_months = sorted(set(available_price_months) | set(backfill))
+        market_factors = build_market_factors(str(data_dir), market_months)
         market_quarterly = build_quarterly_summary(market_factors)
         check_qed_divergence(market_quarterly)
     except Exception as e:
@@ -930,10 +1087,9 @@ def main():
         # published market_daily.json is left untouched on failure — but the
         # failure is recorded for the operator channel, never hidden.
         logger.error("Market factor computation failed: %s", e)
-        market_lane.status = STATUS_DEGRADED
-        market_lane.error = str(e)
+        market_error = str(e)
         market_quarterly = pd.DataFrame()
-    market_lane.frame = market_factors
+    market_lane = _market_lane(market_factors, market_months, all_daily, market_error)
 
     # Step 3e/3e2/3e3: Per-DUID optional-source factor facts.
     # S3-12: the month-outer driver fetches BIDPEROFFER_D + BIDDAYOFFER_D once
@@ -1078,8 +1234,8 @@ def main():
     # The daily commit is not a freshness signal: the pipeline re-processes the
     # most recent archive months, so a total download failure still "succeeds".
     logger.info("=== Step 3f: Freshness guards ===")
-    check_monthly_freshness(all_monthly)
-    check_daily_freshness(all_daily)
+    monthly_age_days = check_monthly_freshness(all_monthly)
+    daily_age_days = check_daily_freshness(all_daily)
 
     # Step 3g: Factor-block continuity guard — reject publication when a
     # populated factor metric would vanish without a documented reason.
@@ -1097,8 +1253,8 @@ def main():
 
     # Step 4: Generate JSON output
     logger.info("=== Step 4: Generating JSON output ===")
-    monthly_agg = all_monthly if not all_monthly.empty else None
-    daily_agg = all_daily if not all_daily.empty else None
+    monthly_agg = merge_lineage_monthly(all_monthly, generators) if not all_monthly.empty else None
+    daily_agg = merge_lineage_daily(all_daily, generators) if not all_daily.empty else None
     constraint_agg = all_constraints if not all_constraints.empty else None
     count = generate_all(generators, monthly_agg, mlf_history,
                          draft_mlfs=draft_mlfs, draft_fy_label=draft_fy_label,
@@ -1157,12 +1313,19 @@ def main():
     # raised and aborted the run before this point). Committed with the rest of
     # docs/data on the NAS; the Mac-side staleness check surfaces degraded or
     # errored lanes as alerts.
-    all_lanes = factor_lanes + [market_lane]
+    constraint_lane = _constraint_lane(
+        all_constraints, all_monthly,
+        skipped=bool(args.skip_constraints), error=constraint_error,
+    )
+    all_lanes = factor_lanes + [market_lane, constraint_lane]
     manifest = build_manifest(
         {lane.source: lane for lane in all_lanes if lane is not None},
         mode="full_refresh" if args.full_refresh else "incremental",
         months_back=None if args.full_refresh else args.months_back,
-        guards={"monthly_freshness": "pass", "daily_freshness": "pass"},
+        guards={
+            "monthly_freshness": "pass", "daily_freshness": "pass",
+            "monthly_age_days": monthly_age_days, "daily_age_days": daily_age_days,
+        },
         outputs={
             "generator_files": int(count),
             "processed_cache_snapshot": not args.no_processed_cache_snapshot,

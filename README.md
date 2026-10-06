@@ -13,26 +13,26 @@ A credit risk analysis tool for Australian NEM (National Electricity Market) gen
 - **Source**: [AEMO Registration List (.xls)](https://www.aemo.com.au/-/media/Files/Electricity/NEM/Participant_Information/NEM-Registration-and-Exemption-List.xls)
 - **Update**: Refreshed by the weekly reference-data lane, or on full refresh
 
-### 2. AEMO MMSDM DUDETAILSUMMARY
-- **What**: Transmission Loss Factors (MLFs) per generator per financial year, plus connection point IDs
-- **Source**: AEMO NEMWeb Data Archive (MMSDM monthly packages)
-- **Coverage**: FY15-16 to current FY (~11 years)
-- **Update**: Auto-probes for latest available month
+### 2. MLF Tracker summary (final and draft MLFs, connection points)
+- **What**: Final MLF per DUID per financial year (FY15-16 onward), the next FY's draft MLFs when published, and each DUID's connection point
+- **Source**: [`cutout-z/aemo-mlf-tracker`](https://cutout-z.github.io/aemo-mlf-tracker/outputs/summary.csv) (`src/fetch_mlf.py`), which ingests AEMO's final and draft MLF workbooks
+- **Update**: `--refresh-mlf` (daily, weekly and annual lanes); cached as `data/mlf_tracker_summary.csv` and published in the processed-cache snapshot
 
-### 3. AEMO Draft MLFs
-- **What**: Indicative/draft MLFs for the upcoming financial year
-- **Source**: AEMO Loss Factors publications (Excel workbook with per-region sheets)
-- **Coverage**: Next FY only (published ~March each year)
-- **Update**: Checked by the daily market-data lane and forced by the annual MLF lane; shown as distinct "Draft" marker on MLF chart
+### 3. AEMO MMSDM DUDETAILSUMMARY (dated loss factors)
+- **What**: Every DUID's loss-factor periods with start/end dates: transmission factor (export `SECONDARY_TLF` for bidirectional units) and distribution loss factor
+- **Source**: newest MMSDM monthly DUDETAILSUMMARY archive (~380 KB, `src/loss_factors.py`)
+- **Use**: revenue applies the factor in effect on each interval's day, so a mid-year revision counts from its effective date; `revenue_loss_adjusted_aud` also applies the DLF
 
 ### 4. NEMOSIS Dynamic Data
 - **What**: 5-minute interval operational data via [NEMOSIS](https://github.com/UNSW-CEEM/NEMOSIS) (AEMO's public data API wrapper)
 - **Tables**:
   - `DISPATCH_UNIT_SCADA` — actual generation output (MW) per DUID
   - `DISPATCHPRICE` — regional spot price (RRP) and FCAS prices (8 markets), AUD/MWh
-  - `DISPATCHLOAD` — unconstrained availability (UIGF) for curtailment calculation
+  - `TRADINGPRICE` — 30-minute regional price, used for revenue in months before five-minute settlement (1 Oct 2021)
+  - `DISPATCHLOAD` — bid-in `AVAILABILITY` for the curtailment proxy (`UIGF` is fetched but not used by any published metric)
   - `BIDPEROFFER_D` — daily bid/offer data per DUID, used for per-DUID FCAS participation factors (services offered, share of intervals offering, average/peak offered MW by service) and for per-interval energy offer volumes (BANDAVAIL1-10 on BIDTYPE='ENERGY' rows)
   - `BIDDAYOFFER_D` — daily 10-band energy offer prices per DUID (with rebid versions via VERSIONNO), combined with the volumes above for offer-curve factors
+- **Also**: `DISPATCHCONSTRAINT`, `GENCONDATA` and `SPDCONNECTIONPOINTCONSTRAINT` for the binding-constraint panel (monthly constraints lane, see `deploy/README.md`)
 - **Coverage**: Rolling 5 years of history
 - **Update**: Daily incremental on the NAS (last 2 months reprocessed to capture late-arriving data)
 
@@ -57,19 +57,19 @@ All metrics are computed at monthly granularity from 5-minute interval data.
 | Metric | Formula | Notes |
 |--------|---------|-------|
 | **Generation (MWh)** | `sum(SCADAVALUE) / 12` | 5-min MW readings converted to MWh. Negatives clipped to zero. |
-| **Implied 100% Merchant Revenue (AUD)** | `sum(SCADAVALUE / 12 × RRP × MLF)` | Revenue assuming 100% merchant (no PPA hedge). MLF adjusts for transmission losses. Excludes FCAS and LGC income. |
-| **Capacity Factor (%)** | `Generation_MWh / (Nameplate_MW × Hours_in_Month)` | Ratio of actual to theoretical maximum output. |
-| **Grid Curtailment (%)** | `1 - (Actual_SCADA / Unconstrained_AVAILABILITY)` | Solar and wind only. Total curtailment uses AEMO's UIGF forecast as the unconstrained baseline. From August 2024, split into grid vs. mechanical using `INTERMITTENT_GEN_SCADA` quality flags (see below). |
-| **Estimated Economic Curtailment (%)** | `Forgone generation during RRP < $0 / Total UIGF` | Solar and wind only. Proxy for voluntary bid-off during negative price periods. |
+| **Implied 100% Merchant Revenue (AUD)** | `sum(SCADAVALUE / 12 × RRP × MLF)` | Revenue assuming 100% merchant (no PPA hedge), MLF in effect on each interval's day (`revenue_aud`). `revenue_loss_adjusted_aud` also applies the DLF and is what the page shows where present. RRP is the settlement price: the 5-minute dispatch price from Oct 2021, the 30-minute trading price before. Excludes FCAS and LGC income. |
+| **Capacity Factor (%)** | `Generation_MWh / (Registered_MW × Hours_in_Month)` | Ratio of actual to theoretical maximum output. A station divides by the registered MW of the members that reported that month (`capacity_basis_mw`), so a never-reporting unit does not dilute it. |
+| **Curtailment proxy (%)** | `1 - (Σ SCADA / Σ AVAILABILITY)` | Solar and wind only. A forecast-to-output shortfall against DISPATCHLOAD `AVAILABILITY` (bid-in availability, which includes outages), not measured curtailment. No grid/mechanical split is published. |
+| **Estimated Economic Curtailment (%)** | `Σ (AVAILABILITY − SCADA) during RRP < $0 / Σ AVAILABILITY` | Solar and wind only. Proxy for voluntary bid-off during negative price periods. It is the negative-price part of the curtailment proxy and is capped at it. |
 | **Captured Price (AUD/MWh)** | `sum(SCADAVALUE × RRP) / sum(SCADAVALUE)` | Volume-weighted average price received when actually generating. |
-| **Avg Regional RRP (AUD/MWh)** | `mean(RRP)` | Time-weighted average spot price for the generator's region. |
+| **Avg Regional RRP (AUD/MWh)** | `mean(RRP)` over the intervals the unit reported SCADA | The regional time-weighted average for a unit that reports every interval; a unit with gaps is compared with its own intervals only (Aug 2026: 116 of 122 NSW units at $75.71, ERB02 $72.14). |
 | **Price Capture Ratio** | `Captured_Price / Avg_RRP` | >1.0 = captures premium prices. <1.0 = captures below-average prices (common for solar). |
-| **Price Distribution** | Generation-weighted histogram across 6 bins | Bins: `<0`, `0–50`, `50–100`, `100–200`, `200–300`, `300+` AUD/MWh. |
+| **Price Distribution** | Generation-weighted histogram across 22 bins | `< -100`, then $10 bins from −100 to 100, then `> 100` AUD/MWh (`config.PRICE_BINS`); per-bin MWh are published alongside the shares. |
 | **LGC Eligibility** | `fuel_type in {Solar, Wind, Hydro, Other Renewable}` | For eligible generators, 1 MWh ≈ 1 LGC created. Volume only, no revenue estimation. |
 
 ### Key concepts
 
-- **MLF (Marginal Loss Factor)**: Adjusts generator revenue for transmission losses. Typical range 0.95–1.00. A lower MLF means more energy lost in transmission, reducing effective revenue.
+- **MLF (Marginal Loss Factor)**: Adjusts generator revenue for transmission losses. FY26-27 finals run 0.82–1.14 (5th–95th percentile 0.88–1.01). A lower MLF means more energy lost in transmission, reducing effective revenue.
 - **Draft MLF**: AEMO publishes indicative MLFs for the upcoming FY around March each year. Shown as a distinct marker on the MLF trajectory chart.
 - **Intervention filtering**: AEMO manual market interventions (`INTERVENTION != 0`) are excluded from price and dispatch data (~0.5% of records).
 - **Financial year convention**: July 1 to June 30. MLFs are published per FY.
@@ -77,13 +77,9 @@ All metrics are computed at monthly granularity from 5-minute interval data.
 
 ### Curtailment methodology note
 
-Total curtailment is calculated as `1 - (SCADA / AVAILABILITY)` from the DISPATCHLOAD table, comparing actual output to AEMO's unconstrained intermittent generation forecast (UIGF).
+Curtailment is a forecast-to-output shortfall proxy: `1 - (Σ SCADA / Σ AVAILABILITY)` over the month, from DISPATCHLOAD's bid-in `AVAILABILITY` (outages included), for solar and wind only (metric version `2.0-proxy`). It cannot separate network constraints from outages: the former grid/mechanical split from `INTERMITTENT_GEN_SCADA` quality flags was retired because the flags record telemetry agreement, not why output was limited. Station and FY rollups divide summed actual energy by summed availability energy, never an average of monthly percentages.
 
-From **August 2024 onwards**, the pipeline uses AEMO's `INTERMITTENT_GEN_SCADA` table to split total curtailment into two components:
-- **Grid curtailment**: intervals where the `SCADA_QUALITY` flag on `ELAV` (electrical availability) records is "Good" — the generator was mechanically available but constrained off by the network
-- **Mechanical curtailment**: intervals where the quality flag is non-Good — indicating mechanical downtime or communications issues
-
-The split is proportional: if 80% of intervals have "Good" quality, then 80% of total curtailment is attributed to grid constraints and 20% to mechanical causes. For months **before August 2024**, only total (unsplit) curtailment is available.
+Economic curtailment is the negative-price part of the same shortfall, `Σ (AVAILABILITY − SCADA) during RRP < $0 / Σ AVAILABILITY`, capped at the total proxy.
 
 ### Regional Price Spreads (BESS arbitrage) methodology
 
@@ -97,7 +93,7 @@ The **Regional Price Spreads** panel is a market-level view — the same series 
 | 8h | 96 | 1/3 |
 | Decile | fixed top/bottom 10% of intervals | ≈ 2.4h equivalent |
 
-The daily spread is the top-window VWAP minus the bottom-window VWAP (equal weighting per 5-minute interval). Because wider windows necessarily blend progressively more mid-priced intervals, the realisable spread **declines monotonically with duration** — 1h ≥ 2h ≥ 4h ≥ 8h for the same day and region. This is a structural property of the method, not a market signal.
+The daily spread is the top-window average minus the bottom-window average: simple means of the 5-minute prices (each interval weighted equally; there is no volume, so the published `vwap_*` field names are historical). Days are interval-ending (00:05–24:00). Because wider windows necessarily blend progressively more mid-priced intervals, the realisable spread **declines monotonically with duration** — 1h ≥ 2h ≥ 4h ≥ 8h for the same day and region. This is a structural property of the method, not a market signal.
 
 The **Decile** option (fixed top/bottom 10% of intervals, ≈ 2.4h) is the legacy 1–2h battery proxy, retained for continuity with the AEMO QED benchmark. The quarterly rollup in `docs/data/market_daily.json` stores per-duration quarterly average spreads plus divergence ratios against the QED NEM battery charge/discharge spread:
 
@@ -136,7 +132,7 @@ The AER re-publishes a small quarterly CSV suite ~6–8 weeks after quarter end 
 
 | AER series | Compared against | Band |
 |---|---|---|
-| Quarterly regional VWA spot price | our derived quarterly band `[avg_vwap_low, avg_vwap_high]` | the published price must land inside the band, ±15 % of band width |
+| Quarterly regional VWA spot price | our quarterly time-weighted average price `avg_price` (mean of the daily 5-minute means) | AER VWA ÷ `avg_price` must be 0.95–1.8 (the 2026-08 edition's 40 region-quarters ran 1.005–1.635); a quarter whose factor history predates `avg_price` is `skip`, never a pass |
 | Count of 30-min prices below $0 | our `neg_price_share` (share of 5-min intervals) | ratio 0.5–2.0; a quarter with <50 intervals on both sides is `below_noise_floor`, not a warn; a quarter our aggregate only partly spans is `partial_coverage`, not a warn |
 | Count of 30-min prices above $5,000 | no counterpart column in our artifact | ingested and published as **reference only** (`not_comparable` + reason) |
 | NEM total FCAS cost ($m) | no counterpart (we track FCAS *price* factors, not cost totals) | reference only |
@@ -165,33 +161,32 @@ A single-page static site built with vanilla HTML/CSS/JS and [Plotly.js](https:/
 
 ### Features
 - **Search**: Real-time autocomplete by station name or DUID, with region and fuel type filters
-- **Station aggregation**: Multi-DUID stations (e.g. Clarke Creek Wind Farm) appear as a single aggregated entry with summed generation/revenue, station-level curtailment/constraint charts, and per-DUID MLF traces
+- **Station aggregation**: Multi-DUID stations (e.g. Clarke Creek Wind Farm) appear as a single aggregated entry with summed generation/revenue, station-level curtailment/constraint charts, and per-DUID MLF traces. A station's fuel is its dominant fuel by registered MW (hybrids also publish `fuel_mix`)
+- **Unit lineage**: a renamed, converted or merged unit keeps its history under its successor (`config.DUID_SUCCESSORS`: HPRG1 → HPR1, WKIEWA2 → WKIEWA1); the JSON says which DUID each month came from
 - **Generator card**: DUID, station, region, fuel type, technology, capacity, connection point
-- **Time selector**: 3M / 6M / 12M / 3Y / 5Y / All (does not affect MLF chart)
+- **Time selector**: 3M / 6M / 12M / 3Y / 5Y for the monthly performance group (KPIs, MLF and the fixed-window panels are not affected)
 - **Duration selector**: The Regional Price Spreads panel parameterizes the capture window (1h / 2h / 4h / 8h / Decile)
-- **FCAS participation summary box**: Per-DUID services offered, share of intervals offering, and average/peak offered MW from BIDPEROFFER_D
-- **Offer-curve factors**: Per-DUID energy offer behaviour — avg/p95 offered MW, band-1/band-10 price positioning, negative-band day share, top-2-band volume concentration (BIDDAYOFFER_D + BIDPEROFFER_D, scope-labelled offer_based_estimate)
+- **Energy offers and FCAS participation**: per-DUID offer behaviour (BIDDAYOFFER_D + BIDPEROFFER_D) and FCAS offers (BIDPEROFFER_D), offer-based estimates, never settled revenue
 - **Constraints classification**: Binding constraints classified as Own unit / Commissioning / Non-conformance / System, with a credit-translation callout comparing commissioning caps to nameplate
 - **Scope labelling**: Market-level panels are explicitly labelled (regional average / applies to every unit in the region) so they are not mistaken for generator-level data
 - **Methodology tooltips**: Hover over any chart title for formula, methodology, and caveats
+- **Export**: CSV and XLSX of every block on the page
 - **URL hashing**: Bookmark any generator directly (e.g. `#CLRKCWF1`)
 
-### Charts (12 per-generator panels + 1 market-level panel)
-1. **Implied 100% Merchant Revenue** — monthly bar chart (AUD), assumes no PPA hedge
-2. **Monthly Generation** — bar chart (MWh), annotated with LGC equivalence for eligible renewables
-3. **Generation (Last 12 Months)** — daily bars (MWh) colour-coded by capacity-factor band, with a daily CF line overlay
-4. **Capacity Factor** — line chart with 25% reference line
-5. **Grid Curtailment Analysis** — area chart (solar/wind only)
-6. **Estimated Economic Curtailment** — area chart showing generation forgone during negative price periods (solar/wind only)
-7. **Mechanical Outage** — share of curtailment attributable to mechanical/comms issues from `INTERMITTENT_GEN_SCADA` quality flags
-8. **MLF Trajectory** — annual line chart with draft FY marker (diamond symbol). Station view shows per-DUID traces
-9. **Price Capture** — dual overlay of captured price vs regional average RRP
-10. **Spot Price Exposure** — horizontal bar showing generation share across price bins
-11. **Regional FCAS Prices** — 8 FCAS market price lines for the generator's NEM region, labelled scope: regional average
-12. **Binding Network Constraints** — hours bound per constraint, classified (Own unit / Commissioning / Non-conformance / System) with a credit-translation callout; readable labels with raw IDs in tooltips
-13. **Regional Price Spreads (BESS Arbitrage)** — market-level panel (applies to every unit in the region): daily top-vs-bottom capture-window spread, duration-parameterized (1h / 2h / 4h / 8h / Decile)
-
----
+### Panels (as on the page)
+1. **KPI row** — generation, spot energy revenue (MLF × DLF where published), capacity factor, latest MLF
+2. **Generation** — monthly MWh, annotated with LGC equivalence for eligible renewables
+3. **Capacity Factor** — monthly, with a 25% reference line and a 12-month average
+4. **Curtailment Proxy** — solar/wind only
+5. **Estimated Economic Curtailment** — solar/wind only
+6. **Price Capture** — captured price vs the regional average over the unit's reporting intervals
+7. **Generation (Last 12 Months)** — daily MWh and daily CF; partial days in the warn colour
+8. **MLF Trajectory (Annual)** — final MLFs with the draft FY marker; per-DUID traces for stations
+9. **Spot Price Exposure** — generation share across price bins
+10. **Energy offers — this unit** — offer factors and the day/month bid stack
+11. **Regional FCAS Prices** — regional averages, labelled as such
+12. **Regional Price Spreads (BESS Arbitrage)** — market-level, duration-parameterized
+13. **Binding Network Constraints** — hours bound per constraint, classified, with the data window labelled
 
 ## Running Locally
 
@@ -204,7 +199,7 @@ A single-page static site built with vanilla HTML/CSS/JS and [Plotly.js](https:/
 ```bash
 # NAS daily lane (production schedule)
 python -m src.main --months-back 2 --refresh-mlf --skip-constraints
-pytest          # full suite: 6 test files, 56 tests
+pytest          # full suite (tests/test_outputs.py needs the lane's data/ dir)
 
 # Incremental update (last 2 months)
 python -m src.main
@@ -240,9 +235,10 @@ open docs/index.html
 Hosted on **GitHub Pages** from the `docs/` directory. The NAS runs the daily data lane and pushes changed `docs/data` files to `main`; the lightweight `deploy-pages.yml` workflow then publishes the site.
 
 ### Automated schedule
-- **Daily market data**: NAS daily lane runs `python -m src.main --months-back 2 --refresh-mlf --skip-constraints`, then the full test suite (`pytest` — 6 files, 56 tests), then commits and pushes `docs/data`
+- **Daily market data**: NAS daily lane runs `python -m src.main --months-back 2 --refresh-mlf --skip-constraints`, then the full test suite (`pytest tests/`), then commits and pushes `docs/data`
 - **Weekly reference data**: NAS scheduled lane refreshes generator registration metadata plus MLF tracker data without forcing a full historical rebuild
 - **Annual MLF lane**: NAS scheduled lane forces a lightweight MLF refresh around final MLF publication season without touching SCADA or constraints
+- **Monthly constraints lane**: `deploy/env.constraints.example` refreshes binding-constraint hours; `run_status.json` reports the `constraints` source degraded once its data trails generation by more than two months
 - **Manual trigger**: GitHub Actions remains available via `workflow_dispatch` for verification/fallback, but the NAS is the primary scheduled data runner for normal bounded-cache automation
 
 See `deploy/README.md` for runner setup details.
@@ -253,14 +249,14 @@ See `deploy/README.md` for runner setup details.
 
 The daily lane enforces systematic quality gates — a failure stops the run and alerts rather than publishing suspect data:
 
-- **Freshness guards**: the pipeline hard-fails if the latest monthly aggregate is older than 75 days or the latest daily data older than 60 days; a Mac-side alert (via autopull) flags staleness
+- **Freshness guards**: the pipeline hard-fails if the latest monthly aggregate is older than 75 days or the latest daily data older than 60 days (AEMO's monthly archive lands 12–28 days after month end, so the newest month can be ~59 days old just before the next one); the manifest records the actual ages, and a Mac-side alert (via autopull) flags staleness
 - **Optional-source retention (S3-08)**: FCAS/offer factor lanes are optional — when one fails or delivers nothing new, the pipeline retains the last-known-good factor history from its cache (blocks keep their as-of month and are stamped `source_status: "retained_stale"` in the published generator JSONs) instead of erasing populated panels from an otherwise-successful run
 - **Factor-block continuity guard**: publication is rejected outright when a populated `fcas_participation`/`offers`/`offer_curve` block would vanish without a documented reason (a cleanly-run source may attest a unit genuinely has no offers; a degraded/errored/skipped lane may not)
-- **Run-status manifest**: every publish writes `docs/data/run_status.json` — a machine-readable record of each source lane's status/coverage/as-of/error plus the freshness-guard result. The Mac-side autopull staleness check reads it, so a degraded optional source alerts through the existing operator-status channel instead of hiding behind fresh core data
+- **Run-status manifest**: every publish writes `docs/data/run_status.json` — a machine-readable record of each source lane's status/coverage/as-of/error (including the market-spread and constraint lanes) plus the freshness-guard results and data ages. The Mac-side autopull staleness check reads it, so a degraded optional source alerts through the existing operator-status channel instead of hiding behind fresh core data
 - **Fuel-aware daily capacity-factor bounds**: daily CF is checked against hard bounds — hydro 1.25, non-hydro 1.10 — a breach fails the run
 - **Monthly CF > 1.0 audit**: `src/audit_cf.py` lists units needing investigation; the current list covers TAS/NSW hydro peakers KAREEYA1–4, POAT110 and FISHER, plus gas units BW02, OSB-AG and QPS3 under review
 - **BARRON correction**: BARRON-1/2 capacity corrected 21 → 33.2 MW with a retroactive history fix (see below)
-- **Test suite**: a full 6-file test suite (56 tests) runs in the daily NAS lane after the data update; failures block the commit + push
+- **Test suite**: the full `tests/` suite runs in the daily NAS lane after the data update; failures block the commit + push
 - **Resolved audits**: the Apr-2026 WANDSF1/EMERASF1 finding was resolved as regional-average labelling semantics (the data describes the market, not the unit)
 
 ---
@@ -269,29 +265,43 @@ The daily lane enforces systematic quality gates — a failure stops the run and
 
 ```
 ├── src/
-│   ├── main.py                 # Pipeline orchestrator
-│   ├── config.py               # Constants, URLs, fuel type mappings
-│   ├── download_metadata.py    # AEMO registration list parser
-│   ├── download_mlf.py         # MLF history + connection points
-│   ├── download_draft_mlf.py   # Draft/indicative MLF download
+│   ├── main.py                 # Pipeline orchestrator, lanes, run manifest
+│   ├── config.py               # Constants, URLs, fuel mappings, overrides, unit lineage
+│   ├── download_metadata.py    # AEMO Registration List parser
+│   ├── fetch_mlf.py            # MLF Tracker summary: final/draft MLFs, connection points
+│   ├── loss_factors.py         # DUDETAILSUMMARY dated transmission/distribution loss factors
 │   ├── download_scada.py       # NEMOSIS SCADA + dispatch load
-│   ├── download_dispatch.py    # NEMOSIS dispatch prices + FCAS + bid offers
-│   ├── aggregate.py            # Monthly metric calculations + FCAS aggregation
-│   ├── audit_cf.py             # Capacity factor audit — flags stale registrations
-│   └── generate_json.py        # JSON output + station aggregation
-├── tests/                      # Test suite (6 files, 56 tests) — runs in the daily lane
+│   ├── download_dispatch.py    # NEMOSIS dispatch prices (+ FCAS) and pre-5MS trading prices
+│   ├── download_constraints.py # Binding constraints, constraint definitions, versioned CP mapping
+│   ├── download_bids.py        # BIDPEROFFER_D (FCAS + energy volumes)
+│   ├── aggregate.py            # Monthly/daily metrics, constraint hours
+│   ├── lineage.py              # Renamed/merged units folded into their successor
+│   ├── offer_curves.py         # Energy offer factors and bid stacks
+│   ├── fcas_factor.py          # FCAS participation factors
+│   ├── market_factors.py       # Regional daily price spreads + quarterly rollup
+│   ├── generate_json.py        # Unit/station JSON, index, curtailment_by_fy.csv
+│   ├── generate_market_json.py # market_daily.json
+│   ├── geninfo.py              # AEMO Generation Information lane
+│   ├── network_outages.py      # MMSDM network outage lane
+│   ├── aer_qa.py               # AER quarterly QA cross-check
+│   ├── run_status.py           # Lane records, continuity guard, run manifest
+│   ├── freshness.py            # Freshness guards
+│   ├── processed_cache.py      # Processed-cache snapshot publish/restore
+│   └── audit_cf.py             # Capacity factor audit — flags stale registrations
+├── tests/                      # Test suite — runs in the daily lane
 ├── docs/
 │   ├── index.html              # Dashboard SPA
 │   ├── FUTURE_DATA_SOURCES.md  # Not-yet-built data source backlog
 │   └── data/
 │       ├── index.json          # Generator + station search index
 │       ├── market_daily.json   # Market-level daily price-spread series (by duration) + quarterly rollup
-│       ├── generators/         # Per-generator and per-station JSON files
+│       ├── run_status.json     # Run manifest (lane status, as-of, data ages)
+│       ├── generators/         # Per-generator and per-station JSON files (only those in index.json)
 │       └── processed-cache/    # Compact settled-history cache snapshot
 ├── data/                       # Local cache (gitignored)
 │   ├── *.feather               # Working processed data cache
 │   └── nemosis_cache/          # Raw AEMO data cache
-├── deploy/                     # NAS runner scripts and schedule
+├── deploy/                     # NAS runner scripts and lane env examples
 ├── .github/workflows/
 │   ├── deploy-pages.yml        # GitHub Pages deployment
 │   └── monthly-update.yml      # Manual/fallback CI data runner
@@ -352,14 +362,15 @@ The current CF > 1.0 audit list covers the TAS/NSW hydro peakers KAREEYA1–4, P
 ## Known Limitations
 
 - **Revenue is 100% merchant assumption**: Does not include PPA, FCAS, or LGC income — useful as a stress-test floor, not actual revenue
-- **Pre-Aug 2024 curtailment is unsplit**: Before August 2024, curtailment cannot be separated into grid vs. mechanical components (INTERMITTENT_GEN_SCADA data not available)
+- **Battery revenue is gross discharge revenue**: SCADA is clipped at zero, so a battery's revenue is what it earned discharging; what it paid to charge is not netted (Aug 2026 fleet: $49.7M gross vs $29.0M net, 513 GWh out, 605 GWh in). The page says so on the revenue KPI of a battery unit or a station with a battery member, and the export's `Revenue Basis` column carries the same note
+- **Curtailment is a proxy**: the shortfall against bid-in availability cannot separate network constraints from outages; no grid/mechanical split is published
 - **Economic curtailment is estimated**: Based on RRP < $0 proxy — cannot distinguish voluntary bid-off from AEMO dispatch instructions without bid data
 - **FCAS participation factors are offer-based estimates**: Derived from BIDPEROFFER_D offers (services offered, offered MW) — actual enablement, output and revenue require participant-only data. The regional FCAS price chart is regional-average by design
 - **FPP-era discontinuity**: Causer-pays global FCAS factors ceased 8 June 2025; participation semantics differ before/after
 - **Spreads assume perfect capture**: The Regional Price Spreads panel assumes a battery captures the full top/bottom window at the window average — real arbitrage is eroded by round-trip efficiency, state-of-charge limits and bidding. Wider durations blend mid-priced hours, so realisable spread falls monotonically with duration
 - **Decile is a legacy proxy**: The ~2.4h decile option is retained for continuity with the AEMO QED benchmark, which has itself fallen sharply (2025Q2 $342 → 2026Q2 $51/MWh)
 - **LGC volumes are estimated**: 1 MWh ≈ 1 LGC for eligible generators — actual creation may differ due to station use and accreditation
-- **Connection point gaps**: ~20% of generators lack connection point data in DUDETAILSUMMARY (constraint mapping is approximate)
+- **Constraint mapping is approximate**: a unit is linked to constraints through its connection point (from the MLF Tracker) and the constraint version in force each month; constraint data is refreshed by its own monthly lane
 - **MLF fallback is per-DUID and never future-dated**: revenue for a month is adjusted by that DUID's MLF for the month's financial year when one exists (`exact`); otherwise the most recent *prior* FY factor is carried (`prior-carry`, source FY recorded); a DUID with no factor at or before that FY gets **unadjusted** revenue (`unknown`), which is labelled provisional/unadjusted in every export (JSON monthly block + CSV/XLSX). A future FY's factor is never applied to historical revenue. See the `revenue_mlf_status` / `revenue_mlf_source_fy` / `revenue_mlf_value` arrays in each generator's JSON.
-- **Data lag**: AEMO data has a ~2 week lag; the 2-month reprocessing window accounts for this
+- **Data lag**: AEMO's monthly archive lands 12–28 days after month end; the 2-month reprocessing window accounts for this
 - **Prudential data gap**: AEMO's own credit and prudential data is participant-only; this dashboard approximates credit exposure from public market data (see `docs/FUTURE_DATA_SOURCES.md`)

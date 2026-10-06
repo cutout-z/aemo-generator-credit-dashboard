@@ -264,6 +264,14 @@ def generate_generator_json(
         # spot revenue (status "unknown", value None) and must be read as
         # provisional. Months without provenance columns (legacy aggregates
         # produced before S3-11) simply omit the arrays.
+        # Lineage (renamed/merged units): which DUID(s) each month came from.
+        if "source_duids" in monthly_data.columns and monthly_data["source_duids"].notna().any():
+            sources = [None if pd.isna(v) else str(v) for v in monthly_data["source_duids"]]
+            if any(v not in (None, duid) for v in sources):
+                doc["monthly"]["source_duids"] = sources
+                doc["predecessors"] = sorted({
+                    d for v in sources if v for d in v.split("+") if d != duid
+                })
         _add_revenue_mlf_provenance(doc["monthly"], monthly_data)
         _add_loss_adjusted_revenue(doc["monthly"], monthly_data)
         # Curtailment only for solar/wind
@@ -274,7 +282,13 @@ def generate_generator_json(
             doc["monthly"]["curtailment_pct"] = monthly_data["curtailment_pct"].round(4).tolist()
             doc["monthly"]["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
         if "econ_curtailment_pct" in monthly_data.columns:
-            doc["monthly"]["econ_curtailment_pct"] = monthly_data["econ_curtailment_pct"].round(4).tolist()
+            econ = monthly_data["econ_curtailment_pct"]
+            if "curtailment_pct" in monthly_data.columns:
+                # Rows aggregated before the cap in aggregate_month: economic
+                # curtailment is part of the total shortfall, never above it.
+                total = monthly_data["curtailment_pct"]
+                econ = econ.where(econ.isna() | total.isna() | (econ <= total), total)
+            doc["monthly"]["econ_curtailment_pct"] = econ.round(4).tolist()
         # Price capture
         if "captured_price" in monthly_data.columns:
             doc["monthly"]["captured_price"] = monthly_data["captured_price"].round(2).tolist()
@@ -563,6 +577,11 @@ def write_curtailment_by_fy(
             "metric_version": config.CURTAILMENT_METRIC_VERSION,
             "generation_mwh": round(float(group["generation_mwh"].sum()), 0),
             "months_covered": int(len(group)),
+            # Partial FYs said explicitly (L3): the current FY, the first FY of
+            # the history window, and a unit's commissioning or retirement FY.
+            "first_month": str(group["month"].min()),
+            "last_month": str(group["month"].max()),
+            "fy_complete": bool(group["month"].nunique() >= 12),
         })
 
     if not rows:
@@ -573,6 +592,7 @@ def write_curtailment_by_fy(
         pd.DataFrame(columns=[
             "duid", "fy_start", "fy_label", "curtailment_pct",
             "metric_version", "generation_mwh", "months_covered",
+            "first_month", "last_month", "fy_complete",
         ]).to_csv(out_path, index=False)
         return out_path
     result = pd.DataFrame(rows).sort_values(["duid", "fy_start"])
@@ -615,8 +635,10 @@ def generate_all(
 
     # Write per-generator files
     count = 0
+    written: set[str] = set()
     for _, row in generators.iterrows():
         duid = str(row["DUID"])
+        written.add(f"{_safe_filename(duid)}.json")
         metadata = {
             "station_name": _text(row.get("STATION_NAME", "")),
             "region": _text(row.get("REGION", "")),
@@ -737,10 +759,44 @@ def generate_all(
         daily_aggregates=daily_aggregates,
         constraint_data=constraint_data,
         market=market,
+        written=written,
     )
     logger.info(f"Wrote {station_count} station aggregate files")
 
+    prune_orphan_files(gen_dir, written, market=market)
     return count
+
+
+def prune_orphan_files(gen_dir: str | Path, written: set[str], *, market: str = "NEM") -> list[str]:
+    """Delete this market's generator/station files that this run did not write.
+
+    Nothing reads them (the page only opens files named in index.json) and
+    nothing updates them, so they are stale copies: 450 GENSETID-era unit stubs,
+    TORRB1 and WKIEWA2 (no longer registered) and the West Kiewa station file
+    (one unit since the merge) sat in docs/data/generators with data frozen at
+    2026-03..2026-07 (audit 2026-10, M8). Files of another market, and files
+    that do not parse, are left alone. Returns the removed file names.
+    """
+    if not written:
+        logger.warning("No generator files written this run; orphan pruning skipped")
+        return []
+    removed: list[str] = []
+    for path in sorted(Path(gen_dir).glob("*.json")):
+        if path.name in written:
+            continue
+        try:
+            doc_market = json.loads(path.read_text()).get("market")
+        except (OSError, ValueError, AttributeError):
+            logger.warning("Orphan check: %s unreadable, left in place", path.name)
+            continue
+        if doc_market not in (None, "", market):
+            continue
+        path.unlink()
+        removed.append(path.name)
+    if removed:
+        logger.info("Removed %d orphan generator/station files (e.g. %s)",
+                    len(removed), ", ".join(removed[:5]))
+    return removed
 
 
 def _safe_station_filename(name: str) -> str:
@@ -749,6 +805,29 @@ def _safe_station_filename(name: str) -> str:
     safe = re.sub(r'[^a-zA-Z0-9]', '_', name)
     safe = re.sub(r'_+', '_', safe).strip('_')
     return f"station_{safe}"
+
+
+def station_fuel_mix(group: pd.DataFrame) -> tuple[str, str, dict[str, float]]:
+    """(dominant fuel, its technology, {fuel: MW}) for a station's member units.
+
+    The station's fuel is the fuel with the most registered capacity, never the
+    first-listed unit's: Moorabool Wind Farm lists its 2 MW battery before its
+    312 MW wind unit and published as "Battery" (curtailment panels hidden,
+    "not LGC-eligible"). Ties break alphabetically so the choice is stable.
+    The technology is that of the largest unit of the dominant fuel.
+    """
+    fuels = group["FUEL_CATEGORY"].map(_text)
+    caps = pd.to_numeric(group["CAPACITY_MW"], errors="coerce").fillna(0.0)
+    mix = caps.groupby(fuels).sum()
+    mix = mix[mix.index != ""]
+    if mix.empty:
+        return _text(group["FUEL_CATEGORY"].iloc[0]), _text(group["TECHNOLOGY"].iloc[0]), {}
+    ranked = sorted(mix.items(), key=lambda kv: (-kv[1], kv[0]))
+    fuel = ranked[0][0]
+    members = group[fuels == fuel]
+    lead = members.loc[pd.to_numeric(members["CAPACITY_MW"], errors="coerce").fillna(0.0).idxmax()]
+    technology = _text(lead.get("TECHNOLOGY", ""))
+    return fuel, technology, {k: round(float(v), 3) for k, v in ranked}
 
 
 def _generate_station_files(
@@ -763,8 +842,12 @@ def _generate_station_files(
     daily_aggregates: pd.DataFrame | None = None,
     constraint_data: pd.DataFrame | None = None,
     market: str = "NEM",
+    written: set[str] | None = None,
 ) -> int:
-    """Generate station-level aggregation files for multi-DUID stations."""
+    """Generate station-level aggregation files for multi-DUID stations.
+
+    ``written`` collects the file names produced (for orphan pruning).
+    """
     # Group generators by station name
     station_groups = generators.groupby("STATION_NAME")
     multi_duid = {name: group for name, group in station_groups if len(group) > 1}
@@ -780,8 +863,8 @@ def _generate_station_files(
         duids = group["DUID"].tolist()
         total_capacity = group["CAPACITY_MW"].sum() if "CAPACITY_MW" in group.columns else 0
         region = _text(group["REGION"].iloc[0])
-        fuel = _text(group["FUEL_CATEGORY"].iloc[0])
-        technology = _text(group["TECHNOLOGY"].iloc[0])
+        fuel, technology, fuel_mix = station_fuel_mix(group)
+        member_fuels = set(fuel_mix)
         connection_points = group.get("CONNECTION_POINT", pd.Series()).tolist()
         capacity_by_duid = group.set_index("DUID")["CAPACITY_MW"].to_dict()
 
@@ -798,6 +881,9 @@ def _generate_station_files(
             "connection_points": [_text(cp) for cp in connection_points if _text(cp)],
             "lgc_eligible": fuel in config.LGC_ELIGIBLE_FUEL_TYPES,
         }
+        if len(fuel_mix) > 1:
+            # Mixed station (hybrid): every member fuel with its registered MW.
+            doc["fuel_mix"] = fuel_mix
 
         # Aggregate monthly data across DUIDs
         if monthly_aggregates is not None and not monthly_aggregates.empty:
@@ -805,6 +891,7 @@ def _generate_station_files(
             if not station_monthly.empty:
                 doc["monthly"] = _aggregate_station_monthly(
                     station_monthly, total_capacity, fuel, capacity_by_duid,
+                    member_fuels=member_fuels,
                 )
 
         # Per-DUID MLFs
@@ -839,7 +926,16 @@ def _generate_station_files(
                         fcas_services[service] = []
                     fcas_services[service].append(price)
             if fcas_services:
-                doc["fcas"] = {"months": fcas_months, "services": fcas_services}
+                # Same regional market averages as the unit docs, same label.
+                doc["fcas"] = {
+                    "scope": "regional_average",
+                    "note": (
+                        "Regional FCAS market price averages — identical for all "
+                        "generators in this region. Not unit-level revenue."
+                    ),
+                    "months": fcas_months,
+                    "services": fcas_services,
+                }
 
         # Daily data: sum across station DUIDs
         if daily_aggregates is not None and not daily_aggregates.empty:
@@ -856,13 +952,15 @@ def _generate_station_files(
                     agg_spec["intervals_observed"] = ("intervals_observed", "sum")
                     agg_spec["intervals_expected"] = ("intervals_expected", "sum")
                 grouped_daily = station_daily.groupby("date").agg(**agg_spec).reset_index()
-                # Recompute CF from total generation and total capacity
-                if total_capacity and total_capacity > 0:
-                    grouped_daily["daily_capacity_factor"] = (
-                        grouped_daily["daily_generation_mwh"] / (total_capacity * 24)
-                    ).round(4)
-                else:
-                    grouped_daily["daily_capacity_factor"] = None
+                # CF over the capacity of the members that reported that day
+                # (see _aggregate_station_monthly).
+                basis = station_daily.groupby("date")["duid"].agg(
+                    lambda d: reporting_capacity(d, capacity_by_duid, total_capacity)
+                )
+                basis = grouped_daily["date"].map(basis).astype(float)
+                grouped_daily["daily_capacity_factor"] = (
+                    grouped_daily["daily_generation_mwh"] / (basis * 24)
+                ).where(basis > 0).round(4)
                 grouped_daily = grouped_daily.sort_values("date")
                 doc["daily"] = {
                     "dates": grouped_daily["date"].tolist(),
@@ -887,6 +985,8 @@ def _generate_station_files(
 
         json_path = out_dir / f"{file_key}.json"
         json_path.write_text(json.dumps(_sanitize(doc), separators=(",", ":")))
+        if written is not None:
+            written.add(json_path.name)
         count += 1
 
         # Add to station index
@@ -921,13 +1021,33 @@ def _generate_station_files(
     return count
 
 
+def reporting_capacity(
+    duids, capacity_by_duid: dict[str, float] | None, total_capacity: float | None,
+) -> float | None:
+    """Registered MW of the members present in ``duids`` (each counted once).
+
+    Falls back to the station total when no per-unit capacities are known.
+    """
+    if not capacity_by_duid:
+        return float(total_capacity) if total_capacity else None
+    caps = [capacity_by_duid.get(d) for d in pd.unique(pd.Series(list(duids)))]
+    caps = [float(c) for c in caps if c is not None and not pd.isna(c)]
+    return sum(caps) if caps else None
+
+
 def _aggregate_station_monthly(
     station_monthly: pd.DataFrame,
     total_capacity: float,
     fuel: str,
     capacity_by_duid: dict[str, float] | None = None,
+    member_fuels: set[str] | None = None,
 ) -> dict:
-    """Aggregate monthly metrics across multiple DUIDs for a station."""
+    """Aggregate monthly metrics across multiple DUIDs for a station.
+
+    Curtailment is published when ANY member is solar or wind (a hybrid's
+    battery must not hide its wind farm's curtailment); only the members that
+    carry curtailment rows contribute to it.
+    """
     from calendar import monthrange
 
     if capacity_by_duid:
@@ -949,8 +1069,9 @@ def _aggregate_station_monthly(
     avg_rrp = []
     pcr = []
 
-    has_curtailment = "curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
-    has_econ_curt = "econ_curtailment_pct" in station_monthly.columns and fuel in config.CURTAILMENT_FUEL_TYPES
+    curtailable = bool(({fuel} | set(member_fuels or ())) & set(config.CURTAILMENT_FUEL_TYPES))
+    has_curtailment = "curtailment_pct" in station_monthly.columns and curtailable
+    has_econ_curt = "econ_curtailment_pct" in station_monthly.columns and curtailable
     has_price = "captured_price" in station_monthly.columns
 
     def weighted_pct(month_data: pd.DataFrame, col: str) -> float | None:
@@ -984,17 +1105,23 @@ def _aggregate_station_monthly(
         act_sum = float(energy["_eligible_actual_mwh"].sum())
         return round(max(0.0, 1.0 - act_sum / pot_sum), 4)
 
+    capacity_basis = []
     for m in months:
         month_data = grouped.get_group(m)
         total_gen = month_data["generation_mwh"].sum()
         gen_mwh.append(round(total_gen, 0))
         revenue.append(round(month_data["revenue_aud"].sum(), 0))
 
-        # Capacity factor from total generation
+        # Capacity factor over the capacity of the members that REPORTED this
+        # month. A registered unit that never sends SCADA (Snuggery: 63 of
+        # 126 MW) contributes no generation, so counting its nameplate halved
+        # the station's CF.
         year, mon = int(m[:4]), int(m[5:])
         hours = monthrange(year, mon)[1] * 24
-        if total_capacity and total_capacity > 0:
-            cap_factor.append(round(total_gen / (total_capacity * hours), 4))
+        basis = reporting_capacity(month_data["duid"], capacity_by_duid, total_capacity)
+        capacity_basis.append(round(basis, 3) if basis else None)
+        if basis and basis > 0:
+            cap_factor.append(round(total_gen / (basis * hours), 4))
         else:
             cap_factor.append(None)
 
@@ -1002,7 +1129,13 @@ def _aggregate_station_monthly(
             curtailment.append(station_curtailment(month_data))
 
         if has_econ_curt:
-            econ_curtailment.append(weighted_pct(month_data, "econ_curtailment_pct"))
+            econ = weighted_pct(month_data, "econ_curtailment_pct")
+            # Economic curtailment is part of the total shortfall (see
+            # aggregate_month), at station level too.
+            total = curtailment[-1] if has_curtailment else None
+            if econ is not None and total is not None:
+                econ = min(econ, total)
+            econ_curtailment.append(econ)
 
         # Price capture: generation-weighted
         if has_price:
@@ -1026,6 +1159,8 @@ def _aggregate_station_monthly(
         "generation_mwh": gen_mwh,
         "revenue_aud": revenue,
         "capacity_factor": cap_factor,
+        # MW behind each month's capacity factor (members that reported).
+        "capacity_basis_mw": capacity_basis,
     }
     # H4: station revenue after MLF x DLF = sum of member units' values; None
     # for a month where any member predates the field (never a partial sum).

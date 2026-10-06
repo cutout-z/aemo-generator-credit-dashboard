@@ -270,8 +270,8 @@ def interval_loss_factors(
 def fy_opening_tlf(periods: pd.DataFrame | None, fy_start_year: int) -> dict[str, float]:
     """{DUID: TLF of the DUID's first period in effect during the FY}.
 
-    aggregate_month compares this with the tracker's FY factor before
-    trusting DUDETAILSUMMARY's dated values for that DUID (see there).
+    Diagnostic only: aggregate_month's agreement check uses every factor in
+    the FY (fy_tlf_values), because the tracker may carry a mid-year revision.
     """
     if periods is None or periods.empty:
         return {}
@@ -282,3 +282,25 @@ def fy_opening_tlf(periods: pd.DataFrame | None, fy_start_year: int) -> dict[str
         return {}
     first = q.sort_values("START_DATE").drop_duplicates("DUID", keep="first")
     return dict(zip(first["DUID"], first["TLF"].astype(float)))
+
+
+def fy_tlf_values(periods: pd.DataFrame | None, fy_start_year: int) -> dict[str, list[float]]:
+    """{DUID: every TLF in effect at some point during the FY}.
+
+    The MLF tracker's FY value can be the factor AEMO published at the start
+    of the year or a mid-year revision (QPSFB1 FY25-26: tracker 0.9176, the
+    value from 3 Feb 2026; it opened the year at 1.019). Both mean the two
+    sources agree on the unit, so aggregate_month trusts the dated values when
+    the tracker matches ANY of them.
+    """
+    if periods is None or periods.empty:
+        return {}
+    a = pd.Timestamp(year=fy_start_year, month=7, day=1)
+    b = pd.Timestamp(year=fy_start_year + 1, month=7, day=1)
+    q = periods[(periods["START_DATE"] < b) & (periods["END_DATE"] > a)].dropna(subset=["TLF"])
+    if q.empty:
+        return {}
+    return {
+        duid: sorted({float(v) for v in grp["TLF"]})
+        for duid, grp in q.groupby("DUID", sort=False)
+    }

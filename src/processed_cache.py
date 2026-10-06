@@ -39,7 +39,6 @@ SNAPSHOT_FILES = (
     "fcas_aggregates.feather",
     "constraint_aggregates.feather",
     "generators.feather",
-    "mlf_history.feather",
     "mlf_tracker_summary.csv",
     # S3-07: factor histories are durable — the regional market-spread trend,
     # per-DUID monthly FCAS/offer behaviour and monthly 10-band offer curves
@@ -49,6 +48,15 @@ SNAPSHOT_FILES = (
     "fcas_factors.feather",
     "offer_factors.feather",
     "offer_curves.feather",
+)
+
+# Former snapshot members that are no longer published. publish removes them
+# from docs/data/processed-cache so a stale copy cannot pass for current data.
+# mlf_history.feather: a wide-era leftover nothing in src/ writes or reads; the
+# published copy ended FY25-26 while the live MLF frame (fetch_mlf_data over
+# mlf_tracker_summary.csv, which IS in the snapshot) carries FY26-27.
+RETIRED_SNAPSHOT_FILES = (
+    "mlf_history.feather",
 )
 
 SNAPSHOT_GLOBS = (
@@ -124,6 +132,12 @@ def publish_processed_cache(data_dir: Path, docs_data_dir: Path) -> list[str]:
             shutil.copy2(src, dest)
             published.append(src.name)
             manifest_files.append(_manifest_entry(dest))
+
+    for name in RETIRED_SNAPSHOT_FILES:
+        stale = target_dir / name
+        if stale.exists():
+            stale.unlink()
+            logger.info("Removed retired processed-cache file %s", name)
 
     manifest = {
         "schema_version": 1,

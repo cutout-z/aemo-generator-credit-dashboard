@@ -23,6 +23,16 @@ per-lane `PIPELINE_ARGS`:
 | Daily market data | `--months-back 2 --refresh-mlf --skip-constraints` | Reprocess recent SCADA, dispatch prices, dispatch load, FCAS, and pick up small MLF tracker changes. |
 | Weekly reference data | `--months-back 2 --refresh-metadata --refresh-mlf --skip-constraints` | Refresh AEMO registration/metadata and MLF tracker without a full 5-year rebuild. |
 | Annual MLF lane | `--skip-scada --skip-constraints --refresh-mlf` | Force a lightweight MLF refresh around annual final MLF publication without touching SCADA or constraints. |
+| Monthly constraints (`env.constraints.example`) | `--skip-scada --skip-fcas-factors --skip-offer-factors --skip-geninfo --skip-network-outages --skip-aer-qa --months-back 2` | Refresh binding-constraint hours. Runs only the constraint step on top of the cached history, and catches up every month after the newest cached one (the first run after the 2026-03 stop fetches 2026-04 onward). |
+
+The daily and weekly lanes skip constraints on purpose: a missing
+`data/gencondata.feather` makes the constraint step pull GENCONDATA history
+from 2020, which is too heavy for a daily run. Constraint data is therefore
+refreshed by its own monthly lane, and every run's `run_status.json` carries a
+`constraints` source with its as-of month. It turns **degraded** (an AEMO
+ALERT through the staleness check) once constraint data trails the newest
+generation month by more than two months, so a stopped constraints lane is
+visible instead of silent.
 
 The lane registry, cadence windows and report paths live in
 `tools/nas-runner/configs/brain-ops.nas.toml` (the NAS runner tooling).

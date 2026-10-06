@@ -102,11 +102,15 @@ class LaneRun:
         """Newest period present in the attach frame (the data's as-of).
 
         Month-keyed factor lanes carry 'month'; the GenInfo register lane is
-        edition-keyed and carries 'edition' (same YYYY-MM shape).
+        edition-keyed and carries 'edition' (same YYYY-MM shape). Day-keyed
+        lanes (market spreads) carry 'date' and report its month.
         """
         df = self.frame
         if df is None or df.empty:
             return None
+        if "month" not in df.columns and "edition" not in df.columns and "date" in df.columns:
+            dates = sorted(str(v) for v in pd.unique(df["date"]) if v is not None and not pd.isna(v))
+            return dates[-1][:7] if dates else None
         for col in ("month", "edition"):
             if col not in df.columns:
                 continue

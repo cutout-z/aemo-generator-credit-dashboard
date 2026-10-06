@@ -148,8 +148,10 @@ class TestDailyCurves:
         # day 1: volume only in band 1; day 2: bands 1 and 2
         vols = {
             "DUID": ["T1"] * 3,
+            # Trading-day intervals (04:05 onward): daily stacks group volumes
+            # by the trading day their prices are keyed by.
             "INTERVAL_DATETIME": pd.to_datetime([
-                "2026-07-01 00:05", "2026-07-02 00:05", "2026-07-02 00:10",
+                "2026-07-01 04:05", "2026-07-02 04:05", "2026-07-02 04:10",
             ]),
         }
         for i in range(1, 11):
@@ -171,7 +173,7 @@ class TestDailyCurves:
             "DUID": ["T1"], "SETTLEMENTDATE": pd.to_datetime(["2026-07-01"]),
             **{f"PRICEBAND{i}": [float(i)] for i in range(1, 11)},
         })
-        vols = {"DUID": ["T1"], "INTERVAL_DATETIME": pd.to_datetime(["2026-07-01 00:05"])}
+        vols = {"DUID": ["T1"], "INTERVAL_DATETIME": pd.to_datetime(["2026-07-01 04:05"])}
         for i in range(1, 11):
             vols[f"BANDAVAIL{i}"] = [10.0] if i == 1 else [0.0]
         curves = compute_offer_curves_daily(prices, pd.DataFrame(vols), "2026-07")

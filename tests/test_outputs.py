@@ -15,6 +15,7 @@ import pytest
 from src import config as _config
 from src.fetch_mlf import MLF_HISTORY_COLUMNS, fetch_mlf_data, validate_mlf_history
 from src.freshness import check_monthly_freshness, check_daily_freshness
+from src.lineage import merge_lineage_monthly
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -656,6 +657,9 @@ class TestJsonOutputs:
         fails when a selected JSON file is missing.
         """
         agg = pd.read_feather(DATA_DIR / "monthly_aggregates.feather")
+        # Producer parity: the JSON of a successor unit carries its folded-in
+        # predecessors (src/lineage.py), so compare against the same fold.
+        agg = merge_lineage_monthly(agg, pd.read_feather(DATA_DIR / "generators.feather"))
         with open(DOCS_DATA_DIR / "index.json") as f:
             idx = json.load(f)
 

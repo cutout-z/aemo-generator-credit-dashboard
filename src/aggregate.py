@@ -19,7 +19,7 @@ import pandas as pd
 
 from . import config
 from .interval_days import INTERVALS_PER_DAY, interval_calendar_day_str
-from .loss_factors import fy_opening_tlf, interval_loss_factors
+from .loss_factors import fy_tlf_values, interval_loss_factors
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,66 @@ def dedupe_interval_keys(
     else:
         logger.warning(msg)
     return df.drop_duplicates(subset=keys, keep="last")
+
+
+def settles_on_trading_price(year: int, month: int) -> bool:
+    """True for months settled at the 30-minute trading price (before 5MS)."""
+    return (year, month) < tuple(config.FIVE_MINUTE_SETTLEMENT_START)
+
+
+def settlement_prices(
+    year: int,
+    month: int,
+    dispatch_prices: pd.DataFrame,
+    trading_prices: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """The regional energy price each 5-minute interval was SETTLED at.
+
+    From October 2021 (five-minute settlement) that is the dispatch price, so
+    ``dispatch_prices`` is returned unchanged. Earlier months were settled at
+    the 30-minute trading price: every dispatch interval takes the RRP of the
+    trading interval that contains it (the trading interval ENDING at the
+    dispatch interval's end rounded up to the half hour). Valuing those months
+    at the 5-minute price misstated revenue, for example OAKEY1 in September
+    2021: captured price -$18.00 at dispatch prices, $313.76 at the trading
+    prices it was paid.
+
+    Only RRP is replaced; the FCAS columns are left as dispatched (they feed
+    the regional FCAS price averages, not revenue). A dispatch interval with no
+    trading price keeps its dispatch RRP and is counted in a warning.
+    """
+    if not settles_on_trading_price(year, month):
+        return dispatch_prices
+    if trading_prices is None or trading_prices.empty:
+        raise RuntimeError(
+            f"{year}-{month:02d} was settled at 30-minute trading prices but no "
+            "TRADINGPRICE rows were supplied; refusing to value it at dispatch prices"
+        )
+    out = dispatch_prices.copy()
+    key = pd.to_datetime(out["SETTLEMENTDATE"]).astype("datetime64[ns]").dt.ceil("30min")
+    trading = dedupe_interval_keys(
+        trading_prices[["SETTLEMENTDATE", "REGIONID", "RRP"]],
+        ["SETTLEMENTDATE", "REGIONID"],
+        label=f"TRADINGPRICE {year}-{month:02d}", value_cols=["RRP"],
+    )
+    lookup = pd.Series(
+        trading["RRP"].to_numpy(),
+        index=pd.MultiIndex.from_arrays([
+            pd.to_datetime(trading["SETTLEMENTDATE"]).astype("datetime64[ns]"),
+            trading["REGIONID"].astype(str),
+        ]),
+    )
+    trp = lookup.reindex(
+        pd.MultiIndex.from_arrays([key, out["REGIONID"].astype(str)])
+    ).to_numpy()
+    missing = pd.isna(trp)
+    if missing.any():
+        logger.warning(
+            f"{year}-{month:02d}: {int(missing.sum()):,} dispatch intervals have no "
+            "trading price — kept their dispatch RRP"
+        )
+    out["RRP"] = np.where(missing, out["RRP"].to_numpy(dtype=float), trp)
+    return out
 
 
 def _merge_preserving_rows(
@@ -205,7 +265,7 @@ def aggregate_month(
     lf = interval_loss_factors(merged[["SETTLEMENTDATE", "DUID"]], loss_factor_periods)
     merged["_TLF"] = lf["TLF"].to_numpy()
     merged["_DLF"] = lf["DLF"].to_numpy()
-    opening_tlf = fy_opening_tlf(loss_factor_periods, fy_start)
+    fy_tlfs = fy_tlf_values(loss_factor_periods, fy_start)
     disagree: list[str] = []
 
     rows = []
@@ -230,11 +290,15 @@ def aggregate_month(
             tracker_fy = res.get("source_fy_start")
             tracker_mlf = float(res["mlf"])
 
-        # Dated factors replace the tracker's FY value where they apply.
+        # Dated factors replace the tracker's FY value where they apply. The
+        # two sources agree when the tracker's value is one of the factors the
+        # DUID carried during the FY: the opening value or a mid-year revision
+        # (the tracker reports QPSFB1 FY25-26 at its revised 0.9176, so a
+        # check against the opening 1.019 alone kept 0.9176 for January).
         dated = group["_TLF"]
         if tracker_status == MLF_STATUS_EXACT and dated.notna().any():
-            opening = opening_tlf.get(duid)
-            if opening is None or abs(opening - tracker_mlf) > 5e-5:
+            known = fy_tlfs.get(duid, [])
+            if not any(abs(v - tracker_mlf) <= 5e-5 for v in known):
                 disagree.append(duid)
                 dated = dated * np.nan
         covered = dated.notna()
@@ -334,6 +398,13 @@ def aggregate_month(
                     if total_avail_all > 0 and avail_during_neg > 0:
                         forgone = max(0.0, avail_during_neg - actual_during_neg)
                         econ_curtailment = forgone / total_avail_all
+            # The economic estimate is the negative-price PART of the total
+            # shortfall, so it can never exceed it. Without this cap, output
+            # above AVAILABILITY in positive-price intervals nets the total
+            # down while the negative-price shortfall stays: MIDDLSF1 Dec 2024
+            # published 0% total and 20% economic (1,663 such month rows).
+            if econ_curtailment is not None and curtailment is not None:
+                econ_curtailment = min(econ_curtailment, curtailment)
 
         # Captured price (volume-weighted average RRP)
         captured = None
@@ -387,7 +458,7 @@ def aggregate_month(
 
     if disagree:
         logger.warning(
-            f"{month_label}: DUDETAILSUMMARY's opening FY factor disagrees with the "
+            f"{month_label}: no DUDETAILSUMMARY factor in the FY matches the "
             f"MLF tracker for {len(disagree)} DUIDs — tracker FY value kept: "
             f"{', '.join(sorted(disagree)[:20])}"
         )
@@ -646,8 +717,12 @@ def aggregate_constraints_month(
         label=f"DISPATCHCONSTRAINT {month_label}", value_cols=["MARGINALVALUE"],
     )
 
-    # Build connection point → set of constraint IDs
-    cp_to_constraints = spdcp.groupby("CONNECTIONPOINTID")["GENCONID"].apply(set).to_dict()
+    # Connection point → constraint IDs, for the constraint versions in force
+    # at the end of this month (a later version that drops a connection point
+    # must not keep it mapped; audit 2026-10, L8).
+    from .download_constraints import spdcp_mapping_asof
+    month_end = pd.Timestamp(year, month, monthrange(year, month)[1], 23, 59, 59)
+    cp_to_constraints = spdcp_mapping_asof(spdcp, month_end)
 
     # Build constraint ID → description lookup
     desc_lookup = {}

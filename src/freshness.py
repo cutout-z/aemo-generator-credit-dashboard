@@ -17,10 +17,14 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# AEMO publishes the MMSDM monthly archive ~2 weeks after month-end. The
-# pipeline's own "latest" pointer is (now - 20 days). Allow one extra full
-# month of publication delay before declaring staleness: on 1 Sep, the latest
-# expected month is July (pointer month Aug is not yet published).
+# AEMO publishes the MMSDM monthly archive 12-28 days after month end (2026:
+# Feb 12 for January ... Sep 28 for August). Just before an archive lands, the
+# newest month can therefore be one full month plus that lag old: up to
+# 31 + 28 = 59 days (Sep 27, newest month July). 75 days leaves about two
+# weeks of extra AEMO delay before the run refuses to publish; anything
+# tighter fails runs on ordinary publication timing. The run manifest records
+# the actual age (guards.monthly_age_days) so a creeping lag is visible
+# before the guard trips.
 MONTHLY_MAX_LAG_DAYS = 75
 # Daily aggregates are rebuilt from the same monthly archive, so they lag the
 # same way (latest daily date ≈ end of the newest published month).
@@ -31,7 +35,7 @@ def check_monthly_freshness(
     monthly_aggregates: pd.DataFrame,
     now: datetime | None = None,
     max_lag_days: int = MONTHLY_MAX_LAG_DAYS,
-) -> None:
+) -> int:
     """Assert monthly aggregates contain a reasonably recent month.
 
     Raises RuntimeError when the newest month in the data is older than
@@ -53,17 +57,18 @@ def check_monthly_freshness(
             "ingested a new month — check NEMWEB downloads before publishing stale data."
         )
     logger.info("Freshness guard: latest monthly aggregate %s (%d days old) — OK", latest_month, lag_days)
+    return lag_days
 
 
 def check_daily_freshness(
     daily_aggregates: pd.DataFrame,
     now: datetime | None = None,
     max_lag_days: int = DAILY_MAX_LAG_DAYS,
-) -> None:
+) -> int | None:
     """Assert daily aggregates extend close to the newest published month."""
     if daily_aggregates is None or daily_aggregates.empty or "date" not in daily_aggregates.columns:
         logger.warning("Daily aggregates missing — skipping daily freshness check")
-        return
+        return None
 
     now = now or datetime.now()
     latest_date = pd.Timestamp(sorted(daily_aggregates["date"].dropna().unique())[-1])
@@ -75,6 +80,7 @@ def check_daily_freshness(
             f"({lag_days} days old, limit {max_lag_days}). Daily rebuilds have stalled."
         )
     logger.info("Freshness guard: latest daily aggregate %s (%d days old) — OK", latest_date.date(), lag_days)
+    return lag_days
 
 
 def mac_side_staleness_check(

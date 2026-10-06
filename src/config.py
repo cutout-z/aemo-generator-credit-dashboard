@@ -206,9 +206,18 @@ AER_QA_SEED_URLS = {
 # counterpart column" — the reason is published, never a silent pass.
 AER_QA_BANDS = {
     "vwap_region_quarter": {
-        "comparator": "band_contains",
-        # Proportional slack on our derived [avg_vwap_low, avg_vwap_high] band.
-        "tolerance_ratio": 0.15,
+        # AER volume-weighted average / our time-weighted average price for the
+        # same region and quarter. Demand weighting lifts the VWA above the
+        # time-weighted mean: across the 40 region-quarters of the AER 2026-08
+        # edition (2024Q3-2026Q2) the ratio ran 1.005 (TAS1) to 1.635 (SA1
+        # 2026Q1), median 1.13. The band admits all of them and flags a
+        # derivation that halves or doubles the price. (The old check -- AER
+        # VWA inside [bottom-decile, top-decile] +/-15% of the width -- passed
+        # anything from about -110 to 785 $/MWh for NSW1 2024Q4 and could not
+        # fail.)
+        "comparator": "price_ratio",
+        "ratio_min": 0.95,
+        "ratio_max": 1.8,
     },
     "neg_price_count": {
         "comparator": "share_ratio",
@@ -273,6 +282,13 @@ MONTHLY_AGGREGATES_CACHE = "data/monthly_aggregates.feather"
 # How many years of SCADA/price history to process
 HISTORY_YEARS = 5
 
+# Five-minute settlement started on 1 October 2021. Before it, energy was
+# settled at the 30-minute TRADING price (the average of the six dispatch
+# prices in the trading interval, subject to caps), so revenue and captured
+# price for earlier months use TRADINGPRICE, not DISPATCHPRICE
+# (aggregate.settlement_prices).
+FIVE_MINUTE_SETTLEMENT_START = (2021, 10)
+
 # Default months to reprocess on incremental run (overlap for late data)
 DEFAULT_MONTHS_BACK = 2
 
@@ -306,6 +322,19 @@ CAPACITY_OVERRIDES: dict[str, float] = {
     # as the KAREEYA/BARRON reference in the audit skill). Implied ~33.2 MW.
     "BARRON-1": 33.2,
     "BARRON-2": 33.2,
+}
+
+# ─── Unit lineage (renamed / converted / merged DUIDs) ─────────────────────
+# {predecessor DUID: successor DUID}. The predecessor's history is aggregated
+# under its own DUID and published as part of the successor's series (see
+# src/lineage.py for the evidence behind each pair). A DUID still in the
+# Registration List is never treated as a predecessor.
+DUID_SUCCESSORS: dict[str, str] = {
+    # IESS conversion 12 Sep 2024: generator HPRG1 (+ load HPRL1) -> HPR1.
+    "HPRG1": "HPR1",
+    # WKIEWA1 re-registered as the aggregated units 1-4 (80 MW) in 2026;
+    # WKIEWA2's SCADA ends June 2026.
+    "WKIEWA2": "WKIEWA1",
 }
 
 # ─── Network ────────────────────────────────────────────────────────────────
