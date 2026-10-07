@@ -6,11 +6,18 @@ showing which constraints most frequently curtail each generator.
 
 from __future__ import annotations
 
+import io
 import logging
+import re
+import time
+import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import requests
+from nemosis import downloader as nemosis_downloader
 from nemosis import dynamic_data_compiler
 from nemosis.custom_errors import NoDataToReturn
 
@@ -26,6 +33,78 @@ logger = logging.getLogger(__name__)
 # practice every run refreshes. NEMOSIS keeps the per-month raw files, so a
 # refresh only downloads the archive months it does not already hold.
 REFERENCE_MAX_AGE_DAYS = 25
+
+# A pull, or a cache, whose newest EFFECTIVEDATE is this far behind today is
+# missing monthly files: NEMOSIS logs a failed archive as a warning and
+# compiles the rest. On 2026-10-06 the NAS cached a SPDCONNECTIONPOINTCONSTRAINT
+# table ending 2018-11-30, and March 2026 mapped 64 of its 628 binding
+# constraints. Such a table is never cached or used.
+REFERENCE_MAX_LAG_DAYS = 183
+
+# nemweb intermittently answers a run of archive requests with something that
+# is not a zip; a burst of the same requests minutes later succeeds. Archive
+# downloads for these tables retry: a 404 once (most are real: no archive
+# before 2015, months to 2030 are requested), anything else up to three times.
+DOWNLOAD_RETRY_DELAYS = (5, 20, 60)
+_sleep = time.sleep
+_FILE_MONTH = re.compile(r"(20\d{2})(\d{2})010000")
+
+
+def _stale_reason(df: pd.DataFrame, table: str, today=None) -> str | None:
+    """Why ``df`` cannot be a complete copy of ``table`` (None when it can)."""
+    if df is None or df.empty or "EFFECTIVEDATE" not in df.columns:
+        return f"{table}: no rows"
+    newest = pd.to_datetime(df["EFFECTIVEDATE"]).max()
+    today = pd.Timestamp(today or pd.Timestamp.now())
+    if today.tzinfo is not None:
+        today = today.tz_convert(None)
+    cutoff = today.normalize() - pd.Timedelta(days=REFERENCE_MAX_LAG_DAYS)
+    if pd.isna(newest) or newest < cutoff:
+        return (f"{table}: newest EFFECTIVEDATE {newest:%Y-%m-%d} is more than "
+                f"{REFERENCE_MAX_LAG_DAYS} days old; monthly files are missing")
+    return None
+
+
+def _download_unzip_csv_with_retry(url: str, down_load_to: str) -> None:
+    """nemosis.downloader.download_unzip_csv, retried when nemweb sends no zip."""
+    url = url.replace("#", "%23")
+    m = _FILE_MONTH.search(url)
+    future = bool(m) and (int(m.group(1)), int(m.group(2))) > (
+        pd.Timestamp.now().year, pd.Timestamp.now().month)
+    last = None
+    for attempt in range(len(DOWNLOAD_RETRY_DELAYS) + 1):
+        try:
+            r = requests.get(url, headers=nemosis_downloader.USR_AGENT_HEADER, timeout=300)
+            if r.status_code == 200 and r.content[:2] == b"PK":
+                zipfile.ZipFile(io.BytesIO(r.content)).extractall(down_load_to)
+                if attempt:
+                    logger.info(f"Downloaded {url.rsplit('/', 1)[-1]} on retry {attempt}")
+                return
+            last = f"HTTP {r.status_code}, {r.headers.get('content-type', '?')}"
+            not_found = r.status_code == 404
+        except (requests.RequestException, zipfile.BadZipFile) as e:
+            last, not_found = f"{type(e).__name__}: {e}", False
+        if future or attempt >= len(DOWNLOAD_RETRY_DELAYS) or (not_found and attempt >= 1):
+            break
+        _sleep(DOWNLOAD_RETRY_DELAYS[attempt])
+    raise zipfile.BadZipFile(f"{url.rsplit('/', 1)[-1]}: {last}")
+
+
+@contextmanager
+def _patient_downloads():
+    """Route NEMOSIS's archive downloads through the retrying downloader."""
+    original = nemosis_downloader.download_unzip_csv
+    nemosis_downloader.download_unzip_csv = _download_unzip_csv_with_retry
+    try:
+        yield
+    finally:
+        nemosis_downloader.download_unzip_csv = original
+
+
+def _compile(**kwargs) -> pd.DataFrame:
+    with _patient_downloads():
+        return dynamic_data_compiler(**kwargs)
+
 
 GENCONDATA_CACHE = "gencondata.feather"
 # All versions are kept (audit 2026-10, L8), so the cache has a new name: a
@@ -69,24 +148,39 @@ def _reference_table(
     """
     cached = cache_path.exists()
     stale = bool(cached and max_age_days is not None and _cache_age_days(cache_path, now) > max_age_days)
+    incomplete = None
     if cached and not rebuild and not stale:
-        logger.info(f"Loading cached {label}")
-        return pd.read_feather(cache_path)
+        frame = pd.read_feather(cache_path)
+        incomplete = _stale_reason(frame, f"cached {label}", today=now)
+        if incomplete is None:
+            logger.info(f"Loading cached {label}")
+            return frame
+        logger.warning(f"{incomplete}; fetching it again")
 
-    reason = "forced" if rebuild and cached else ("cache older than %s days" % max_age_days if stale else "no cache")
+    reason = ("forced" if rebuild and cached else "cache incomplete" if incomplete
+              else "cache older than %s days" % max_age_days if stale else "no cache")
     logger.info(f"Fetching {label} ({reason})...")
     try:
         df = compile_fn()
         if df is None or df.empty:
             raise NoDataToReturn(f"{label} pull returned no rows")
+        short = _stale_reason(df, f"{label} pull", today=now)
+        if short:
+            raise NoDataToReturn(short)
     except Exception as e:  # noqa: BLE001 — recorded, never swallowed
         msg = f"{label} fetch failed: {type(e).__name__}: {e}"
         logger.warning(msg)
+        fallback = pd.DataFrame()
         if cached:
-            msg += f" (using the cache written {reference_cache_date(cache_path)})"
+            fallback = pd.read_feather(cache_path)
+            if _stale_reason(fallback, label, today=now):
+                msg += " (the cache is incomplete too, so no mapping is used)"
+                fallback = pd.DataFrame()
+            else:
+                msg += f" (using the cache written {reference_cache_date(cache_path)})"
         if errors is not None:
             errors.append(msg)
-        return pd.read_feather(cache_path) if cached else pd.DataFrame()
+        return fallback
     df = df.reset_index(drop=True)
     df.to_feather(cache_path)
     return df
@@ -119,7 +213,7 @@ def fetch_binding_constraints_month(
         end_time = f"{year}/{month + 1:02d}/01 00:00:00"
 
     logger.info(f"Fetching DISPATCHCONSTRAINT for {year}-{month:02d}...")
-    df = dynamic_data_compiler(
+    df = _compile(
         start_time=start_time,
         end_time=end_time,
         table_name="DISPATCHCONSTRAINT",
@@ -170,7 +264,7 @@ def fetch_gencondata(
 
     def compile_fn() -> pd.DataFrame:
         Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
-        df = dynamic_data_compiler(
+        df = _compile(
             start_time="2020/01/01 00:00:00",
             end_time="2030/01/01 00:00:00",
             table_name="GENCONDATA",
@@ -243,7 +337,7 @@ def fetch_spdconnectionpointconstraint(
 
     def compile_fn() -> pd.DataFrame:
         Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
-        df = dynamic_data_compiler(
+        df = _compile(
             start_time="2020/01/01 00:00:00",
             end_time="2030/01/01 00:00:00",
             table_name="SPDCONNECTIONPOINTCONSTRAINT",

@@ -21,9 +21,15 @@ from src.run_status import (
 )
 
 
+# Recent effective dates: a table whose newest date is months old is treated
+# as an incomplete download (download_constraints._stale_reason).
+_RECENT = (pd.Timestamp.now().normalize() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+_OLDER = (pd.Timestamp.now().normalize() - pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+
+
 def _gencon_raw():
     return pd.DataFrame({
-        "GENCONID": ["X", "X"], "EFFECTIVEDATE": ["2024-01-01", "2025-01-01"],
+        "GENCONID": ["X", "X"], "EFFECTIVEDATE": [_OLDER, _RECENT],
         "VERSIONNO": [1, 1], "DESCRIPTION": ["old", "new"], "REASON": ["", ""],
         "LIMITTYPE": ["", ""],
     })
@@ -31,7 +37,7 @@ def _gencon_raw():
 
 def _spdcp_raw():
     return pd.DataFrame({
-        "CONNECTIONPOINTID": ["CP_A"], "EFFECTIVEDATE": ["2024-01-01"], "VERSIONNO": [1],
+        "CONNECTIONPOINTID": ["CP_A"], "EFFECTIVEDATE": [_RECENT], "VERSIONNO": [1],
         "GENCONID": ["X"], "FACTOR": [1.0], "BIDTYPE": ["ENERGY"],
     })
 
