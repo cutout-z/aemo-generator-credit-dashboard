@@ -275,6 +275,14 @@ class TestFreshness:
         daily = pd.DataFrame({"duid": ["X"], "date": ["2026-07-31"]})
         freshness.check_daily_freshness(daily, now=datetime(2026, 9, 1))
 
+    def test_daily_limit_matches_the_monthly_one(self):
+        # Audit 2026-10-07 S3-5: 60 days left one day beyond AEMO's worst lag.
+        assert freshness.DAILY_MAX_LAG_DAYS == freshness.MONTHLY_MAX_LAG_DAYS == 75
+        daily = pd.DataFrame({"duid": ["X"], "date": ["2026-08-31"]})
+        freshness.check_daily_freshness(daily, now=datetime(2026, 11, 14))  # 75 days
+        with pytest.raises(RuntimeError):
+            freshness.check_daily_freshness(daily, now=datetime(2026, 11, 15))  # 76 days
+
     def test_mac_side_alerts_on_stale(self, tmp_path):
         stale = pd.DataFrame({"duid": ["X"], "month": ["2025-06"]})
         stale.to_feather(tmp_path / "monthly_aggregates.feather")
