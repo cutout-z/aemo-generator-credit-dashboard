@@ -33,6 +33,8 @@ def _bidperoffer_raw(year: int, month: int) -> pd.DataFrame:
     matching the BIDDAYOFFER trading day so daily stacks have an intersection;
     a second interval on the month's final day makes the volume source
     complete (a finished month with a partial source degrades the lane).
+    The FCAS row gets a final-day twin for the same reason (the FCAS lane
+    checks fcas_source_complete too, audit 2026-10-07 S3-2).
     """
     fcas_day = f"{year}-{month:02d}-15"
     vol_day = f"{year}-{month:02d}-01"
@@ -41,10 +43,10 @@ def _bidperoffer_raw(year: int, month: int) -> pd.DataFrame:
         f"{pd.Period(f'{year}-{month:02d}', freq='M').days_in_month}"
     )
     fcas = {
-        "INTERVAL_DATETIME": pd.to_datetime([f"{fcas_day} 12:00:00"]),
-        "DUID": ["GEN1"], "BIDTYPE": ["RAISE6SEC"],
-        "MAXAVAIL": [5.0], "ENABLEMENTMIN": [0.0], "ENABLEMENTMAX": [5.0],
-        "VERSIONNO": [1],
+        "INTERVAL_DATETIME": pd.to_datetime([f"{fcas_day} 12:00:00", f"{last_day} 12:00:00"]),
+        "DUID": ["GEN1"] * 2, "BIDTYPE": ["RAISE6SEC"] * 2,
+        "MAXAVAIL": [5.0] * 2, "ENABLEMENTMIN": [0.0] * 2, "ENABLEMENTMAX": [5.0] * 2,
+        "VERSIONNO": [1] * 2,
     }
     eng = {
         "INTERVAL_DATETIME": pd.to_datetime([f"{vol_day} 04:05:00", f"{last_day} 12:00:00"]),
@@ -53,7 +55,7 @@ def _bidperoffer_raw(year: int, month: int) -> pd.DataFrame:
         "VERSIONNO": [1] * 2,
     }
     for i in range(1, 11):
-        fcas[f"BANDAVAIL{i}"] = [0.0]
+        fcas[f"BANDAVAIL{i}"] = [0.0] * 2
         eng[f"BANDAVAIL{i}"] = [10.0 if i == 1 else 0.0] * 2
     return pd.concat([pd.DataFrame(fcas), pd.DataFrame(eng)], ignore_index=True)
 

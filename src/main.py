@@ -479,6 +479,7 @@ def _finalize_factor_lane(
     no_rows_note: str,
     cold_start_error: str,
     completeness_cols: tuple[str, ...] | None = None,
+    partial_flag_col: str | None = None,
     today: datetime | None = None,
 ) -> pd.DataFrame:
     """Persist one lane's fresh per-month facts, or retain the last-known-good.
@@ -498,6 +499,9 @@ def _finalize_factor_lane(
     ``today``'s month) that is still partial after the merge — or that was
     only kept from the cache because the fresh fetch was partial — degrades
     the lane instead of reporting ok.
+
+    ``partial_flag_col`` (FCAS lane): the same finished-month check on a
+    source-complete flag, without the merge protection.
     """
     if frames:
         new = pd.concat(frames, ignore_index=True)
@@ -509,14 +513,16 @@ def _finalize_factor_lane(
         )
         lane.frame = merged
         problems = list(errors)
-        if completeness_cols:
+        flag_col = completeness_cols[0] if completeness_cols else partial_flag_col
+        if flag_col:
             partial = _partial_finished_months(
-                merged, sorted(set(new["month"])), completeness_cols[0], today,
+                merged, sorted(set(new["month"])), flag_col, today,
             )
             if partial:
                 problems.append(
                     f"partial source for finished month(s) {', '.join(partial)}"
                 )
+        if completeness_cols:
             if kept:
                 problems.append(
                     "fresh fetch less complete than cache for "
@@ -547,14 +553,20 @@ def _partial_finished_months(
     flag_col: str,
     today: datetime | None = None,
 ) -> list[str]:
-    """Months in ``months`` that have ended yet have no source-complete row."""
+    """Months in ``months`` whose archive is due yet have no source-complete row.
+
+    A month counts once it ended more than FINISHED_MONTH_GRACE_DAYS ago: until
+    AEMO publishes its MMSDM archive (12-28 days after month end) a finished
+    month is a partial stub by construction. Flagging it from day 1 made the
+    offer lane "degraded" for half of every month and buried real alarms
+    (audit 2026-10-07, S3-2).
+    """
     if frame is None or frame.empty or flag_col not in frame.columns:
         return []
-    current = (today or datetime.now()).strftime("%Y-%m")
     out = []
     for m in months:
-        if m >= current:
-            continue  # the running month is partial by construction
+        if not _month_overdue(m, today):
+            continue  # running month, or archive not due yet
         flags = frame.loc[frame["month"] == m, flag_col]
         if flags.empty or not flags.fillna(False).astype(bool).any():
             out.append(m)
@@ -746,6 +758,7 @@ def _run_optional_factor_lanes(
             no_rows_note="source returned no rows (unpublished months?) — "
                          "last-known-good retained",
             cold_start_error="no source rows and no cache to retain (cold start)",
+            partial_flag_col="fcas_source_complete",
         )
     if want_offer:
         offer_lane.attempted_months = attempted

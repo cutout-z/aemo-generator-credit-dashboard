@@ -164,9 +164,18 @@ class TestLaneStatus:
         lane, _ = _finalize(tmp_path, [sep], datetime(2026, 9, 30))
         assert lane.status == STATUS_OK
 
-    def test_finished_month_partial_degrades(self, tmp_path):
+    def test_finished_month_partial_before_its_archive_is_due_is_ok(self, tmp_path):
+        # Audit 2026-10-07 S3-2: from 1 Oct until MMSDM_2026_09 lands (up to
+        # ~28 Oct) the September stub is the normal state, not a failure.
         sep = compute_offer_features(*_september_stub_fetch(), "2026-09")
         lane, _ = _finalize(tmp_path, [sep], datetime(2026, 10, 5))
+        assert lane.status == STATUS_OK
+        lane, _ = _finalize(tmp_path, [sep], datetime(2026, 11, 4))  # 35 days after 30 Sep
+        assert lane.status == STATUS_OK
+
+    def test_finished_month_partial_degrades_once_overdue(self, tmp_path):
+        sep = compute_offer_features(*_september_stub_fetch(), "2026-09")
+        lane, _ = _finalize(tmp_path, [sep], datetime(2026, 11, 5))
         assert lane.status == STATUS_DEGRADED
         assert "2026-09" in lane.error
 
@@ -179,3 +188,31 @@ class TestLaneStatus:
         assert lane.status == STATUS_DEGRADED
         assert "cached month kept" in lane.error
         assert out["n_days"].tolist() == [31]
+
+
+class TestFcasStub:
+    """The FCAS lane carried a partial finished month as ok (audit 2026-10-07 S3-2)."""
+
+    def _fcas(self, tmp_path, complete, today):
+        rows = pd.DataFrame({
+            "duid": ["T1"], "month": ["2026-09"], "fcas_services_offered": [2],
+            "fcas_source_complete": [complete],
+        })
+        lane = LaneRun(source="fcas_factors", block="fcas_participation")
+        _finalize_factor_lane(
+            lane, tmp_path / "fcas_factors.feather", [rows], [],
+            full_refresh=False, label="FCAS factor", no_rows_error="x",
+            no_rows_note="x", cold_start_error="x",
+            partial_flag_col="fcas_source_complete", today=today,
+        )
+        return lane
+
+    def test_partial_month_ok_until_its_archive_is_due(self, tmp_path):
+        assert self._fcas(tmp_path, False, datetime(2026, 10, 7)).status == STATUS_OK
+
+    def test_partial_month_degrades_once_overdue(self, tmp_path):
+        lane = self._fcas(tmp_path, False, datetime(2026, 11, 5))
+        assert lane.status == STATUS_DEGRADED and "2026-09" in lane.error
+
+    def test_complete_month_is_ok(self, tmp_path):
+        assert self._fcas(tmp_path, True, datetime(2026, 11, 5)).status == STATUS_OK
