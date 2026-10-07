@@ -75,6 +75,27 @@ def fetch_binding_constraints_month(
     return df
 
 
+
+# A NEMOSIS compile that lost its later monthly files (nemweb throttles long
+# runs of requests; each failed file is only a warning) still returns rows,
+# just old ones: on 2026-10-06 the NAS cached a SPDCONNECTIONPOINTCONSTRAINT
+# table whose newest EFFECTIVEDATE was 2018-11-30, so 564 of March 2026's 628
+# binding constraints mapped to no connection point. Both reference tables
+# change every month, so data this far behind today means files are missing.
+REFERENCE_MAX_AGE_DAYS = 183
+
+
+def _stale_reason(df: pd.DataFrame, table: str, today=None) -> str | None:
+    """Why ``df`` cannot be a complete copy of ``table`` (None when it can)."""
+    if df is None or df.empty or "EFFECTIVEDATE" not in df.columns:
+        return f"{table}: no rows"
+    newest = pd.to_datetime(df["EFFECTIVEDATE"]).max()
+    cutoff = pd.Timestamp(today or pd.Timestamp.now()).normalize() - pd.Timedelta(days=REFERENCE_MAX_AGE_DAYS)
+    if pd.isna(newest) or newest < cutoff:
+        return (f"{table}: newest EFFECTIVEDATE {newest:%Y-%m-%d} is more than "
+                f"{REFERENCE_MAX_AGE_DAYS} days old; monthly files are missing")
+    return None
+
 def fetch_gencondata(cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
     """Download GENCONDATA (constraint definitions with descriptions).
 
@@ -82,8 +103,12 @@ def fetch_gencondata(cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
     """
     cache_path = Path(cache_dir) / "gencondata.feather"
     if cache_path.exists() and not rebuild:
-        logger.info("Loading cached GENCONDATA")
-        return pd.read_feather(cache_path)
+        cached = pd.read_feather(cache_path)
+        reason = _stale_reason(cached, "cached GENCONDATA")
+        if reason is None:
+            logger.info("Loading cached GENCONDATA")
+            return cached
+        logger.warning(f"{reason}; fetching it again")
 
     nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
     Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
@@ -115,6 +140,10 @@ def fetch_gencondata(cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
     df = df.sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO"])
     df = df.drop_duplicates(subset=["GENCONID"], keep="last")
 
+    reason = _stale_reason(df, "GENCONDATA")
+    if reason:
+        logger.error(f"{reason}; not cached or used")
+        return pd.DataFrame()
     logger.info(f"GENCONDATA: {len(df)} constraint definitions")
     df.to_feather(cache_path)
     return df
@@ -160,8 +189,12 @@ def fetch_spdconnectionpointconstraint(
     # read as if it carried version history.
     cache_path = Path(cache_dir) / "spdcp_constraint_versions.feather"
     if cache_path.exists() and not rebuild:
-        logger.info("Loading cached SPDCONNECTIONPOINTCONSTRAINT")
-        return pd.read_feather(cache_path)
+        cached = pd.read_feather(cache_path)
+        reason = _stale_reason(cached, "cached SPDCONNECTIONPOINTCONSTRAINT")
+        if reason is None:
+            logger.info("Loading cached SPDCONNECTIONPOINTCONSTRAINT")
+            return cached
+        logger.warning(f"{reason}; fetching it again")
 
     nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
     Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
@@ -200,6 +233,10 @@ def fetch_spdconnectionpointconstraint(
         subset=["CONNECTIONPOINTID", "GENCONID", "EFFECTIVEDATE", "VERSIONNO"], keep="last",
     ).sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO", "CONNECTIONPOINTID"])
 
+    reason = _stale_reason(df, "SPDCONNECTIONPOINTCONSTRAINT")
+    if reason:
+        logger.error(f"{reason}; not cached or used")
+        return pd.DataFrame()
     logger.info(
         f"SPDCONNECTIONPOINTCONSTRAINT: {len(df)} mappings, "
         f"{df['CONNECTIONPOINTID'].nunique()} connection points"
