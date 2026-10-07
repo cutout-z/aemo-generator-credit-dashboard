@@ -336,6 +336,62 @@ def _constraint_lane(
     return lane
 
 
+def _mlf_tracker_lane(report: dict) -> LaneRun:
+    """Run-manifest record for the MLF Tracker summary.csv (audit 2026-10-07, S2-6).
+
+    A failed tracker download used to fall back to the stale cache with only a
+    log line, so revenue could be valued on old loss factors with every check
+    green. As-of is the newest final FY column (draft FY and the tracker's
+    Last-Modified in details); a stale-cache fallback is degraded.
+    """
+    lane = LaneRun(source="mlf_tracker")
+    newest = report.get("newest_fy")
+    lane.frame = pd.DataFrame({"edition": [newest]}) if newest else pd.DataFrame()
+    lane.attempted_months = 1
+    lane.months_with_data = 1 if newest else 0
+    lane.details = {
+        "source": report.get("source"),
+        "last_modified": report.get("last_modified"),
+        "draft_fy": report.get("draft_fy"),
+    }
+    if report.get("source") == "stale_cache":
+        lane.status = STATUS_DEGRADED
+        lane.retained = True
+        lane.error = report.get("error") or "MLF Tracker download failed; stale cache used"
+    elif report.get("source") == "cache":
+        lane.note = "cached tracker summary used (no --refresh-mlf)"
+    return lane
+
+
+def _loss_factor_lane(report: dict) -> LaneRun:
+    """Run-manifest record for DUDETAILSUMMARY loss-factor periods (audit 2026-10-07, S2-6).
+
+    As-of is the archive month the periods came from. Any fallback (a failed
+    download with the cache used, a cache more than one archive behind, or no
+    periods at all, so revenue uses the tracker's per-FY factor) is degraded.
+    """
+    lane = LaneRun(source="loss_factors")
+    month = report.get("archive_month")
+    lane.frame = pd.DataFrame({"edition": [month]}) if month else pd.DataFrame()
+    lane.attempted_months = 1
+    lane.months_with_data = 1 if month else 0
+    lane.details = {"source": report.get("source")}
+    errors = list(report.get("errors") or [])
+    source = report.get("source")
+    if source == "fallback_cache":
+        lane.status = STATUS_DEGRADED
+        lane.retained = True
+        lane.error = "; ".join(errors) or (
+            f"no DUDETAILSUMMARY archive newer than the cached {month} reachable"
+        )
+    elif source in (None, "none"):
+        lane.status = STATUS_DEGRADED
+        lane.error = "; ".join(errors) or (
+            "DUDETAILSUMMARY unavailable and no cache; revenue uses the tracker's per-FY MLF"
+        )
+    return lane
+
+
 def _constraint_run_failure(lane: LaneRun, *, skip_constraints: bool) -> str | None:
     """Why a run that asked for constraints must exit non-zero, or None.
 
@@ -864,9 +920,11 @@ def main():
 
     # Step 2: MLF history + draft MLFs + connection points (all from MLF Tracker CSV)
     logger.info("=== Step 2: MLF data from MLF Tracker ===")
+    mlf_report: dict = {}
     mlf_history, draft_mlfs, draft_fy_label, cp_map = fetch_mlf_data(
-        str(data_dir), force=(args.full_refresh or args.refresh_mlf)
+        str(data_dir), force=(args.full_refresh or args.refresh_mlf), report=mlf_report,
     )
+    mlf_lane = _mlf_tracker_lane(mlf_report)
     logger.info(f"Loaded {len(mlf_history)} DUID×FY MLF records")
     if draft_mlfs:
         logger.info(f"Loaded {len(draft_mlfs)} draft MLFs for {draft_fy_label}")
@@ -876,13 +934,17 @@ def main():
     # Dated loss factors (mid-year MLF revisions). Optional: without them
     # revenue keeps the tracker's per-FY factor, and each row's
     # revenue_mlf_source says which source was used.
+    loss_report: dict = {}
     try:
         loss_factor_periods = fetch_loss_factor_periods(
-            str(data_dir), force=(args.full_refresh or args.refresh_mlf),
+            str(data_dir), force=(args.full_refresh or args.refresh_mlf), report=loss_report,
         )
     except Exception as e:
         logger.warning(f"Loss-factor periods unavailable: {e}")
         loss_factor_periods = None
+        loss_report["source"] = "none"
+        loss_report.setdefault("errors", []).append(f"{type(e).__name__}: {e}")
+    loss_lane = _loss_factor_lane(loss_report)
 
     generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
     logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
@@ -1434,7 +1496,7 @@ def main():
         retained=constraints_retained and not args.skip_constraints,
         reference_dir=data_dir,
     )
-    all_lanes = factor_lanes + [market_lane, constraint_lane]
+    all_lanes = factor_lanes + [market_lane, constraint_lane, mlf_lane, loss_lane]
     manifest = build_manifest(
         {lane.source: lane for lane in all_lanes if lane is not None},
         mode="full_refresh" if args.full_refresh else "incremental",

@@ -93,6 +93,7 @@ def validate_mlf_history(mlf_history: pd.DataFrame) -> pd.DataFrame:
 def fetch_mlf_data(
     cache_dir: str,
     force: bool = False,
+    report: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, float] | None, str | None, dict[str, str]]:
     """Download MLF Tracker summary CSV and extract all MLF data needed by the pipeline.
 
@@ -109,11 +110,20 @@ def fetch_mlf_data(
         ValueError: the melted history frame fails schema/sentinel/range checks
             (e.g. a -999 sentinel in an FY column).
         RuntimeError: the tracker summary carries no final FY columns.
+
+    ``report`` (optional dict) is filled for the run manifest (audit
+    2026-10-07, S2-6): ``source`` is ``download``, ``cache`` (no refresh
+    asked) or ``stale_cache`` (the download failed and the old file was
+    used, with ``error``); ``last_modified`` is the tracker's Last-Modified
+    header when downloaded; ``newest_fy`` / ``draft_fy`` are the newest final
+    and draft FY columns.
     """
     cache_path = Path(cache_dir) / _CACHE_FILE
+    report = report if report is not None else {}
 
     if cache_path.exists() and not force:
         logger.info("Loading cached MLF Tracker summary")
+        report["source"] = "cache"
         summary = pd.read_csv(cache_path)
     else:
         logger.info(f"Downloading MLF Tracker summary...")
@@ -127,6 +137,8 @@ def fetch_mlf_data(
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(resp.text, encoding="utf-8")
                 logger.info(f"Downloaded MLF Tracker summary ({len(resp.content) / 1024:.0f} KB)")
+                report["source"] = "download"
+                report["last_modified"] = resp.headers.get("Last-Modified")
                 break
             except requests.RequestException as e:
                 if attempt < config.MAX_RETRIES - 1:
@@ -137,6 +149,8 @@ def fetch_mlf_data(
                 else:
                     if cache_path.exists():
                         logger.warning(f"Download failed, using stale cache: {e}")
+                        report["source"] = "stale_cache"
+                        report["error"] = f"MLF Tracker download failed, stale cache used: {e}"
                     else:
                         raise RuntimeError(f"Cannot fetch MLF Tracker summary and no cache exists: {e}")
         summary = pd.read_csv(cache_path)
@@ -160,6 +174,9 @@ def fetch_mlf_data(
             "MLF Tracker summary has no final FY columns — refusing to return "
             "an empty MLF frame. Columns: " + ", ".join(map(str, summary.columns))
         )
+
+    report["newest_fy"] = max(final_fy_cols, key=lambda c: int(_FY_COL.match(c).group(1)))
+    report["draft_fy"] = None
 
     # ── MLF history: melt wide → long ────────────────────────────────────────
     melted = (
@@ -192,6 +209,7 @@ def fetch_mlf_data(
             draft_fy_label = f"FY{m.group(1)}-{m.group(2)}"
         draft_df = summary[["DUID", draft_col]].dropna(subset=[draft_col])
         draft_mlfs = dict(zip(draft_df["DUID"], draft_df[draft_col].astype(float)))
+        report["draft_fy"] = draft_fy_label
         logger.info(f"Draft MLFs: {len(draft_mlfs)} DUIDs for {draft_fy_label}")
     else:
         logger.info("No draft MLF column in tracker summary")
