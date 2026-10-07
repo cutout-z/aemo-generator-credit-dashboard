@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+from nemosis.custom_errors import NoDataToReturn
 
 from . import config
 from .aggregate import (
@@ -17,8 +18,9 @@ from .aggregate import (
     settlement_prices, settles_on_trading_price,
 )
 from .download_constraints import (
+    GENCONDATA_CACHE, REFERENCE_MAX_AGE_DAYS, SPDCP_CACHE,
     fetch_binding_constraints_month, fetch_gencondata,
-    fetch_spdconnectionpointconstraint,
+    fetch_spdconnectionpointconstraint, reference_cache_date,
 )
 from .download_dispatch import fetch_dispatch_price_month, fetch_trading_price_month
 from .download_intermittent import fetch_intermittent_month  # noqa: F401  (S3-01: retained for cache-migration tooling; unused by pipeline)
@@ -151,6 +153,131 @@ def _constraint_months_to_process(
     return sorted(set(tail) | set(catch_up))
 
 
+# A month that ended more than this many days ago should be in the MMSDM
+# monthly archive (AEMO publishes it 12-28 days after month end). Before
+# that, a month with no archive or a partial one is the normal state, not a
+# failure (audit 2026-10-07, S3-2 / S2-4).
+FINISHED_MONTH_GRACE_DAYS = 35
+
+
+def _month_overdue(label: str, today: datetime | None = None,
+                   grace_days: int = FINISHED_MONTH_GRACE_DAYS) -> bool:
+    """True when month ``label`` (YYYY-MM) ended more than ``grace_days`` ago."""
+    today = today or datetime.now()
+    month_end = (pd.Timestamp(label + "-01") + pd.offsets.MonthEnd(0)).to_pydatetime()
+    return (today.replace(tzinfo=None) - month_end).days > grace_days
+
+
+def _run_constraint_step(
+    data_dir: Path,
+    cp_map: dict,
+    *,
+    months_back: int,
+    full_refresh: bool,
+    today: datetime | None = None,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Step 3b: fetch and aggregate binding constraints. Returns (aggregates, errors).
+
+    Nothing here is swallowed any more (audit 2026-10-07, S1-1 / S2-4): a
+    failed GENCONDATA / SPDCONNECTIONPOINTCONSTRAINT pull, a DISPATCHCONSTRAINT
+    month that raised, and a month that ended more than
+    FINISHED_MONTH_GRACE_DAYS ago with no archive each add an error, which
+    makes the constraints lane degraded (and the constraints run exit
+    non-zero). The reference tables are re-pulled once their cache is older
+    than REFERENCE_MAX_AGE_DAYS (S2-5).
+    """
+    constraint_path = data_dir / "constraint_aggregates.feather"
+    errors: list[str] = []
+    all_constraints = pd.DataFrame()
+    try:
+        gencondata = fetch_gencondata(
+            str(data_dir), rebuild=full_refresh,
+            max_age_days=REFERENCE_MAX_AGE_DAYS, errors=errors,
+        )
+        spdcp = fetch_spdconnectionpointconstraint(
+            str(data_dir), rebuild=full_refresh,
+            max_age_days=REFERENCE_MAX_AGE_DAYS, errors=errors,
+        )
+        if gencondata.empty or spdcp.empty:
+            logger.warning("Skipping constraints: GENCONDATA or SPDCP unavailable")
+            errors.append("GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable")
+            return all_constraints, errors
+
+        # Determine months to process for constraints
+        constraint_months = _months_to_process(config.CONSTRAINTS_HISTORY_MONTHS, full_refresh)
+        if not full_refresh:
+            # No existing constraint data: backfill the full history
+            # window. Otherwise reprocess the overlap period AND every
+            # month after the newest cached one (catch-up after skips).
+            cached_latest = None
+            if constraint_path.exists():
+                cached = pd.read_feather(constraint_path, columns=["month"])
+                if not cached.empty:
+                    cached_latest = str(sorted(cached["month"].astype(str).unique())[-1])
+            constraint_months = _constraint_months_to_process(
+                constraint_months, cached_latest, months_back,
+            )
+
+        constraint_rows = []
+        for year, month in constraint_months:
+            label = f"{year}-{month:02d}"
+            try:
+                dc = fetch_binding_constraints_month(
+                    year, month, str(data_dir), rebuild=full_refresh
+                )
+            except NoDataToReturn as e:
+                if _month_overdue(label, today):
+                    logger.warning(f"No DISPATCHCONSTRAINT for finished month {label}: {e}")
+                    errors.append(f"{label}: no DISPATCHCONSTRAINT archive for a finished month ({e})")
+                else:
+                    logger.info(f"No DISPATCHCONSTRAINT for {label} yet (not published)")
+                continue
+            except Exception as e:
+                logger.warning(f"DISPATCHCONSTRAINT fetch failed for {label}: {e}")
+                errors.append(f"{label}: DISPATCHCONSTRAINT {type(e).__name__}: {e}")
+                continue
+            try:
+                if not dc.empty:
+                    mc = aggregate_constraints_month(
+                        dc, spdcp, gencondata, cp_map, year, month
+                    )
+                    if not mc.empty:
+                        constraint_rows.append(mc)
+            except Exception as e:
+                logger.warning(f"Constraint processing failed for {label}: {e}")
+                errors.append(f"{label}: constraint aggregation {type(e).__name__}: {e}")
+
+        if constraint_rows:
+            new_constraints = pd.concat(constraint_rows, ignore_index=True)
+            if constraint_path.exists() and not full_refresh:
+                existing_constraints = pd.read_feather(constraint_path)
+                existing_constraints_before_update = existing_constraints.copy()
+                reprocessed = set(new_constraints["month"].unique())
+                existing_constraints = existing_constraints[
+                    ~existing_constraints["month"].isin(reprocessed)
+                ]
+                all_constraints = pd.concat(
+                    [existing_constraints, new_constraints], ignore_index=True
+                )
+                _assert_protected_months_unchanged(
+                    existing_constraints_before_update,
+                    all_constraints,
+                    reprocessed,
+                    month_col="month",
+                    label="Constraint aggregates",
+                )
+            else:
+                all_constraints = new_constraints
+            all_constraints.to_feather(constraint_path)
+            logger.info(f"Saved {len(all_constraints)} constraint aggregate rows")
+        elif constraint_path.exists():
+            all_constraints = pd.read_feather(constraint_path)
+    except Exception as e:
+        logger.error(f"Constraint aggregation failed: {e}")
+        errors.append(f"constraint aggregation failed: {type(e).__name__}: {e}")
+    return all_constraints, errors
+
+
 def _constraints_or_cached(constraints: pd.DataFrame, cache_path: Path) -> tuple[pd.DataFrame, bool]:
     """The constraint frame to publish: this run's, or the cached aggregates when the run has none.
 
@@ -165,7 +292,7 @@ def _constraints_or_cached(constraints: pd.DataFrame, cache_path: Path) -> tuple
 
 def _constraint_lane(
     constraints: pd.DataFrame, monthly: pd.DataFrame, *, skipped: bool, error: str | None = None,
-    retained: bool = False,
+    retained: bool = False, reference_dir: Path | None = None,
 ) -> LaneRun:
     """Run-manifest record for the binding-constraint data, with a freshness check.
 
@@ -198,6 +325,13 @@ def _constraint_lane(
         )
         lane.status = STATUS_DEGRADED
         lane.error = "; ".join(e for e in (lane.error, lag) if e)
+    if reference_dir is not None:
+        # When GENCONDATA / SPDCONNECTIONPOINTCONSTRAINT were last pulled
+        # (S2-5): the mapping is only as current as these dates.
+        lane.details = {
+            "gencondata_cache_date": reference_cache_date(Path(reference_dir) / GENCONDATA_CACHE),
+            "spdcp_cache_date": reference_cache_date(Path(reference_dir) / SPDCP_CACHE),
+        }
     return lane
 
 
@@ -955,74 +1089,11 @@ def main():
             logger.warning("No cached constraint aggregates available")
     elif not args.metadata_only:
         logger.info("=== Step 3b: Binding constraint aggregation ===")
-        try:
-            gencondata = fetch_gencondata(str(data_dir), rebuild=args.full_refresh)
-            spdcp = fetch_spdconnectionpointconstraint(str(data_dir), rebuild=args.full_refresh)
-
-            if not gencondata.empty and not spdcp.empty:
-                # Determine months to process for constraints
-                constraint_months = _months_to_process(
-                    config.CONSTRAINTS_HISTORY_MONTHS, args.full_refresh
-                )
-                if not args.full_refresh:
-                    # No existing constraint data: backfill the full history
-                    # window. Otherwise reprocess the overlap period AND every
-                    # month after the newest cached one (catch-up after skips).
-                    cached_latest = None
-                    if constraint_path.exists():
-                        cached = pd.read_feather(constraint_path, columns=["month"])
-                        if not cached.empty:
-                            cached_latest = str(sorted(cached["month"].astype(str).unique())[-1])
-                    constraint_months = _constraint_months_to_process(
-                        constraint_months, cached_latest, args.months_back,
-                    )
-
-                constraint_rows = []
-                for year, month in constraint_months:
-                    try:
-                        dc = fetch_binding_constraints_month(
-                            year, month, str(data_dir), rebuild=args.full_refresh
-                        )
-                        if not dc.empty:
-                            mc = aggregate_constraints_month(
-                                dc, spdcp, gencondata, cp_map, year, month
-                            )
-                            if not mc.empty:
-                                constraint_rows.append(mc)
-                    except Exception as e:
-                        logger.warning(f"Constraint processing failed for {year}-{month:02d}: {e}")
-
-                if constraint_rows:
-                    new_constraints = pd.concat(constraint_rows, ignore_index=True)
-                    if constraint_path.exists() and not args.full_refresh:
-                        existing_constraints = pd.read_feather(constraint_path)
-                        existing_constraints_before_update = existing_constraints.copy()
-                        reprocessed = set(new_constraints["month"].unique())
-                        existing_constraints = existing_constraints[
-                            ~existing_constraints["month"].isin(reprocessed)
-                        ]
-                        all_constraints = pd.concat(
-                            [existing_constraints, new_constraints], ignore_index=True
-                        )
-                        _assert_protected_months_unchanged(
-                            existing_constraints_before_update,
-                            all_constraints,
-                            reprocessed,
-                            month_col="month",
-                            label="Constraint aggregates",
-                        )
-                    else:
-                        all_constraints = new_constraints
-                    all_constraints.to_feather(constraint_path)
-                    logger.info(f"Saved {len(all_constraints)} constraint aggregate rows")
-                elif constraint_path.exists():
-                    all_constraints = pd.read_feather(constraint_path)
-            else:
-                logger.warning("Skipping constraints: GENCONDATA or SPDCP unavailable")
-                constraint_error = "GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable"
-        except Exception as e:
-            logger.error(f"Constraint aggregation failed: {e}")
-            constraint_error = f"constraint aggregation failed: {e}"
+        all_constraints, constraint_errors = _run_constraint_step(
+            data_dir, cp_map,
+            months_back=args.months_back, full_refresh=args.full_refresh,
+        )
+        constraint_error = "; ".join(constraint_errors) or None
     all_constraints, constraints_retained = _constraints_or_cached(all_constraints, constraint_path)
     if constraints_retained and not args.skip_constraints:
         logger.warning(f"No constraint data this run; keeping the cached aggregates ({len(all_constraints)} rows)")
@@ -1332,6 +1403,7 @@ def main():
         all_constraints, all_monthly,
         skipped=bool(args.skip_constraints), error=constraint_error,
         retained=constraints_retained and not args.skip_constraints,
+        reference_dir=data_dir,
     )
     all_lanes = factor_lanes + [market_lane, constraint_lane]
     manifest = build_manifest(
