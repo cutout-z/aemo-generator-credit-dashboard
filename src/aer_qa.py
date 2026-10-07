@@ -1084,6 +1084,17 @@ def run_aer_qa_lane(
         status = STATUS_OK
 
     edition_quarter = latest_quarter(frame)
+    # Audit 2026-10-07 (S2-1): the seed URLs are pinned to one AER folder, so
+    # after AER publishes the next quarter they keep returning the old
+    # edition, fetched=True, and the lane read ok. reference_quarter already
+    # includes the publication lag, so an edition behind it is overdue.
+    if (
+        status != STATUS_ERROR and edition_quarter and reference_quarter
+        and quarter_sort_key(edition_quarter) < quarter_sort_key(reference_quarter)
+    ):
+        status = STATUS_DEGRADED
+        overdue = f"AER edition {edition_quarter} older than expected {reference_quarter}"
+        error = f"{error}; {overdue}" if error else overdue
     summary = payload["summary"]
     if note is None:
         note = (

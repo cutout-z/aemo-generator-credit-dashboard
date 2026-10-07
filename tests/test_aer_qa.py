@@ -661,3 +661,18 @@ def test_lane_reports_partial_coverage_when_only_the_stale_snapshot_exists(tmp_p
     neg = payload["series"]["neg_price_count"]
     assert neg["counts"][OUTCOME_PARTIAL_COVERAGE] == 1
     assert "61 of 92" in neg["checks"][0]["detail"]
+
+
+def test_edition_older_than_the_expected_quarter_is_degraded(tmp_path):
+    """Audit 2026-10-07 S2-1: the seed URLs are pinned to one AER folder, so after
+    Q3 is published they keep serving Q2 with fetched=True. Once the expected
+    quarter (lag included) is past the edition, the lane is degraded."""
+    docs = _docs_dir(tmp_path)
+    result = run_aer_qa_lane(tmp_path / "data", docs, today=date(2026, 12, 1), fetch=_fetcher())
+    assert result.fetched is True and result.edition_quarter == "2026Q2"
+    assert result.reference_quarter == "2026Q3"
+    assert result.status == STATUS_DEGRADED
+    assert result.error == "AER edition 2026Q2 older than expected 2026Q3"
+    # Before Q3 is due, the same edition is ok.
+    assert run_aer_qa_lane(tmp_path / "data", docs, today=date(2026, 11, 20),
+                           fetch=_fetcher()).status == STATUS_OK

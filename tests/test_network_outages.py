@@ -747,3 +747,23 @@ class TestPrune:
 
     def test_prune_raw_on_missing_dir_is_zero(self, tmp_path):
         assert prune_raw(tmp_path / "nope") == 0
+
+
+class TestMonthAge:
+    """Audit 2026-10-07 S2-2: the lane fell back up to 4 months and still read ok."""
+
+    def test_august_in_october_is_ok_and_in_november_degraded(
+        self, tmp_path, monkeypatch, context_files,
+    ):
+        _install_fake_source(monkeypatch, tmp_path, context_files=context_files)
+        data_dir, docs_dir = tmp_path / "data", tmp_path / "docs" / "data"
+        ok = run_network_outages_lane(data_dir, docs_dir, months_back=1, today=date(2026, 10, 31))
+        assert ok.status == STATUS_OK and ok.month == "2026-08"
+        late = run_network_outages_lane(data_dir, docs_dir, months_back=1, today=date(2026, 11, 2))
+        assert late.month == "2026-08"
+        assert late.status == STATUS_DEGRADED
+        assert "ends 2026-08, 3 months behind 2026-11" in late.error
+
+    def test_error_results_are_left_alone(self):
+        res = no.NetworkOutagesResult(status=STATUS_ERROR, month=None, error="x")
+        assert no._apply_month_age(res, date(2027, 1, 1)).status == STATUS_ERROR

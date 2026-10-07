@@ -1110,6 +1110,39 @@ def _needs_fetch(
     return False, "same edition, rev unchanged"
 
 
+# An edition counts as overdue once the newest quarter month (Jan/Apr/Jul/Oct)
+# is this many days old and the lane still holds an older edition (audit
+# 2026-10-07, S2-2). AEMO's July 2026 file was dated 31 Jul, so 60 days
+# leaves a month of slack for a late quarter.
+EDITION_GRACE_DAYS = 60
+
+
+def expected_edition(today: date) -> str:
+    """Newest quarterly edition (YYYY-MM) that should be out by ``today``."""
+    for year, month in _recent_quarter_months(today, count=PROBE_QUARTERS_BACK):
+        if (today - date(year, month, 1)).days >= EDITION_GRACE_DAYS:
+            return f"{year}-{month:02d}"
+    year, month = _recent_quarter_months(today, count=PROBE_QUARTERS_BACK)[-1]
+    return f"{year}-{month:02d}"
+
+
+def _apply_edition_age(result: GenInfoResult, today: date) -> GenInfoResult:
+    """Degrade a result whose edition is older than :func:`expected_edition`.
+
+    The lane used to report ``ok`` indefinitely on an old edition ("same
+    edition, source unchanged") when AEMO's new file was named differently or
+    the probe missed it.
+    """
+    if result.status == STATUS_ERROR or not result.edition:
+        return result
+    expected = expected_edition(today)
+    if result.edition < expected:
+        overdue = f"GenInfo edition {result.edition} older than expected {expected}"
+        result.status = STATUS_DEGRADED
+        result.error = f"{result.error}; {overdue}" if result.error else overdue
+    return result
+
+
 def run_geninfo_lane(
     data_dir: str | Path,
     docs_data_dir: str | Path,
@@ -1123,9 +1156,24 @@ def run_geninfo_lane(
     Never raises on an AEMO-side failure: the result carries the lane status
     (``ok`` / ``degraded`` with the last-known-good snapshot retained) so the
     daily pipeline records it in the run manifest and the continuity guard can
-    refuse a publish that would erase populated blocks.
+    refuse a publish that would erase populated blocks. A result whose edition
+    is older than :func:`expected_edition` is degraded.
     """
     today = today or date.today()
+    result = _run_geninfo_lane(
+        data_dir, docs_data_dir, force=force, today=today, bootstrap=bootstrap,
+    )
+    return _apply_edition_age(result, today)
+
+
+def _run_geninfo_lane(
+    data_dir: str | Path,
+    docs_data_dir: str | Path,
+    *,
+    force: bool,
+    today: date,
+    bootstrap: bool,
+) -> GenInfoResult:
     prev_df, meta = load_snapshot(data_dir)
 
     try:
