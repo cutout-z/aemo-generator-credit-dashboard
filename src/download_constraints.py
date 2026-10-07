@@ -6,10 +6,17 @@ showing which constraints most frequently curtail each generator.
 
 from __future__ import annotations
 
+import io
 import logging
+import re
+import time
+import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pandas as pd
+import requests
+from nemosis import downloader as nemosis_downloader
 from nemosis import dynamic_data_compiler
 from nemosis.custom_errors import NoDataToReturn
 
@@ -40,7 +47,7 @@ def fetch_binding_constraints_month(
 
     logger.info(f"Fetching DISPATCHCONSTRAINT for {year}-{month:02d}...")
     try:
-        df = dynamic_data_compiler(
+        df = _compile(
             start_time=start_time,
             end_time=end_time,
             table_name="DISPATCHCONSTRAINT",
@@ -75,6 +82,60 @@ def fetch_binding_constraints_month(
     return df
 
 
+
+
+# nemweb intermittently answers a run of archive requests with something that
+# is not a zip. NEMOSIS logs each such file as "not downloaded" and compiles
+# what it has, so the 2026-10-06/07 constraints runs got
+# SPDCONNECTIONPOINTCONSTRAINT tables ending 2018-11 and 2022-08 while a fast
+# burst of the same requests a minute later all succeeded. The constraint
+# tables are therefore downloaded with retries: a 404 is retried once (these
+# tables have no archive before 2015, and the run asks for months up to 2030,
+# so most 404s are real), anything else up to three times with backoff.
+DOWNLOAD_RETRY_DELAYS = (5, 20, 60)
+_sleep = time.sleep
+_FILE_MONTH = re.compile(r"(20\d{2})(\d{2})010000")
+
+
+def _download_unzip_csv_with_retry(url: str, down_load_to: str) -> None:
+    """nemosis.downloader.download_unzip_csv, retried when nemweb sends no zip."""
+    url = url.replace("#", "%23")
+    m = _FILE_MONTH.search(url)
+    future = bool(m) and (int(m.group(1)), int(m.group(2))) > (
+        pd.Timestamp.now().year, pd.Timestamp.now().month)
+    last = None
+    for attempt in range(len(DOWNLOAD_RETRY_DELAYS) + 1):
+        try:
+            r = requests.get(url, headers=nemosis_downloader.USR_AGENT_HEADER, timeout=300)
+            if r.status_code == 200 and r.content[:2] == b"PK":
+                zipfile.ZipFile(io.BytesIO(r.content)).extractall(down_load_to)
+                if attempt:
+                    logger.info(f"Downloaded {url.rsplit('/', 1)[-1]} on retry {attempt}")
+                return
+            last = f"HTTP {r.status_code}, {r.headers.get('content-type', '?')}"
+            not_found = r.status_code == 404
+        except (requests.RequestException, zipfile.BadZipFile) as e:
+            last, not_found = f"{type(e).__name__}: {e}", False
+        if future or attempt >= len(DOWNLOAD_RETRY_DELAYS) or (not_found and attempt >= 1):
+            break
+        _sleep(DOWNLOAD_RETRY_DELAYS[attempt])
+    raise zipfile.BadZipFile(f"{url.rsplit('/', 1)[-1]}: {last}")
+
+
+@contextmanager
+def _patient_downloads():
+    """Route NEMOSIS's archive downloads through the retrying downloader."""
+    original = nemosis_downloader.download_unzip_csv
+    nemosis_downloader.download_unzip_csv = _download_unzip_csv_with_retry
+    try:
+        yield
+    finally:
+        nemosis_downloader.download_unzip_csv = original
+
+
+def _compile(**kwargs) -> pd.DataFrame:
+    with _patient_downloads():
+        return dynamic_data_compiler(**kwargs)
 
 # A NEMOSIS compile that lost its later monthly files (nemweb throttles long
 # runs of requests; each failed file is only a warning) still returns rows,
@@ -115,7 +176,7 @@ def fetch_gencondata(cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
 
     logger.info("Fetching GENCONDATA...")
     try:
-        df = dynamic_data_compiler(
+        df = _compile(
             start_time="2020/01/01 00:00:00",
             end_time="2030/01/01 00:00:00",
             table_name="GENCONDATA",
@@ -201,7 +262,7 @@ def fetch_spdconnectionpointconstraint(
 
     logger.info("Fetching SPDCONNECTIONPOINTCONSTRAINT...")
     try:
-        df = dynamic_data_compiler(
+        df = _compile(
             start_time="2020/01/01 00:00:00",
             end_time="2030/01/01 00:00:00",
             table_name="SPDCONNECTIONPOINTCONSTRAINT",
