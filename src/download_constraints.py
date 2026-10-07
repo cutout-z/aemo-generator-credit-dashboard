@@ -12,6 +12,7 @@ import re
 import time
 import zipfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -24,77 +25,44 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+# GENCONDATA and SPDCONNECTIONPOINTCONSTRAINT change every month (each MMSDM
+# archive carries that month's new constraints and versions). Their caches
+# used to be reused forever, so constraints and connection points AEMO added
+# after the first download were never seen (audit 2026-10-07, S2-5). The
+# constraints lane re-pulls a cache older than this; it runs monthly, so in
+# practice every run refreshes. NEMOSIS keeps the per-month raw files, so a
+# refresh only downloads the archive months it does not already hold.
+REFERENCE_MAX_AGE_DAYS = 25
 
-def fetch_binding_constraints_month(
-    year: int,
-    month: int,
-    cache_dir: str,
-    rebuild: bool = False,
-) -> pd.DataFrame:
-    """Download DISPATCHCONSTRAINT for a single month, filtered to binding only.
-
-    Returns DataFrame with columns: SETTLEMENTDATE, CONSTRAINTID, MARGINALVALUE
-    Pre-filtered to MARGINALVALUE > 0 (binding constraints) to reduce volume.
-    """
-    nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
-    Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
-
-    start_time = f"{year}/{month:02d}/01 00:00:00"
-    if month == 12:
-        end_time = f"{year + 1}/01/01 00:00:00"
-    else:
-        end_time = f"{year}/{month + 1:02d}/01 00:00:00"
-
-    logger.info(f"Fetching DISPATCHCONSTRAINT for {year}-{month:02d}...")
-    try:
-        df = _compile(
-            start_time=start_time,
-            end_time=end_time,
-            table_name="DISPATCHCONSTRAINT",
-            raw_data_location=nemosis_cache,
-            select_columns=[
-                "SETTLEMENTDATE", "CONSTRAINTID", "MARGINALVALUE", "INTERVENTION",
-            ],
-            fformat="parquet",
-            rebuild=rebuild,
-        )
-    except (NoDataToReturn, Exception) as e:
-        logger.warning(f"No DISPATCHCONSTRAINT for {year}-{month:02d}: {e}")
-        return pd.DataFrame()
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    # Filter to non-intervention, binding constraints only
-    df["INTERVENTION"] = pd.to_numeric(df["INTERVENTION"], errors="coerce")
-    df = df[df["INTERVENTION"] == 0].copy()
-    df.drop(columns=["INTERVENTION"], inplace=True)
-
-    df["MARGINALVALUE"] = pd.to_numeric(df["MARGINALVALUE"], errors="coerce")
-    df = df[df["MARGINALVALUE"].abs() > 0].copy()
-
-    df["SETTLEMENTDATE"] = pd.to_datetime(df["SETTLEMENTDATE"])
-
-    logger.info(
-        f"DISPATCHCONSTRAINT {year}-{month:02d}: {len(df):,} binding rows, "
-        f"{df['CONSTRAINTID'].nunique()} unique constraints"
-    )
-    return df
-
-
-
+# A pull, or a cache, whose newest EFFECTIVEDATE is this far behind today is
+# missing monthly files: NEMOSIS logs a failed archive as a warning and
+# compiles the rest. On 2026-10-06 the NAS cached a SPDCONNECTIONPOINTCONSTRAINT
+# table ending 2018-11-30, and March 2026 mapped 64 of its 628 binding
+# constraints. Such a table is never cached or used.
+REFERENCE_MAX_LAG_DAYS = 183
 
 # nemweb intermittently answers a run of archive requests with something that
-# is not a zip. NEMOSIS logs each such file as "not downloaded" and compiles
-# what it has, so the 2026-10-06/07 constraints runs got
-# SPDCONNECTIONPOINTCONSTRAINT tables ending 2018-11 and 2022-08 while a fast
-# burst of the same requests a minute later all succeeded. The constraint
-# tables are therefore downloaded with retries: a 404 is retried once (these
-# tables have no archive before 2015, and the run asks for months up to 2030,
-# so most 404s are real), anything else up to three times with backoff.
+# is not a zip; a burst of the same requests minutes later succeeds. Archive
+# downloads for these tables retry: a 404 once (most are real: no archive
+# before 2015, months to 2030 are requested), anything else up to three times.
 DOWNLOAD_RETRY_DELAYS = (5, 20, 60)
 _sleep = time.sleep
 _FILE_MONTH = re.compile(r"(20\d{2})(\d{2})010000")
+
+
+def _stale_reason(df: pd.DataFrame, table: str, today=None) -> str | None:
+    """Why ``df`` cannot be a complete copy of ``table`` (None when it can)."""
+    if df is None or df.empty or "EFFECTIVEDATE" not in df.columns:
+        return f"{table}: no rows"
+    newest = pd.to_datetime(df["EFFECTIVEDATE"]).max()
+    today = pd.Timestamp(today or pd.Timestamp.now())
+    if today.tzinfo is not None:
+        today = today.tz_convert(None)
+    cutoff = today.normalize() - pd.Timedelta(days=REFERENCE_MAX_LAG_DAYS)
+    if pd.isna(newest) or newest < cutoff:
+        return (f"{table}: newest EFFECTIVEDATE {newest:%Y-%m-%d} is more than "
+                f"{REFERENCE_MAX_LAG_DAYS} days old; monthly files are missing")
+    return None
 
 
 def _download_unzip_csv_with_retry(url: str, down_load_to: str) -> None:
@@ -137,45 +105,165 @@ def _compile(**kwargs) -> pd.DataFrame:
     with _patient_downloads():
         return dynamic_data_compiler(**kwargs)
 
-# A NEMOSIS compile that lost its later monthly files (nemweb throttles long
-# runs of requests; each failed file is only a warning) still returns rows,
-# just old ones: on 2026-10-06 the NAS cached a SPDCONNECTIONPOINTCONSTRAINT
-# table whose newest EFFECTIVEDATE was 2018-11-30, so 564 of March 2026's 628
-# binding constraints mapped to no connection point. Both reference tables
-# change every month, so data this far behind today means files are missing.
-REFERENCE_MAX_AGE_DAYS = 183
+
+GENCONDATA_CACHE = "gencondata.feather"
+# All versions are kept (audit 2026-10, L8), so the cache has a new name: a
+# spdcp_constraint.feather written by the old latest-pair dedupe is not
+# read as if it carried version history.
+SPDCP_CACHE = "spdcp_constraint_versions.feather"
 
 
-def _stale_reason(df: pd.DataFrame, table: str, today=None) -> str | None:
-    """Why ``df`` cannot be a complete copy of ``table`` (None when it can)."""
-    if df is None or df.empty or "EFFECTIVEDATE" not in df.columns:
-        return f"{table}: no rows"
-    newest = pd.to_datetime(df["EFFECTIVEDATE"]).max()
-    cutoff = pd.Timestamp(today or pd.Timestamp.now()).normalize() - pd.Timedelta(days=REFERENCE_MAX_AGE_DAYS)
-    if pd.isna(newest) or newest < cutoff:
-        return (f"{table}: newest EFFECTIVEDATE {newest:%Y-%m-%d} is more than "
-                f"{REFERENCE_MAX_AGE_DAYS} days old; monthly files are missing")
-    return None
+def reference_cache_date(path: str | Path) -> str | None:
+    """UTC date (YYYY-MM-DD) a reference cache file was last written, or None."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    return datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d")
 
-def fetch_gencondata(cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
-    """Download GENCONDATA (constraint definitions with descriptions).
 
-    This is a slowly-changing reference table. Cache as feather.
+def _cache_age_days(path: Path, now: datetime | None = None) -> float:
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    written = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    return (now - written).total_seconds() / 86400
+
+
+def _reference_table(
+    cache_path: Path,
+    label: str,
+    compile_fn,
+    *,
+    rebuild: bool,
+    max_age_days: float | None,
+    errors: list[str] | None,
+    now: datetime | None = None,
+) -> pd.DataFrame:
+    """Cached reference table, re-pulled when missing, forced or older than ``max_age_days``.
+
+    ``compile_fn()`` returns the processed frame (writing nothing). A failed or
+    empty pull is never silent: the exception text goes into ``errors`` (the
+    constraints lane's manifest error), and a stale cache, when one exists, is
+    still used so the run keeps its mapping.
     """
-    cache_path = Path(cache_dir) / "gencondata.feather"
-    if cache_path.exists() and not rebuild:
-        cached = pd.read_feather(cache_path)
-        reason = _stale_reason(cached, "cached GENCONDATA")
-        if reason is None:
-            logger.info("Loading cached GENCONDATA")
-            return cached
-        logger.warning(f"{reason}; fetching it again")
+    cached = cache_path.exists()
+    stale = bool(cached and max_age_days is not None and _cache_age_days(cache_path, now) > max_age_days)
+    incomplete = None
+    if cached and not rebuild and not stale:
+        frame = pd.read_feather(cache_path)
+        incomplete = _stale_reason(frame, f"cached {label}", today=now)
+        if incomplete is None:
+            logger.info(f"Loading cached {label}")
+            return frame
+        logger.warning(f"{incomplete}; fetching it again")
 
+    reason = ("forced" if rebuild and cached else "cache incomplete" if incomplete
+              else "cache older than %s days" % max_age_days if stale else "no cache")
+    logger.info(f"Fetching {label} ({reason})...")
+    try:
+        df = compile_fn()
+        if df is None or df.empty:
+            raise NoDataToReturn(f"{label} pull returned no rows")
+        short = _stale_reason(df, f"{label} pull", today=now)
+        if short:
+            raise NoDataToReturn(short)
+    except Exception as e:  # noqa: BLE001 — recorded, never swallowed
+        msg = f"{label} fetch failed: {type(e).__name__}: {e}"
+        logger.warning(msg)
+        fallback = pd.DataFrame()
+        if cached:
+            fallback = pd.read_feather(cache_path)
+            if _stale_reason(fallback, label, today=now):
+                msg += " (the cache is incomplete too, so no mapping is used)"
+                fallback = pd.DataFrame()
+            else:
+                msg += f" (using the cache written {reference_cache_date(cache_path)})"
+        if errors is not None:
+            errors.append(msg)
+        return fallback
+    df = df.reset_index(drop=True)
+    df.to_feather(cache_path)
+    return df
+
+
+def fetch_binding_constraints_month(
+    year: int,
+    month: int,
+    cache_dir: str,
+    rebuild: bool = False,
+) -> pd.DataFrame:
+    """Download DISPATCHCONSTRAINT for a single month, filtered to binding only.
+
+    Returns DataFrame with columns: SETTLEMENTDATE, CONSTRAINTID, MARGINALVALUE
+    Pre-filtered to MARGINALVALUE > 0 (binding constraints) to reduce volume.
+
+    NoDataToReturn (no archive for the month: unpublished, or NEMOSIS could not
+    download it) is raised to the caller, which decides whether that month
+    should have been published. Every other exception also propagates, so the
+    caller records it in the lane error (audit 2026-10-07, S2-4) instead of a
+    failed month reading as a quiet empty one.
+    """
     nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
     Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
 
-    logger.info("Fetching GENCONDATA...")
-    try:
+    start_time = f"{year}/{month:02d}/01 00:00:00"
+    if month == 12:
+        end_time = f"{year + 1}/01/01 00:00:00"
+    else:
+        end_time = f"{year}/{month + 1:02d}/01 00:00:00"
+
+    logger.info(f"Fetching DISPATCHCONSTRAINT for {year}-{month:02d}...")
+    df = _compile(
+        start_time=start_time,
+        end_time=end_time,
+        table_name="DISPATCHCONSTRAINT",
+        raw_data_location=nemosis_cache,
+        select_columns=[
+            "SETTLEMENTDATE", "CONSTRAINTID", "MARGINALVALUE", "INTERVENTION",
+        ],
+        fformat="parquet",
+        rebuild=rebuild,
+    )
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Filter to non-intervention, binding constraints only
+    df["INTERVENTION"] = pd.to_numeric(df["INTERVENTION"], errors="coerce")
+    df = df[df["INTERVENTION"] == 0].copy()
+    df.drop(columns=["INTERVENTION"], inplace=True)
+
+    df["MARGINALVALUE"] = pd.to_numeric(df["MARGINALVALUE"], errors="coerce")
+    df = df[df["MARGINALVALUE"].abs() > 0].copy()
+
+    df["SETTLEMENTDATE"] = pd.to_datetime(df["SETTLEMENTDATE"])
+
+    logger.info(
+        f"DISPATCHCONSTRAINT {year}-{month:02d}: {len(df):,} binding rows, "
+        f"{df['CONSTRAINTID'].nunique()} unique constraints"
+    )
+    return df
+
+
+def fetch_gencondata(
+    cache_dir: str,
+    rebuild: bool = False,
+    *,
+    max_age_days: float | None = None,
+    errors: list[str] | None = None,
+    now: datetime | None = None,
+) -> pd.DataFrame:
+    """GENCONDATA (constraint definitions with descriptions), latest version per constraint.
+
+    Cached as feather. ``max_age_days`` re-pulls an older cache (the
+    constraints lane passes REFERENCE_MAX_AGE_DAYS); a failed pull is
+    appended to ``errors`` and falls back to the cache when there is one.
+    """
+    cache_path = Path(cache_dir) / GENCONDATA_CACHE
+    nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
+
+    def compile_fn() -> pd.DataFrame:
+        Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
         df = _compile(
             start_time="2020/01/01 00:00:00",
             end_time="2030/01/01 00:00:00",
@@ -188,26 +276,20 @@ def fetch_gencondata(cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
             fformat="parquet",
             rebuild=rebuild,
         )
-    except (NoDataToReturn, Exception) as e:
-        logger.warning(f"Failed to fetch GENCONDATA: {e}")
-        return pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        # Keep latest version per constraint
+        df["EFFECTIVEDATE"] = pd.to_datetime(df["EFFECTIVEDATE"])
+        df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
+        df = df.sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO"])
+        df = df.drop_duplicates(subset=["GENCONID"], keep="last")
+        logger.info(f"GENCONDATA: {len(df)} constraint definitions")
+        return df
 
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    # Keep latest version per constraint
-    df["EFFECTIVEDATE"] = pd.to_datetime(df["EFFECTIVEDATE"])
-    df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
-    df = df.sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO"])
-    df = df.drop_duplicates(subset=["GENCONID"], keep="last")
-
-    reason = _stale_reason(df, "GENCONDATA")
-    if reason:
-        logger.error(f"{reason}; not cached or used")
-        return pd.DataFrame()
-    logger.info(f"GENCONDATA: {len(df)} constraint definitions")
-    df.to_feather(cache_path)
-    return df
+    return _reference_table(
+        cache_path, "GENCONDATA", compile_fn,
+        rebuild=rebuild, max_age_days=max_age_days, errors=errors, now=now,
+    )
 
 
 def spdcp_mapping_asof(spdcp: pd.DataFrame, asof) -> dict[str, set]:
@@ -239,29 +321,22 @@ def spdcp_mapping_asof(spdcp: pd.DataFrame, asof) -> dict[str, set]:
 
 
 def fetch_spdconnectionpointconstraint(
-    cache_dir: str, rebuild: bool = False,
+    cache_dir: str,
+    rebuild: bool = False,
+    *,
+    max_age_days: float | None = None,
+    errors: list[str] | None = None,
+    now: datetime | None = None,
 ) -> pd.DataFrame:
-    """Download SPDCONNECTIONPOINTCONSTRAINT (constraint-to-connection-point mapping).
+    """SPDCONNECTIONPOINTCONSTRAINT (constraint-to-connection-point mapping), every version.
 
-    This maps connection points to the constraints that affect them.
+    Same cache, refresh and error rules as :func:`fetch_gencondata`.
     """
-    # All versions are kept (audit 2026-10, L8), so the cache has a new name: a
-    # spdcp_constraint.feather written by the old latest-pair dedupe is not
-    # read as if it carried version history.
-    cache_path = Path(cache_dir) / "spdcp_constraint_versions.feather"
-    if cache_path.exists() and not rebuild:
-        cached = pd.read_feather(cache_path)
-        reason = _stale_reason(cached, "cached SPDCONNECTIONPOINTCONSTRAINT")
-        if reason is None:
-            logger.info("Loading cached SPDCONNECTIONPOINTCONSTRAINT")
-            return cached
-        logger.warning(f"{reason}; fetching it again")
-
+    cache_path = Path(cache_dir) / SPDCP_CACHE
     nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
-    Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
 
-    logger.info("Fetching SPDCONNECTIONPOINTCONSTRAINT...")
-    try:
+    def compile_fn() -> pd.DataFrame:
+        Path(nemosis_cache).mkdir(parents=True, exist_ok=True)
         df = _compile(
             start_time="2020/01/01 00:00:00",
             end_time="2030/01/01 00:00:00",
@@ -274,33 +349,29 @@ def fetch_spdconnectionpointconstraint(
             fformat="parquet",
             rebuild=rebuild,
         )
-    except (NoDataToReturn, Exception) as e:
-        logger.warning(f"Failed to fetch SPDCONNECTIONPOINTCONSTRAINT: {e}")
-        return pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-    if df is None or df.empty:
-        return pd.DataFrame()
+        # Filter to ENERGY bid type (most relevant for generation)
+        df = df[df["BIDTYPE"].str.upper() == "ENERGY"].copy()
 
-    # Filter to ENERGY bid type (most relevant for generation)
-    df = df[df["BIDTYPE"].str.upper() == "ENERGY"].copy()
+        # Keep EVERY version: which connection points a constraint covers is
+        # resolved per month (spdcp_mapping_asof). The old dedupe kept the latest
+        # row per (connection point, constraint) pair, so a connection point that a
+        # later version dropped stayed mapped to that constraint forever.
+        df["EFFECTIVEDATE"] = pd.to_datetime(df["EFFECTIVEDATE"])
+        df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
+        df = df.drop_duplicates(
+            subset=["CONNECTIONPOINTID", "GENCONID", "EFFECTIVEDATE", "VERSIONNO"], keep="last",
+        ).sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO", "CONNECTIONPOINTID"])
 
-    # Keep EVERY version: which connection points a constraint covers is
-    # resolved per month (spdcp_mapping_asof). The old dedupe kept the latest
-    # row per (connection point, constraint) pair, so a connection point that a
-    # later version dropped stayed mapped to that constraint forever.
-    df["EFFECTIVEDATE"] = pd.to_datetime(df["EFFECTIVEDATE"])
-    df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
-    df = df.drop_duplicates(
-        subset=["CONNECTIONPOINTID", "GENCONID", "EFFECTIVEDATE", "VERSIONNO"], keep="last",
-    ).sort_values(["GENCONID", "EFFECTIVEDATE", "VERSIONNO", "CONNECTIONPOINTID"])
+        logger.info(
+            f"SPDCONNECTIONPOINTCONSTRAINT: {len(df)} mappings, "
+            f"{df['CONNECTIONPOINTID'].nunique()} connection points"
+        )
+        return df
 
-    reason = _stale_reason(df, "SPDCONNECTIONPOINTCONSTRAINT")
-    if reason:
-        logger.error(f"{reason}; not cached or used")
-        return pd.DataFrame()
-    logger.info(
-        f"SPDCONNECTIONPOINTCONSTRAINT: {len(df)} mappings, "
-        f"{df['CONNECTIONPOINTID'].nunique()} connection points"
+    return _reference_table(
+        cache_path, "SPDCONNECTIONPOINTCONSTRAINT", compile_fn,
+        rebuild=rebuild, max_age_days=max_age_days, errors=errors, now=now,
     )
-    df.to_feather(cache_path)
-    return df

@@ -55,3 +55,12 @@ def test_a_complete_cache_is_used_without_fetching(tmp_path, monkeypatch):
     fresh.to_feather(tmp_path / "gencondata.feather")
     monkeypatch.setattr(dc, "dynamic_data_compiler", lambda **k: (_ for _ in ()).throw(AssertionError("fetched")))
     assert len(dc.fetch_gencondata(str(tmp_path))) == 2
+
+
+def test_a_failed_refresh_does_not_fall_back_to_a_truncated_cache(tmp_path, monkeypatch):
+    stale = _spdcp("2018-11-30"); stale["EFFECTIVEDATE"] = pd.to_datetime(stale["EFFECTIVEDATE"])
+    stale.to_feather(tmp_path / "spdcp_constraint_versions.feather")
+    monkeypatch.setattr(dc, "dynamic_data_compiler", lambda **k: (_ for _ in ()).throw(RuntimeError("nemweb down")))
+    errors = []
+    assert dc.fetch_spdconnectionpointconstraint(str(tmp_path), errors=errors).empty
+    assert "nemweb down" in errors[0] and "incomplete too" in errors[0]

@@ -94,6 +94,10 @@ class LaneRun:
     months_with_data: int = 0
     error: str | None = None
     note: str | None = None
+    # Source-specific as-of facts (cache dates, publisher Last-Modified, ...).
+    # Written to the manifest record only when set, so existing records keep
+    # their shape.
+    details: dict | None = None
 
     def set_ok(self) -> None:
         self.status = STATUS_OK
@@ -123,7 +127,7 @@ class LaneRun:
         return None
 
     def manifest_record(self) -> dict:
-        return {
+        record = {
             "status": self.status,
             "retained_last_good": bool(self.retained),
             "attempted_months": int(self.attempted_months),
@@ -132,6 +136,9 @@ class LaneRun:
             "error": self.error,
             "note": self.note,
         }
+        if self.details:
+            record["details"] = dict(self.details)
+        return record
 
 
 def read_last_good(cache_path: str | Path) -> pd.DataFrame:

@@ -23,12 +23,12 @@ per-lane `PIPELINE_ARGS`:
 | Daily market data | `--months-back 2 --refresh-mlf --skip-constraints` | Reprocess recent SCADA, dispatch prices, dispatch load, FCAS, and pick up small MLF tracker changes. |
 | Weekly reference data | `--months-back 2 --refresh-metadata --refresh-mlf --skip-constraints` | Refresh AEMO registration/metadata and MLF tracker without a full 5-year rebuild. |
 | Annual MLF lane | `--skip-scada --skip-constraints --refresh-mlf` | Force a lightweight MLF refresh around annual final MLF publication without touching SCADA or constraints. |
-| Monthly constraints (`env.constraints.example`) | `--skip-scada --skip-fcas-factors --skip-offer-factors --skip-geninfo --skip-network-outages --skip-aer-qa --months-back 2` | Refresh binding-constraint hours. Runs only the constraint step on top of the cached history, and catches up every month after the newest cached one (the first run after the 2026-03 stop fetches 2026-04 onward). |
+| Monthly constraints (`env.constraints.example`) | `--skip-scada --skip-fcas-factors --skip-offer-factors --skip-geninfo --skip-network-outages --skip-aer-qa --months-back 2` | Refresh binding-constraint hours. Runs only the constraint step on top of the cached history: fetches every month after the newest cached one, re-pulls GENCONDATA / SPDCONNECTIONPOINTCONSTRAINT when their cache is older than 25 days, and **exits non-zero** when the constraints source is not ok (the `run_status.json` it wrote on the NAS disk says why; nothing is committed). The first run (2026-10-06) could not load those two tables, exited 0, and left the published constraint data ending 2026-03. |
 
 The daily and weekly lanes skip constraints on purpose: a missing
 `data/gencondata.feather` makes the constraint step pull GENCONDATA history
-from 2020, which is too heavy for a daily run. Constraint data is therefore
-refreshed by its own monthly lane, and every run's `run_status.json` carries a
+from 2020, which is too heavy for a daily run. Constraint data therefore
+comes only from its own monthly lane, and every run's `run_status.json` carries a
 `constraints` source with its as-of month. It turns **degraded** (an AEMO
 ALERT through the staleness check) once constraint data trails the newest
 generation month by more than two months, so a stopped constraints lane is

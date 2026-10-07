@@ -528,6 +528,13 @@ fetch('data/market_daily.json').then(r => r.ok ? r.json() : null).then(d => {
     marketDaily = d;
     if (currentData) renderCharts(currentData);
 }).catch(() => {});
+// Newest month of the constraint dataset, from the run manifest (S1-1 lag pill).
+let constraintsAsof = '';
+fetch('data/run_status.json').then(r => r.ok ? r.json() : null).then(m => {
+    const c = m && m.sources && m.sources.constraints;
+    constraintsAsof = (c && c.asof_month) || '';
+    if (currentData && constraintsAsof) renderCharts(currentData);
+}).catch(() => {});
 
 // ─── Chart conventions (BRIEF step 4) ──────────────────────────────────
 // Every chart goes through ChartTokens.layout() (docs/assets/js/chart-tokens.js): token colours
@@ -1288,6 +1295,19 @@ function constraintWindowLabel(data) {
     return '';
 }
 
+// Audit 2026-10-07 (S1-1): constraint data can trail generation by months (it
+// ended Mar 2026 while generation ran to Aug 2026). `asof` is the newest month
+// of the whole constraint dataset (run_status.json sources.constraints.asof_month);
+// a unit's own heatmap months stop at its last binding month, so they cannot
+// say how current the data is. Returns `asof` when it is more than 2 months
+// before the unit's newest generation month, else ''.
+function constraintLagMonth(asof, data) {
+    const gm = data && data.monthly && data.monthly.months;
+    if (!asof || !/^\d{4}-\d{2}$/.test(asof) || !gm || !gm.length) return '';
+    const idx = l => parseInt(l.slice(0, 4), 10) * 12 + parseInt(l.slice(5, 7), 10) - 1;
+    return idx(gm[gm.length - 1]) - idx(asof) > 2 ? asof : '';
+}
+
 // S3-03: own-unit constraint matching requires explicit member DUIDs. AEMO
 // constraint IDs are uppercase; station docs carry a `duids` member list and
 // their `duid` is null — an empty/absent DUID must never match (the empty
@@ -1914,8 +1934,14 @@ function renderCharts(data) {
             } else {
                 const top = tc[0];
                 const desc = (top.description || '').replace(/^[A-Za-z]+=\s*/, '');
-                html = '<b>Most binding system constraint:</b> ' + desc + ' (' + top.total_hours.toFixed(1) +
+                html = '<b>Most binding system constraint (through ' + (constraintWindowLabel(data) || 'reported window') + '):</b> ' +
+                    desc + ' (' + top.total_hours.toFixed(1) +
                     'h bound) \u2014 network context rather than a unit-specific limit.';
+            }
+            const lagMonth = constraintLagMonth(constraintsAsof, data);
+            if (lagMonth) {
+                html = '<span class="pill pill-warn mr-1.5 align-middle" data-constraints-lag><span class="badge-dot"></span>' +
+                    'Constraint data through ' + fmtMonthLong(lagMonth) + '</span>' + html;
             }
             summaryBox.innerHTML = html;
             summaryBox.style.display = 'block';

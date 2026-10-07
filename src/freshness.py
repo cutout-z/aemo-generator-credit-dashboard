@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 # before the guard trips.
 MONTHLY_MAX_LAG_DAYS = 75
 # Daily aggregates are rebuilt from the same monthly archive, so they lag the
-# same way (latest daily date ≈ end of the newest published month).
-DAILY_MAX_LAG_DAYS = 60
+# same way (latest daily date = last day of the newest published month) and
+# get the same limit. 60 days left about one day beyond AEMO's worst observed
+# lag (59 days), so a late archive would have failed the run on the daily
+# guard alone (audit 2026-10-07, S3-5).
+DAILY_MAX_LAG_DAYS = MONTHLY_MAX_LAG_DAYS
 
 
 def check_monthly_freshness(
@@ -38,9 +41,9 @@ def check_monthly_freshness(
 ) -> int:
     """Assert monthly aggregates contain a reasonably recent month.
 
-    Raises RuntimeError when the newest month in the data is older than
-    max_lag_days behind (now - 20d), i.e. the pipeline has stopped ingesting
-    new months. Raises ValueError when the frame is empty or has no month col.
+    Raises RuntimeError when the newest month's last day is more than
+    max_lag_days before ``now``, i.e. the pipeline has stopped ingesting new
+    months. Raises ValueError when the frame is empty or has no month col.
     """
     if monthly_aggregates is None or monthly_aggregates.empty or "month" not in monthly_aggregates.columns:
         raise ValueError("Monthly aggregates missing or lack 'month' column — cannot verify freshness")

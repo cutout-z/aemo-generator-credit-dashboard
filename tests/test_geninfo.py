@@ -736,3 +736,22 @@ class TestRunStatusIntegration:
         retained_lane = LaneRun(source="geninfo", block="gen_info", status=STATUS_DEGRADED)
         retained_lane.frame = pd.DataFrame({"duid": ["A1"], "edition": ["2026-07"]})
         assert check_factor_block_continuity(gen_dir, {"geninfo": retained_lane}) == []
+
+
+class TestEditionAge:
+    """Audit 2026-10-07 S2-2: an old edition used to report ok indefinitely."""
+
+    def test_expected_edition_waits_sixty_days_after_the_quarter_month(self):
+        assert geninfo.expected_edition(date(2026, 10, 7)) == "2026-07"
+        assert geninfo.expected_edition(date(2026, 11, 29)) == "2026-07"
+        assert geninfo.expected_edition(date(2026, 11, 30)) == "2026-10"
+        assert geninfo.expected_edition(date(2027, 2, 15)) == "2026-10"
+
+    def test_july_edition_in_december_is_degraded(self, tmp_path, monkeypatch):
+        data_dir, docs_dir = tmp_path / "data", tmp_path / "docs" / "data"
+        _install_fake_source(monkeypatch, tmp_path)
+        assert run_geninfo_lane(data_dir, docs_dir, today=date(2026, 10, 7)).status == STATUS_OK
+        # Same edition, source unchanged, two months after October's was due.
+        result = run_geninfo_lane(data_dir, docs_dir, today=date(2026, 12, 5))
+        assert result.status == STATUS_DEGRADED
+        assert result.error == "GenInfo edition 2026-07 older than expected 2026-10"

@@ -956,6 +956,30 @@ def fetch_context_tables(base: Path, year: int, month: int) -> dict[str, Path]:
     return table_files
 
 
+# The outage snapshot may trail today's month by this many whole months
+# (August data in October is normal: the September archive lands mid to late
+# October). Beyond that the lane is degraded (audit 2026-10-07, S2-2): it
+# used to fall back up to NETWORK_OUTAGE_PROBE_MONTHS_BACK months and still
+# report ok.
+MAX_LAG_MONTHS = 2
+
+
+def _apply_month_age(result: NetworkOutagesResult, today: date) -> NetworkOutagesResult:
+    """Degrade a result whose as-of month is more than MAX_LAG_MONTHS behind today."""
+    if result.status == STATUS_ERROR or not result.month:
+        return result
+    year, month = int(result.month[:4]), int(result.month[5:7])
+    lag = (today.year * 12 + today.month) - (year * 12 + month)
+    if lag > MAX_LAG_MONTHS:
+        overdue = (
+            f"network outage data ends {result.month}, {lag} months behind "
+            f"{today.year:04d}-{today.month:02d}"
+        )
+        result.status = STATUS_DEGRADED
+        result.error = f"{result.error}; {overdue}" if result.error else overdue
+    return result
+
+
 def run_network_outages_lane(
     data_dir: str | Path,
     docs_data_dir: str | Path,
@@ -970,9 +994,26 @@ def run_network_outages_lane(
     Never raises on an AEMO-side failure: the result carries the lane status
     (``ok`` / ``degraded`` with the last-known-good snapshot retained) so the
     daily pipeline records it in the run manifest and a failed fetch never
-    erases published outage blocks.
+    erases published outage blocks. A result whose month is more than
+    MAX_LAG_MONTHS behind today is degraded.
     """
     today = today or date.today()
+    result = _run_network_outages_lane(
+        data_dir, docs_data_dir, months_back=months_back, backfill=backfill,
+        force=force, today=today,
+    )
+    return _apply_month_age(result, today)
+
+
+def _run_network_outages_lane(
+    data_dir: str | Path,
+    docs_data_dir: str | Path,
+    *,
+    months_back: int,
+    backfill: int,
+    force: bool,
+    today: date,
+) -> NetworkOutagesResult:
     data_dir = Path(data_dir)
     base = snapshot_dir(data_dir)
     prev_facts, prev_meta = load_snapshot(data_dir)

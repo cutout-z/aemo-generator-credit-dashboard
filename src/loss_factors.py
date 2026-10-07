@@ -159,6 +159,7 @@ def fetch_loss_factor_periods(
     cache_dir: str,
     force: bool = False,
     today: datetime | None = None,
+    report: dict | None = None,
 ) -> pd.DataFrame | None:
     """Newest published DUDETAILSUMMARY factor periods (cached).
 
@@ -167,8 +168,16 @@ def fetch_loss_factor_periods(
     download falls back to the cache. Returns None when neither is
     available: revenue then falls back to the tracker's per-FY factor, and
     the rows say so in their provenance columns.
+
+    ``report`` (optional dict) is filled for the run manifest (audit
+    2026-10-07, S2-6): ``archive_month`` used, ``source`` (``download``,
+    ``cache``, ``fallback_cache`` or ``none``) and ``errors`` (probe
+    failures other than 404). ``fallback_cache`` means a download failed or
+    the cache is more than one archive behind and nothing newer was reachable.
     """
     today = today or datetime.now()
+    report = report if report is not None else {}
+    report.setdefault("errors", [])
     cache_path = Path(cache_dir) / LOSS_FACTOR_CACHE
     cached = None
     cached_month = None
@@ -186,6 +195,7 @@ def fetch_loss_factor_periods(
     recent = cached is not None and not force and bool(cached_month) and cached_month >= labels[1]
     if recent:
         if cached_month >= labels[0]:
+            report.update(source="cache", archive_month=cached_month)
             return cached.drop(columns="ARCHIVE_MONTH")
         candidates = candidates[:1]  # only the newest archive could add anything
 
@@ -202,8 +212,10 @@ def fetch_loss_factor_periods(
             periods = parse_dudetailsummary(resp.content)
         except Exception as e:
             logger.warning(f"DUDETAILSUMMARY {year}-{month:02d}: {e}")
+            report["errors"].append(f"{year}-{month:02d}: {type(e).__name__}: {e}")
             continue
         label = f"{year:04d}-{month:02d}"
+        report.update(source="download", archive_month=label)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         periods.assign(ARCHIVE_MONTH=label).to_feather(cache_path)
         logger.info(
@@ -215,7 +227,12 @@ def fetch_loss_factor_periods(
     if cached is not None:
         log = logger.info if recent else logger.warning
         log(f"DUDETAILSUMMARY: no newer archive reachable — using cached {cached_month}")
+        # A recent cache with the newest archive simply not out yet (404) is
+        # the normal state; a failed download or an old cache is a fallback.
+        fell_back = not recent or bool(report["errors"])
+        report.update(source="fallback_cache" if fell_back else "cache", archive_month=cached_month)
         return cached.drop(columns="ARCHIVE_MONTH", errors="ignore")
+    report.update(source="none", archive_month=None)
     logger.warning(
         "DUDETAILSUMMARY unavailable and no cache — revenue falls back to the "
         "tracker's per-FY MLF and DLF 1.0"

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+from nemosis.custom_errors import NoDataToReturn
 
 from . import config
 from .aggregate import (
@@ -17,8 +18,9 @@ from .aggregate import (
     settlement_prices, settles_on_trading_price,
 )
 from .download_constraints import (
+    GENCONDATA_CACHE, REFERENCE_MAX_AGE_DAYS, SPDCP_CACHE,
     fetch_binding_constraints_month, fetch_gencondata,
-    fetch_spdconnectionpointconstraint,
+    fetch_spdconnectionpointconstraint, reference_cache_date,
 )
 from .download_dispatch import fetch_dispatch_price_month, fetch_trading_price_month
 from .download_intermittent import fetch_intermittent_month  # noqa: F401  (S3-01: retained for cache-migration tooling; unused by pipeline)
@@ -64,6 +66,7 @@ from .run_status import (
     write_run_manifest,
     STATUS_DEGRADED,
     STATUS_ERROR,
+    STATUS_OK,
     STATUS_SKIPPED,
 )
 
@@ -151,6 +154,131 @@ def _constraint_months_to_process(
     return sorted(set(tail) | set(catch_up))
 
 
+# A month that ended more than this many days ago should be in the MMSDM
+# monthly archive (AEMO publishes it 12-28 days after month end). Before
+# that, a month with no archive or a partial one is the normal state, not a
+# failure (audit 2026-10-07, S3-2 / S2-4).
+FINISHED_MONTH_GRACE_DAYS = 35
+
+
+def _month_overdue(label: str, today: datetime | None = None,
+                   grace_days: int = FINISHED_MONTH_GRACE_DAYS) -> bool:
+    """True when month ``label`` (YYYY-MM) ended more than ``grace_days`` ago."""
+    today = today or datetime.now()
+    month_end = (pd.Timestamp(label + "-01") + pd.offsets.MonthEnd(0)).to_pydatetime()
+    return (today.replace(tzinfo=None) - month_end).days > grace_days
+
+
+def _run_constraint_step(
+    data_dir: Path,
+    cp_map: dict,
+    *,
+    months_back: int,
+    full_refresh: bool,
+    today: datetime | None = None,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Step 3b: fetch and aggregate binding constraints. Returns (aggregates, errors).
+
+    Nothing here is swallowed any more (audit 2026-10-07, S1-1 / S2-4): a
+    failed GENCONDATA / SPDCONNECTIONPOINTCONSTRAINT pull, a DISPATCHCONSTRAINT
+    month that raised, and a month that ended more than
+    FINISHED_MONTH_GRACE_DAYS ago with no archive each add an error, which
+    makes the constraints lane degraded (and the constraints run exit
+    non-zero). The reference tables are re-pulled once their cache is older
+    than REFERENCE_MAX_AGE_DAYS (S2-5).
+    """
+    constraint_path = data_dir / "constraint_aggregates.feather"
+    errors: list[str] = []
+    all_constraints = pd.DataFrame()
+    try:
+        gencondata = fetch_gencondata(
+            str(data_dir), rebuild=full_refresh,
+            max_age_days=REFERENCE_MAX_AGE_DAYS, errors=errors,
+        )
+        spdcp = fetch_spdconnectionpointconstraint(
+            str(data_dir), rebuild=full_refresh,
+            max_age_days=REFERENCE_MAX_AGE_DAYS, errors=errors,
+        )
+        if gencondata.empty or spdcp.empty:
+            logger.warning("Skipping constraints: GENCONDATA or SPDCP unavailable")
+            errors.append("GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable")
+            return all_constraints, errors
+
+        # Determine months to process for constraints
+        constraint_months = _months_to_process(config.CONSTRAINTS_HISTORY_MONTHS, full_refresh)
+        if not full_refresh:
+            # No existing constraint data: backfill the full history
+            # window. Otherwise reprocess the overlap period AND every
+            # month after the newest cached one (catch-up after skips).
+            cached_latest = None
+            if constraint_path.exists():
+                cached = pd.read_feather(constraint_path, columns=["month"])
+                if not cached.empty:
+                    cached_latest = str(sorted(cached["month"].astype(str).unique())[-1])
+            constraint_months = _constraint_months_to_process(
+                constraint_months, cached_latest, months_back,
+            )
+
+        constraint_rows = []
+        for year, month in constraint_months:
+            label = f"{year}-{month:02d}"
+            try:
+                dc = fetch_binding_constraints_month(
+                    year, month, str(data_dir), rebuild=full_refresh
+                )
+            except NoDataToReturn as e:
+                if _month_overdue(label, today):
+                    logger.warning(f"No DISPATCHCONSTRAINT for finished month {label}: {e}")
+                    errors.append(f"{label}: no DISPATCHCONSTRAINT archive for a finished month ({e})")
+                else:
+                    logger.info(f"No DISPATCHCONSTRAINT for {label} yet (not published)")
+                continue
+            except Exception as e:
+                logger.warning(f"DISPATCHCONSTRAINT fetch failed for {label}: {e}")
+                errors.append(f"{label}: DISPATCHCONSTRAINT {type(e).__name__}: {e}")
+                continue
+            try:
+                if not dc.empty:
+                    mc = aggregate_constraints_month(
+                        dc, spdcp, gencondata, cp_map, year, month
+                    )
+                    if not mc.empty:
+                        constraint_rows.append(mc)
+            except Exception as e:
+                logger.warning(f"Constraint processing failed for {label}: {e}")
+                errors.append(f"{label}: constraint aggregation {type(e).__name__}: {e}")
+
+        if constraint_rows:
+            new_constraints = pd.concat(constraint_rows, ignore_index=True)
+            if constraint_path.exists() and not full_refresh:
+                existing_constraints = pd.read_feather(constraint_path)
+                existing_constraints_before_update = existing_constraints.copy()
+                reprocessed = set(new_constraints["month"].unique())
+                existing_constraints = existing_constraints[
+                    ~existing_constraints["month"].isin(reprocessed)
+                ]
+                all_constraints = pd.concat(
+                    [existing_constraints, new_constraints], ignore_index=True
+                )
+                _assert_protected_months_unchanged(
+                    existing_constraints_before_update,
+                    all_constraints,
+                    reprocessed,
+                    month_col="month",
+                    label="Constraint aggregates",
+                )
+            else:
+                all_constraints = new_constraints
+            all_constraints.to_feather(constraint_path)
+            logger.info(f"Saved {len(all_constraints)} constraint aggregate rows")
+        elif constraint_path.exists():
+            all_constraints = pd.read_feather(constraint_path)
+    except Exception as e:
+        logger.error(f"Constraint aggregation failed: {e}")
+        errors.append(f"constraint aggregation failed: {type(e).__name__}: {e}")
+    return all_constraints, errors
+
+
 def _constraints_or_cached(constraints: pd.DataFrame, cache_path: Path) -> tuple[pd.DataFrame, bool]:
     """The constraint frame to publish: this run's, or the cached aggregates when the run has none.
 
@@ -165,7 +293,7 @@ def _constraints_or_cached(constraints: pd.DataFrame, cache_path: Path) -> tuple
 
 def _constraint_lane(
     constraints: pd.DataFrame, monthly: pd.DataFrame, *, skipped: bool, error: str | None = None,
-    retained: bool = False,
+    retained: bool = False, reference_dir: Path | None = None,
 ) -> LaneRun:
     """Run-manifest record for the binding-constraint data, with a freshness check.
 
@@ -198,7 +326,85 @@ def _constraint_lane(
         )
         lane.status = STATUS_DEGRADED
         lane.error = "; ".join(e for e in (lane.error, lag) if e)
+    if reference_dir is not None:
+        # When GENCONDATA / SPDCONNECTIONPOINTCONSTRAINT were last pulled
+        # (S2-5): the mapping is only as current as these dates.
+        lane.details = {
+            "gencondata_cache_date": reference_cache_date(Path(reference_dir) / GENCONDATA_CACHE),
+            "spdcp_cache_date": reference_cache_date(Path(reference_dir) / SPDCP_CACHE),
+        }
     return lane
+
+
+def _mlf_tracker_lane(report: dict) -> LaneRun:
+    """Run-manifest record for the MLF Tracker summary.csv (audit 2026-10-07, S2-6).
+
+    A failed tracker download used to fall back to the stale cache with only a
+    log line, so revenue could be valued on old loss factors with every check
+    green. As-of is the newest final FY column (draft FY and the tracker's
+    Last-Modified in details); a stale-cache fallback is degraded.
+    """
+    lane = LaneRun(source="mlf_tracker")
+    newest = report.get("newest_fy")
+    lane.frame = pd.DataFrame({"edition": [newest]}) if newest else pd.DataFrame()
+    lane.attempted_months = 1
+    lane.months_with_data = 1 if newest else 0
+    lane.details = {
+        "source": report.get("source"),
+        "last_modified": report.get("last_modified"),
+        "draft_fy": report.get("draft_fy"),
+    }
+    if report.get("source") == "stale_cache":
+        lane.status = STATUS_DEGRADED
+        lane.retained = True
+        lane.error = report.get("error") or "MLF Tracker download failed; stale cache used"
+    elif report.get("source") == "cache":
+        lane.note = "cached tracker summary used (no --refresh-mlf)"
+    return lane
+
+
+def _loss_factor_lane(report: dict) -> LaneRun:
+    """Run-manifest record for DUDETAILSUMMARY loss-factor periods (audit 2026-10-07, S2-6).
+
+    As-of is the archive month the periods came from. Any fallback (a failed
+    download with the cache used, a cache more than one archive behind, or no
+    periods at all, so revenue uses the tracker's per-FY factor) is degraded.
+    """
+    lane = LaneRun(source="loss_factors")
+    month = report.get("archive_month")
+    lane.frame = pd.DataFrame({"edition": [month]}) if month else pd.DataFrame()
+    lane.attempted_months = 1
+    lane.months_with_data = 1 if month else 0
+    lane.details = {"source": report.get("source")}
+    errors = list(report.get("errors") or [])
+    source = report.get("source")
+    if source == "fallback_cache":
+        lane.status = STATUS_DEGRADED
+        lane.retained = True
+        lane.error = "; ".join(errors) or (
+            f"no DUDETAILSUMMARY archive newer than the cached {month} reachable"
+        )
+    elif source in (None, "none"):
+        lane.status = STATUS_DEGRADED
+        lane.error = "; ".join(errors) or (
+            "DUDETAILSUMMARY unavailable and no cache; revenue uses the tracker's per-FY MLF"
+        )
+    return lane
+
+
+def _constraint_run_failure(lane: LaneRun, *, skip_constraints: bool) -> str | None:
+    """Why a run that asked for constraints must exit non-zero, or None.
+
+    Only a run that requested constraints (no --skip-constraints) can fail on
+    them; the daily, reference and mlf lanes all skip constraints, so a
+    degraded constraints source never reddens them.
+    """
+    if skip_constraints or lane is None or lane.status == STATUS_OK:
+        return None
+    return (
+        f"constraints requested but the constraints source is {lane.status}: "
+        f"{lane.error or 'no details'} (recorded in run_status.json)"
+    )
 
 
 # Market spreads come from the same monthly DISPATCHPRICE archive as the
@@ -329,6 +535,7 @@ def _finalize_factor_lane(
     no_rows_note: str,
     cold_start_error: str,
     completeness_cols: tuple[str, ...] | None = None,
+    partial_flag_col: str | None = None,
     today: datetime | None = None,
 ) -> pd.DataFrame:
     """Persist one lane's fresh per-month facts, or retain the last-known-good.
@@ -348,6 +555,9 @@ def _finalize_factor_lane(
     ``today``'s month) that is still partial after the merge — or that was
     only kept from the cache because the fresh fetch was partial — degrades
     the lane instead of reporting ok.
+
+    ``partial_flag_col`` (FCAS lane): the same finished-month check on a
+    source-complete flag, without the merge protection.
     """
     if frames:
         new = pd.concat(frames, ignore_index=True)
@@ -359,14 +569,16 @@ def _finalize_factor_lane(
         )
         lane.frame = merged
         problems = list(errors)
-        if completeness_cols:
+        flag_col = completeness_cols[0] if completeness_cols else partial_flag_col
+        if flag_col:
             partial = _partial_finished_months(
-                merged, sorted(set(new["month"])), completeness_cols[0], today,
+                merged, sorted(set(new["month"])), flag_col, today,
             )
             if partial:
                 problems.append(
                     f"partial source for finished month(s) {', '.join(partial)}"
                 )
+        if completeness_cols:
             if kept:
                 problems.append(
                     "fresh fetch less complete than cache for "
@@ -397,14 +609,20 @@ def _partial_finished_months(
     flag_col: str,
     today: datetime | None = None,
 ) -> list[str]:
-    """Months in ``months`` that have ended yet have no source-complete row."""
+    """Months in ``months`` whose archive is due yet have no source-complete row.
+
+    A month counts once it ended more than FINISHED_MONTH_GRACE_DAYS ago: until
+    AEMO publishes its MMSDM archive (12-28 days after month end) a finished
+    month is a partial stub by construction. Flagging it from day 1 made the
+    offer lane "degraded" for half of every month and buried real alarms
+    (audit 2026-10-07, S3-2).
+    """
     if frame is None or frame.empty or flag_col not in frame.columns:
         return []
-    current = (today or datetime.now()).strftime("%Y-%m")
     out = []
     for m in months:
-        if m >= current:
-            continue  # the running month is partial by construction
+        if not _month_overdue(m, today):
+            continue  # running month, or archive not due yet
         flags = frame.loc[frame["month"] == m, flag_col]
         if flags.empty or not flags.fillna(False).astype(bool).any():
             out.append(m)
@@ -596,6 +814,7 @@ def _run_optional_factor_lanes(
             no_rows_note="source returned no rows (unpublished months?) — "
                          "last-known-good retained",
             cold_start_error="no source rows and no cache to retain (cold start)",
+            partial_flag_col="fcas_source_complete",
         )
     if want_offer:
         offer_lane.attempted_months = attempted
@@ -701,9 +920,11 @@ def main():
 
     # Step 2: MLF history + draft MLFs + connection points (all from MLF Tracker CSV)
     logger.info("=== Step 2: MLF data from MLF Tracker ===")
+    mlf_report: dict = {}
     mlf_history, draft_mlfs, draft_fy_label, cp_map = fetch_mlf_data(
-        str(data_dir), force=(args.full_refresh or args.refresh_mlf)
+        str(data_dir), force=(args.full_refresh or args.refresh_mlf), report=mlf_report,
     )
+    mlf_lane = _mlf_tracker_lane(mlf_report)
     logger.info(f"Loaded {len(mlf_history)} DUID×FY MLF records")
     if draft_mlfs:
         logger.info(f"Loaded {len(draft_mlfs)} draft MLFs for {draft_fy_label}")
@@ -713,13 +934,17 @@ def main():
     # Dated loss factors (mid-year MLF revisions). Optional: without them
     # revenue keeps the tracker's per-FY factor, and each row's
     # revenue_mlf_source says which source was used.
+    loss_report: dict = {}
     try:
         loss_factor_periods = fetch_loss_factor_periods(
-            str(data_dir), force=(args.full_refresh or args.refresh_mlf),
+            str(data_dir), force=(args.full_refresh or args.refresh_mlf), report=loss_report,
         )
     except Exception as e:
         logger.warning(f"Loss-factor periods unavailable: {e}")
         loss_factor_periods = None
+        loss_report["source"] = "none"
+        loss_report.setdefault("errors", []).append(f"{type(e).__name__}: {e}")
+    loss_lane = _loss_factor_lane(loss_report)
 
     generators["CONNECTION_POINT"] = generators["DUID"].map(cp_map).fillna("")
     logger.info(f"Enriched {(generators['CONNECTION_POINT'] != '').sum()} generators with connection points")
@@ -955,74 +1180,11 @@ def main():
             logger.warning("No cached constraint aggregates available")
     elif not args.metadata_only:
         logger.info("=== Step 3b: Binding constraint aggregation ===")
-        try:
-            gencondata = fetch_gencondata(str(data_dir), rebuild=args.full_refresh)
-            spdcp = fetch_spdconnectionpointconstraint(str(data_dir), rebuild=args.full_refresh)
-
-            if not gencondata.empty and not spdcp.empty:
-                # Determine months to process for constraints
-                constraint_months = _months_to_process(
-                    config.CONSTRAINTS_HISTORY_MONTHS, args.full_refresh
-                )
-                if not args.full_refresh:
-                    # No existing constraint data: backfill the full history
-                    # window. Otherwise reprocess the overlap period AND every
-                    # month after the newest cached one (catch-up after skips).
-                    cached_latest = None
-                    if constraint_path.exists():
-                        cached = pd.read_feather(constraint_path, columns=["month"])
-                        if not cached.empty:
-                            cached_latest = str(sorted(cached["month"].astype(str).unique())[-1])
-                    constraint_months = _constraint_months_to_process(
-                        constraint_months, cached_latest, args.months_back,
-                    )
-
-                constraint_rows = []
-                for year, month in constraint_months:
-                    try:
-                        dc = fetch_binding_constraints_month(
-                            year, month, str(data_dir), rebuild=args.full_refresh
-                        )
-                        if not dc.empty:
-                            mc = aggregate_constraints_month(
-                                dc, spdcp, gencondata, cp_map, year, month
-                            )
-                            if not mc.empty:
-                                constraint_rows.append(mc)
-                    except Exception as e:
-                        logger.warning(f"Constraint processing failed for {year}-{month:02d}: {e}")
-
-                if constraint_rows:
-                    new_constraints = pd.concat(constraint_rows, ignore_index=True)
-                    if constraint_path.exists() and not args.full_refresh:
-                        existing_constraints = pd.read_feather(constraint_path)
-                        existing_constraints_before_update = existing_constraints.copy()
-                        reprocessed = set(new_constraints["month"].unique())
-                        existing_constraints = existing_constraints[
-                            ~existing_constraints["month"].isin(reprocessed)
-                        ]
-                        all_constraints = pd.concat(
-                            [existing_constraints, new_constraints], ignore_index=True
-                        )
-                        _assert_protected_months_unchanged(
-                            existing_constraints_before_update,
-                            all_constraints,
-                            reprocessed,
-                            month_col="month",
-                            label="Constraint aggregates",
-                        )
-                    else:
-                        all_constraints = new_constraints
-                    all_constraints.to_feather(constraint_path)
-                    logger.info(f"Saved {len(all_constraints)} constraint aggregate rows")
-                elif constraint_path.exists():
-                    all_constraints = pd.read_feather(constraint_path)
-            else:
-                logger.warning("Skipping constraints: GENCONDATA or SPDCP unavailable")
-                constraint_error = "GENCONDATA or SPDCONNECTIONPOINTCONSTRAINT unavailable"
-        except Exception as e:
-            logger.error(f"Constraint aggregation failed: {e}")
-            constraint_error = f"constraint aggregation failed: {e}"
+        all_constraints, constraint_errors = _run_constraint_step(
+            data_dir, cp_map,
+            months_back=args.months_back, full_refresh=args.full_refresh,
+        )
+        constraint_error = "; ".join(constraint_errors) or None
     all_constraints, constraints_retained = _constraints_or_cached(all_constraints, constraint_path)
     if constraints_retained and not args.skip_constraints:
         logger.warning(f"No constraint data this run; keeping the cached aggregates ({len(all_constraints)} rows)")
@@ -1332,8 +1494,9 @@ def main():
         all_constraints, all_monthly,
         skipped=bool(args.skip_constraints), error=constraint_error,
         retained=constraints_retained and not args.skip_constraints,
+        reference_dir=data_dir,
     )
-    all_lanes = factor_lanes + [market_lane, constraint_lane]
+    all_lanes = factor_lanes + [market_lane, constraint_lane, mlf_lane, loss_lane]
     manifest = build_manifest(
         {lane.source: lane for lane in all_lanes if lane is not None},
         mode="full_refresh" if args.full_refresh else "incremental",
@@ -1350,6 +1513,15 @@ def main():
     )
     write_run_manifest(manifest, docs_data_dir)
     logger.info("Done. Wrote index + %d generator files.", count)
+
+    # S1-1 (audit 2026-10-07): a constraints run whose constraint data is not
+    # ok used to exit 0, so its lane read green while the published data was
+    # five months old. The manifest above already records why; now the run
+    # fails too. Lanes that pass --skip-constraints are never affected.
+    failure = _constraint_run_failure(constraint_lane, skip_constraints=bool(args.skip_constraints))
+    if failure:
+        logger.error(failure)
+        raise SystemExit(failure)
 
 
 if __name__ == "__main__":
