@@ -170,6 +170,31 @@ class TestConstraintStep:
         assert lane.status == STATUS_DEGRADED and "Name or service not known" in lane.error
 
 
+class TestRunExit:
+    def _lane(self, status, error=None):
+        lane = LaneRun(source="constraints")
+        lane.status, lane.error = status, error
+        return lane
+
+    def test_requested_and_not_ok_fails_the_run(self):
+        msg = pipeline._constraint_run_failure(
+            self._lane(STATUS_DEGRADED, "constraint data ends 2026-03, 5 months behind"),
+            skip_constraints=False)
+        assert msg and "degraded" in msg and "2026-03" in msg
+
+    def test_ok_constraints_pass(self):
+        assert pipeline._constraint_run_failure(self._lane(STATUS_OK), skip_constraints=False) is None
+
+    def test_skipping_lanes_never_fail_on_constraints(self):
+        # The daily lane: --skip-constraints, constraint data 5 months behind.
+        cons = pd.DataFrame({"duid": ["A"], "month": ["2026-03"]})
+        gen = pd.DataFrame({"duid": ["A"], "month": ["2026-08"]})
+        lane = pipeline._constraint_lane(cons, gen, skipped=True)
+        assert lane.status == STATUS_DEGRADED
+        assert pipeline._constraint_run_failure(lane, skip_constraints=True) is None
+        assert pipeline._constraint_run_failure(self._lane(STATUS_SKIPPED), skip_constraints=True) is None
+
+
 def test_manifest_records_the_reference_cache_dates(tmp_path):
     pd.DataFrame({"a": [1]}).to_feather(tmp_path / dc.GENCONDATA_CACHE)
     cons = pd.DataFrame({"duid": ["A"], "month": ["2026-08"]})

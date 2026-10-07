@@ -66,6 +66,7 @@ from .run_status import (
     write_run_manifest,
     STATUS_DEGRADED,
     STATUS_ERROR,
+    STATUS_OK,
     STATUS_SKIPPED,
 )
 
@@ -333,6 +334,21 @@ def _constraint_lane(
             "spdcp_cache_date": reference_cache_date(Path(reference_dir) / SPDCP_CACHE),
         }
     return lane
+
+
+def _constraint_run_failure(lane: LaneRun, *, skip_constraints: bool) -> str | None:
+    """Why a run that asked for constraints must exit non-zero, or None.
+
+    Only a run that requested constraints (no --skip-constraints) can fail on
+    them; the daily, reference and mlf lanes all skip constraints, so a
+    degraded constraints source never reddens them.
+    """
+    if skip_constraints or lane is None or lane.status == STATUS_OK:
+        return None
+    return (
+        f"constraints requested but the constraints source is {lane.status}: "
+        f"{lane.error or 'no details'} (recorded in run_status.json)"
+    )
 
 
 # Market spreads come from the same monthly DISPATCHPRICE archive as the
@@ -1422,6 +1438,15 @@ def main():
     )
     write_run_manifest(manifest, docs_data_dir)
     logger.info("Done. Wrote index + %d generator files.", count)
+
+    # S1-1 (audit 2026-10-07): a constraints run whose constraint data is not
+    # ok used to exit 0, so its lane read green while the published data was
+    # five months old. The manifest above already records why; now the run
+    # fails too. Lanes that pass --skip-constraints are never affected.
+    failure = _constraint_run_failure(constraint_lane, skip_constraints=bool(args.skip_constraints))
+    if failure:
+        logger.error(failure)
+        raise SystemExit(failure)
 
 
 if __name__ == "__main__":
