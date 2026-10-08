@@ -1,7 +1,7 @@
 # BRIEF — AEMO credit dashboard redesign, pass 1
 
 Paste this whole file as the FIRST message to the coding agent, with the project folder
-`/Users/zalen/Design/aemo-credit-design` open. Read `CLAUDE.md` → `AGENTS.md` (the contract) before
+(your clone of this repo) open. Read `CLAUDE.md` → `AGENTS.md` (the contract) before
 writing code. They load automatically; this file is the task.
 
 ## The goal, stated as an outcome
