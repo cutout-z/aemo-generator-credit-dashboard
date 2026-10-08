@@ -197,7 +197,7 @@ suite's coverage is ~6–8 weeks after quarter end, which is what makes
   biennial WEMPR (2022/2024/2026) and annual State of the Energy Market
   workbooks. No API; the quarterly CSV suite is the only automation-suitable
   series (WEMPR/SOM are one-off workbook editions).
-- **QA value (per Zalen: QA process, not dashboard charts)**: cross-check
+- **QA value (per the owner: QA process, not dashboard charts)**: cross-check
   our derived aggregates against the regulator's published picture.
   Divergence beyond tolerance = data-quality alarm (same pattern as the QED
   divergence check).
