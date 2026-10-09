@@ -186,6 +186,9 @@
         .chart-resize-bottom { position: absolute; bottom: 0; left: 0; right: 16px; height: 6px; cursor: ns-resize; z-index: 14; }
         .chart-resize-right { position: absolute; top: 0; right: 0; bottom: 16px; width: 6px; cursor: ew-resize; z-index: 14; }
     </style>
+    <!-- Shared AEMO Dashboards sidebar (cutout-z/aemo-dashboards). Plain, not defer: it reserves its
+         width before first paint. The page works unchanged if it fails to load. -->
+    <script src="https://cutout-z.github.io/aemo-dashboards/nav.js" data-current="generator-credit"></script>
 </head>
 <body>
 
