@@ -166,6 +166,7 @@ Location: `agent-contracts/facts/AEMO-FACTS.md` (git, `cutout-z/agent-contracts`
 | What it is | One static page — `docs/index.html` (2,521 lines; one inline `<style>`, one inline `<script>`) |
 | Served by | **GitHub Pages from `docs/` on `main`** — public, no server, no login, no build step at deploy |
 | Stack | Plotly **2.35.2** (CDN), SheetJS **0.20.3** (CDN, XLSX export), Tailwind **v3.4.17 standalone** (compiled CSS, committed) |
+| Shared sidebar | `docs/index.html` loads `https://cutout-z.github.io/aemo-dashboards/nav.js` (repo `cutout-z/aemo-dashboards`, added 2026-10-10): the sidebar and phone top bar every AEMO dashboard shares. It changes there, not here, and a change there reaches this page with no PR here. It pads `body` by 232px at 1024px and wider, so check layout changes at that width. Keep the tag plain (not `defer`) at the end of `<head>` |
 | Data | `docs/data/**` — 31 MB, 1,088 generator JSONs + market/quarterly/FCAS/outage/reference files |
 | Presentation entry point | `docs/index.html` → `assets/css/tailwind.src.css` (tokens) → `docs/assets/app.css` (compiled) |
 | Chart colours | `assets/js/chart-tokens.js` (reads the CSS variables) → published to `docs/assets/js/chart-tokens.js` by `./scripts/build-css.sh` |
