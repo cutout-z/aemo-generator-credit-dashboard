@@ -25,8 +25,10 @@ never pays for a full read.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -88,6 +90,201 @@ def _cached_parquet_columns(cache_dir: str, table: str, year: int, month: int):
         return set()
 
 
+# ── Low-memory cached read (NAS incident 2026-10-12) ──────────────────────
+# nemosis's compiler decodes every cached (table, month) parquet WHOLE before
+# date-filtering, and for a month M it reads the M-1, M and M+1 archives
+# (its month generator pushes the start back a month). A BIDPEROFFER_D month
+# is ~20M rows x 21 columns, cached as strings: one fetch peaked at ~14 GiB,
+# and a not-yet-published month still decoded all of M-1 (~7 GiB) to keep a
+# few boundary hours. When the cache holds the month, read it here instead:
+# row groups outside the window are skipped from the footer statistics, only
+# the union columns are read, and each row group is filtered and typed before
+# the next is read. The frame matches the compiler's exactly (rows, order,
+# index, columns, dtypes); anything unexpected returns None and the caller
+# falls back to the compiler.
+
+_ARCHIVE_TS_FORMAT = "%Y/%m/%d %H:%M:%S"
+_TEXT_COLS = {"DUID", "BIDTYPE"}
+
+
+def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+def _has_required_cols(cache_dir: str, year: int, month: int) -> bool:
+    cols = _cached_parquet_columns(cache_dir, "BIDPEROFFER_D", year, month)
+    return cols is not None and BIDPEROFFER_REQUIRED_COLS.issubset(cols)
+
+
+def _stat_ts(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, bytes):
+        value = value.decode()
+    try:
+        return datetime.strptime(str(value), _ARCHIVE_TS_FORMAT)
+    except ValueError:
+        return None
+
+
+def _typed_ts(col):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    if pa.types.is_timestamp(col.type):
+        return col.cast(pa.timestamp("us"))
+    return pc.strptime(col, format=_ARCHIVE_TS_FORMAT, unit="us", error_is_null=False)
+
+
+def _typed_number(col):
+    """A row group's numeric column, typed as pd.to_numeric types it:
+    int64 when every value is an integer string, else float64."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    if pa.types.is_integer(col.type):
+        return col.cast(pa.int64())
+    if (pa.types.is_string(col.type) or pa.types.is_large_string(col.type)) \
+            and not col.null_count \
+            and pc.all(pc.match_substring_regex(col, r"^[+-]?[0-9]+$")).as_py():
+        return col.cast(pa.int64())
+    return col.cast(pa.float64())
+
+
+def _window_parts(path: Path, start: datetime, end: datetime):
+    """Typed row-group tables of one cached parquet, start < INTERVAL_DATETIME <= end.
+
+    Returns (columns in file order, tables, each table's row positions in the
+    file). nemosis leaves those positions as the frame's index.
+    Raises on any parse/cast problem (the caller falls back to nemosis).
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    pf = pq.ParquetFile(path)
+    names = pf.schema_arrow.names
+    union = set(BIDPEROFFER_UNION_COLS)
+    cols = [c for c in names if c in union]  # file order, as nemosis selects
+    ts_idx = names.index("INTERVAL_DATETIME")
+    lo, hi = pa.scalar(start, pa.timestamp("us")), pa.scalar(end, pa.timestamp("us"))
+
+    parts: list = []
+    positions: list[np.ndarray] = []
+    offset = 0
+    for g in range(pf.metadata.num_row_groups):
+        n = pf.metadata.row_group(g).num_rows
+        stats = pf.metadata.row_group(g).column(ts_idx).statistics
+        if stats is not None and stats.has_min_max:
+            gmin, gmax = _stat_ts(stats.min), _stat_ts(stats.max)
+            if gmin is not None and gmax is not None and (gmax <= start or gmin > end):
+                offset += n
+                continue
+        table = pf.read_row_group(g, columns=cols)
+        ts = _typed_ts(table.column("INTERVAL_DATETIME"))
+        mask = pc.and_(pc.greater(ts, lo), pc.less_equal(ts, hi))
+        keep = np.flatnonzero(mask.to_numpy(zero_copy_only=False))
+        if keep.size:
+            table = table.set_column(cols.index("INTERVAL_DATETIME"), "INTERVAL_DATETIME", ts)
+            table = table.take(pa.array(keep))
+            for i, name in enumerate(cols):
+                col = table.column(i)
+                if name in _TEXT_COLS:
+                    col = col.cast(pa.large_string())
+                elif name != "INTERVAL_DATETIME":
+                    col = _typed_number(col)
+                table = table.set_column(i, name, col)
+            parts.append(table.replace_schema_metadata(None))
+            positions.append(keep + offset)
+        offset += n
+    return cols, parts, positions
+
+
+def _parts_to_frame(cols: list[str], parts: list, positions: list[np.ndarray]) -> pd.DataFrame:
+    import pyarrow as pa
+
+    if not parts:
+        return pd.DataFrame(columns=cols)
+    # pd.to_numeric types the WHOLE frame, so a column that is int64 in some
+    # row groups and float64 in others is float64 throughout.
+    for i, name in enumerate(cols):
+        if len({t.schema.field(i).type for t in parts}) > 1:
+            parts = [t.set_column(i, name, t.column(i).cast(pa.float64())) for t in parts]
+    table = pa.concat_tables(parts)
+    parts.clear()
+    # The parquet's stored pandas metadata was dropped per part: it records
+    # the cached string dtypes and would cast the typed columns back.
+    frame = table.to_pandas(split_blocks=True, self_destruct=True)
+    del table
+    frame.index = pd.Index(np.concatenate(positions))
+    return frame
+
+
+def _cache_month(year: int, month: int, nemosis_cache: str, start_time: str, end_time: str) -> None:
+    """Download + cache an uncached month without decoding the cached ones.
+
+    nemosis's caching mode skips files already on disk and writes a parquet
+    for each archive it downloads. An unpublished month just logs "not
+    downloaded", as the compiler does.
+    """
+    from nemosis import cache_compiler
+
+    try:
+        cache_compiler(
+            start_time, end_time, "BIDPEROFFER_D", nemosis_cache,
+            fformat="parquet", keep_csv=True,
+        )
+    except Exception as e:  # network/AEMO trouble: read what is cached
+        logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: caching attempt failed ({e})")
+
+
+def _read_cached_window(
+    year: int, month: int, cache_dir: str, start_time: str, end_time: str,
+) -> pd.DataFrame | None:
+    """The month's union frame read from cache, or None to use the compiler.
+
+    Needs the M-1 archive cached with every required column (it carries the
+    month's first trading-day hours). An uncached month M is fetched in
+    caching mode first; while AEMO has not published it the window holds
+    only the M-1 boundary rows, exactly what the compiler returns.
+    """
+    if not _has_required_cols(cache_dir, *_shift_month(year, month, -1)):
+        return None
+    nemosis_cache = str(Path(cache_dir) / "nemosis_cache")
+    if _cached_parquet_columns(cache_dir, "BIDPEROFFER_D", year, month) is None:
+        _cache_month(year, month, nemosis_cache, start_time, end_time)
+        if _cached_parquet_columns(cache_dir, "BIDPEROFFER_D", year, month) is not None \
+                and not _has_required_cols(cache_dir, year, month):
+            return None
+
+    start = datetime.strptime(start_time, _ARCHIVE_TS_FORMAT)
+    end = datetime.strptime(end_time, _ARCHIVE_TS_FORMAT)
+    try:
+        pieces = []
+        for delta in (-1, 0, 1):
+            path = _nemosis_cache_path(cache_dir, "BIDPEROFFER_D", *_shift_month(year, month, delta))
+            if path.exists():
+                pieces.append(_window_parts(path, start, end))
+        if len({tuple(cols) for cols, _, _ in pieces}) == 1:
+            # One conversion for all files: no pd.concat copy of the month.
+            frame = _parts_to_frame(
+                pieces[0][0],
+                [t for _, parts, _ in pieces for t in parts],
+                [p for _, _, pos in pieces for p in pos],
+            )
+        else:
+            frame = pd.concat([_parts_to_frame(*piece) for piece in pieces], sort=False)
+    except Exception as e:
+        logger.warning(
+            f"BIDPEROFFER_D {year}-{month:02d}: low-memory cache read failed ({e}) "
+            "— falling back to the nemosis compiler"
+        )
+        return None
+    logger.info(f"Read BIDPEROFFER_D {year}-{month:02d} from cache (low-memory path)")
+    return frame
+
+
 def fetch_bidperoffer_union(
     year: int,
     month: int,
@@ -96,9 +293,10 @@ def fetch_bidperoffer_union(
 ) -> pd.DataFrame:
     """Fetch one month of raw BIDPEROFFER_D (all bid types, union columns).
 
-    This is the ONLY nemosis compiler call a run makes for BIDPEROFFER_D in a
-    given month (S3-12). Consumers slice their rows/columns from the returned
-    frame; nobody re-decodes the month.
+    This is the ONLY decode a run makes for BIDPEROFFER_D in a given month
+    (S3-12). Consumers slice their rows/columns from the returned frame;
+    nobody re-decodes the month. A month whose archives are already cached is
+    read by the low-memory path above, not the nemosis compiler.
 
     ``rebuild=None`` (default): inspect the cached parquet's SCHEMA ONLY and
     re-download once when it lacks any required column (a thin cache written
@@ -131,6 +329,14 @@ def fetch_bidperoffer_union(
         end_time = f"{year + 1}/01/01 00:00:00"
     else:
         end_time = f"{year}/{month + 1:02d}/01 00:00:00"
+
+    if not rebuild:
+        bids = _read_cached_window(year, month, cache_dir, start_time, end_time)
+        if bids is not None:
+            if bids.empty:
+                logger.warning(f"No BIDPEROFFER_D data for {year}-{month:02d}")
+                return pd.DataFrame()
+            return bids
 
     logger.info(f"Fetching BIDPEROFFER_D {year}-{month:02d}...")
     bids = dynamic_data_compiler(
