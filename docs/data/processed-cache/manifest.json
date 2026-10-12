@@ -7,18 +7,18 @@
     },
     {
       "name": "daily_aggregates.feather",
-      "sha256": "8ec0f0cddede207653f6558102ec1c268bfcb4853f48c468857385bb14612655",
-      "size_bytes": 2679826
+      "sha256": "19558355a951f2455c2f826931228a1c97b5ccd47c2b9cc48fbc9cc52f857eec",
+      "size_bytes": 2691722
     },
     {
       "name": "fcas_aggregates.feather",
-      "sha256": "5e39e9a255f56c8e7d12f59dcdbae4d3a032c1b38053bb108961878b31abc8d3",
-      "size_bytes": 18562
+      "sha256": "2874c58e141ba7b44802e89eeab75e3a65ea92d19781f35fa0fc407248332c63",
+      "size_bytes": 18754
     },
     {
       "name": "fcas_factors.feather",
-      "sha256": "9d3fc273098d8a6c0a7f937104b9267cb3fb0974168223b050be55b78b6de8c1",
-      "size_bytes": 269946
+      "sha256": "3ba5323a32bfe45f6ea86a3079e67cd7841d7c2b5cf6a4882ed59102c75745c3",
+      "size_bytes": 271242
     },
     {
       "name": "generators.feather",
@@ -57,8 +57,8 @@
     },
     {
       "name": "market_factors_daily.feather",
-      "sha256": "2c9c6ff264aad1f26d0686afd0972600085f1fa2e878194c25d57b59958b220f",
-      "size_bytes": 379234
+      "sha256": "456dbcafe3e834cb9eba47d7bd243476db6e151db359e175a9e3d466deec8499",
+      "size_bytes": 393210
     },
     {
       "name": "mlf_tracker_summary.csv",
@@ -67,18 +67,18 @@
     },
     {
       "name": "monthly_aggregates.feather",
-      "sha256": "6556d070e2016344f57db11888907e6599a110f4368e1b447970216fdb3a279d",
-      "size_bytes": 4532842
+      "sha256": "9cf6a53ee1263ab5314fe28365d55217d1408b3a8b3765c161efad142d2e5aec",
+      "size_bytes": 4627082
     },
     {
       "name": "offer_curves.feather",
-      "sha256": "552c9c689db52a4c0a2b5eba369ccf786f8c45c762a3279c5a31950205e353be",
-      "size_bytes": 1706146
+      "sha256": "93eb4973468f2620a20f2776b867f01a3b206c525306e7800943310b49ee6d3f",
+      "size_bytes": 1786090
     },
     {
       "name": "offer_factors.feather",
-      "sha256": "98a9c928a464e4ba77aa5069e95974a350c12d9d024842e005c922cd379f1944",
-      "size_bytes": 237682
+      "sha256": "74cb96c111ac78637a8ca123a55e30fe6669a757f98d5a2de5b6d7cef4d993ea",
+      "size_bytes": 242858
     }
   ],
   "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
