@@ -3,10 +3,8 @@ project: AEMO Generator Credit Dashboard
 agent: claude
 branch: fix/bidperoffer-low-memory-read
 merged: true
-status: PR #5 merged 2026-10-12 (cdd2c2d1c); runner memory cap persisted in compose.yml, live apply pending
+status: done. PR #5 merged; runner memory cap live (32g, no swap); ARCHITECTURE updated (agent-contracts #65, #66)
 outstanding:
-  - "to-do [mac-local] owner runs the host docker update for the runner memory cap (one line, admin password)"
-  - "to-do merge cutout-z/agent-contracts#66 (ARCHITECTURE: memory cap, lock merged, verify task)"
   - "scheduled: one-off Claude task verify-aemo-credit-memory-fix (2026-10-14 08:45 AWST) checks the 10-13/10-14 daily runs, the low-memory path, the lock and the cap; tracked in ARCHITECTURE §8.4"
 ---
 
@@ -108,3 +106,11 @@ then gets OOM-killed inside the container instead of swapping the host.
     - restore `compose.yml.bak-memcap-20261012` over `compose.yml`;
     - run `docker update --memory 0 --memory-swap -1 ai-wif-runner` on the host.
 - Today's daily run ended `status=0` at 00:34:41Z.
+
+## Verified 2026-10-12
+- The owner ran the host `docker update`. Inspect now shows Memory 34359738368 and MemorySwap
+  34359738368. Inside the container, the cgroup `memory.limit_in_bytes` and
+  `memory.memsw.limit_in_bytes` both read 34359738368. Current usage is 0.26 GB.
+- No restart: the container StartedAt is still 2026-09-07, and the NAS Hermes gateway keeps 6 days
+  of uptime.
+- agent-contracts #66 merged (`3bd06de`).
