@@ -2,13 +2,12 @@
 project: AEMO Generator Credit Dashboard
 agent: claude
 branch: fix/bidperoffer-low-memory-read
-merged: false
-status: PR #5 open (low-memory BIDPEROFFER_D read + one lane per clone); awaiting merge
+merged: true
+status: PR #5 merged 2026-10-12 (cdd2c2d1c); runner memory cap persisted in compose.yml, live apply pending
 outstanding:
-  - "to-do merge cutout-z/aemo-generator-credit-dashboard#5 (pipeline code: owner's yes)"
-  - "to-do merge cutout-z/agent-contracts#65 (ARCHITECTURE §8.5 note) with or after #5"
-  - "to-do verify the first two daily runs after the merge: the first still runs the old run-update.sh (it pulls the new one mid-run); from the second, the scheduler log should show 'Read BIDPEROFFER_D ... (low-memory path)' and the run should stay under ~8 GB RSS"
-  - "decision container memory cap for the runner container (proposal below; container change: owner's yes)"
+  - "to-do [mac-local] owner runs the host docker update for the runner memory cap (one line, admin password)"
+  - "to-do merge cutout-z/agent-contracts#66 (ARCHITECTURE: memory cap, lock merged, verify task)"
+  - "scheduled: one-off Claude task verify-aemo-credit-memory-fix (2026-10-14 08:45 AWST) checks the 10-13/10-14 daily runs, the low-memory path, the lock and the cap; tracked in ARCHITECTURE §8.4"
 ---
 
 # NAS memory incident 2026-10-12: two credit lanes at once
@@ -90,3 +89,22 @@ then gets OOM-killed inside the container instead of swapping the host.
   second run onward.
 - AGENTS.md's "never touch src/deploy" rule is for design passes. This pipeline fix was asked for
   by the owner and is declared through PR #5.
+
+## Update 2026-10-12 (after the owner's yes)
+- Merged #5 (`cdd2c2d1c`) and agent-contracts #65 (`73d9789`). The NAS clone picks #5 up through the
+  lane's own pull at the next run.
+- Memory cap, the owner's decision: 32g, no swap, on the lane container only.
+  - **Before:** the runner compose file sha256 was `78731569…65966`; inspect showed Memory 0 and
+    MemorySwap 0 (unlimited); cgroup usage 1.36 GB, peak 17.4 GB.
+  - **Apply:**
+    - `mem_limit: 32g` and `memswap_limit: 32g` added to the `ai-runner` service in the runner
+      compose file. I wrote a new file and renamed it into place; only that service changed, and
+      the YAML parses. The backup is `compose.yml.bak-memcap-20261012`.
+    - The live container takes the cap from a host `docker update --memory 32g --memory-swap 32g`,
+      which needs no recreate. The owner runs it from the admin shell.
+  - **Verify:** after the owner's command, the inspect verb should show Memory 34359738368, and so
+    should the cgroup `memory.limit_in_bytes`. The scheduled task also checks this.
+  - **Rollback:**
+    - restore `compose.yml.bak-memcap-20261012` over `compose.yml`;
+    - run `docker update --memory 0 --memory-swap -1 ai-wif-runner` on the host.
+- Today's daily run ended `status=0` at 00:34:41Z.
