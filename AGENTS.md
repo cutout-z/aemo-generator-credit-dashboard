@@ -234,6 +234,14 @@ theme-flip breakage. Exit code 1 means something is wrong; it must be 0 before y
   `chart-tokens.js`; edit the source in `assets/js/`, never the copy in `docs/assets/js/`.
 - **Preflight is off** (`tailwind.config.js`) so the existing inline styles keep working. Forgetting to
   turn it on at the end means the page keeps two competing resets — the brief's step 1 covers this.
+- **`BIDPEROFFER_D` `BANDAVAIL` tranches are incremental** (each band adds MW to the one before): a bid stack
+  needs a running sum, and treating them as cumulative gives impossible decreasing stacks.
+- **DUIDs can contain `/` and `#`** (`W/HOE#1`, `TARONG#1`): never use a raw DUID as a filename. Offer-curve
+  files map only `/` (`src/offer_curves.py`) and `docs/index.html` mirrors that; change both together.
+- **Same-region FCAS blocks are regional averages, not duplicates** (`"scope": "regional_average"`); don't
+  re-flag two DUIDs in one region for identical FCAS figures.
+- **nemosis cached parquets carry only previously requested columns**: after adding a column (e.g.
+  `VERSIONNO`), delete the cached parquet or the column never appears.
 
 ## Working alongside Hermes
 
