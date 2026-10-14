@@ -117,7 +117,7 @@ handback notes get copied and published.
 <!-- END agent-contracts:family -->
 
 <!-- BEGIN agent-contracts:aemo-facts -->
-<!-- source: facts/AEMO-FACTS.md sha256:c32c596c4a5d — edit in cutout-z/agent-contracts, not here -->
+<!-- source: facts/AEMO-FACTS.md sha256:7e1d899cbe03 — edit in cutout-z/agent-contracts, not here -->
 ## AEMO shared facts — every agent, every repo
 
 One canonical home for cross-repo AEMO domain facts, so a fact established in one repo is never
@@ -125,8 +125,8 @@ invisible to an agent working in another (the battery-MLF lesson, 2026-10-05: th
 was established inside one repo's rollout doc while other agents recomputed with the wrong factor).
 
 **Who reads this:** any agent (Hermes, Claude Code, Codex) working in an AEMO repo. It is stamped
-into each AEMO repo's `AGENTS.md` between `agent-contracts:aemo-facts` markers, and the `aemo-audit`
-and `aemo-logic-pass` skills point here instead of duplicating facts. A fact here overrides anything
+into each AEMO repo's `AGENTS.md` between `agent-contracts:aemo-facts` markers, and the `aemo-logic-pass`
+skill points here instead of duplicating facts. A fact here overrides anything
 remembered or re-derived.
 
 **Maintenance:** append with date + source; supersede in place (`~~SUPERSEDED~~ <date> <reason>`).
@@ -135,7 +135,7 @@ Location: `agent-contracts/facts/AEMO-FACTS.md` (git, `cutout-z/agent-contracts`
 | Fact | Detail | Verified | Source |
 |---|---|---|---|
 | TLF orientation | `TRANSMISSIONLOSSFACTOR` = **Import** MLF; `SECONDARY_TLF` = **Export** MLF for BIDIRECTIONAL (battery) units. A battery's export MLF comes from `SECONDARY_TLF`, never `TRANSMISSIONLOSSFACTOR`. Confirmed 51/51 differing batteries against AEMO's 2026-27 workbook. The MLF Tracker used the import factor for FY24-25/FY25-26 battery export values until fix `dbaf6f7` (2026-10-05); downstream battery revenue was restated (~−$13.1M across 26 batteries' months) after the fix. | 2026-10-05 | AEMO 2026-27 MLF workbook; `cutout-z/aemo-generator-credit-dashboard`: `audits/Logic Pass Rollout 2026-10-05.md` |
-| FCAS regime | FCAS causer-pays contribution factors are DEAD — replaced by the Frequency Performance Payment (FPP) on 8 June 2025 (5-minute contribution factors on NEMWEB). Never recommend or resurrect causer-pays factor tracking; FPP cost-allocation factors per DUID are the future extension. | 2026-09-01 | AEMO/NEMWEB; `aemo-audit` skill; credit repo `docs/FUTURE_DATA_SOURCES.md` |
+| FCAS regime | FCAS causer-pays contribution factors are DEAD — replaced by the Frequency Performance Payment (FPP) on 8 June 2025 (5-minute contribution factors on NEMWEB). Never recommend or resurrect causer-pays factor tracking; FPP cost-allocation factors per DUID are the future extension. | 2026-09-01 | AEMO/NEMWEB; credit repo `docs/FUTURE_DATA_SOURCES.md` |
 <!-- END agent-contracts:aemo-facts -->
 
 ## The five hard rules
