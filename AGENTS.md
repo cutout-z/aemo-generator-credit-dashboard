@@ -4,7 +4,7 @@ Read this before touching anything. The design brief (`BRIEF.md`) says *what* to
 work here is allowed to happen.
 
 <!-- BEGIN agent-contracts:family -->
-<!-- source: family/AGENTS.family.md sha256:116b1391e2bb — edit in cutout-z/agent-contracts, not here -->
+<!-- source: family/AGENTS.family.md sha256:629efe6d8812 — edit in cutout-z/agent-contracts, not here -->
 ## Family conventions (every repo, every agent)
 
 *Generated from `agent-contracts/family/AGENTS.family.md`. Edit it there, never here: a drift check
@@ -78,6 +78,9 @@ handback notes get copied and published.
   plain statement that it wasn't rendered and why. A reviewer can check evidence, not belief.
 - For a fix, show its test fails with the fix reverted and passes with it applied; otherwise nothing
   shows the test exercises the fix.
+- Before any claim of done, fixed or passing, name the command that proves it and run it in this turn,
+  then read its full output and exit code. "Should work" is not a status: say what was run, or that
+  it wasn't (adapted from obra/superpowers `verification-before-completion`).
 - Don't relay another agent's or subagent's numbers. Re-run or read the evidence yourself: a relayed
   number can't be traced, and you are the one signing the handback.
 
