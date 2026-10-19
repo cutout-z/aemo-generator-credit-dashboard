@@ -5,7 +5,7 @@ branch: perf/bidperoffer-peak-memory
 merged: true
 status: PR #10 (70f74bec1) and PR #11 (b62308f7a) merged 2026-10-19 with the owner's yes; factor-step peak footprint 13-16 GiB -> 4.9 GiB on real cached months, outputs identical; lane proof pending the first scheduled run after merge
 outstanding:
-  - "Verify the first scheduled aemo-generator-credit-daily run after #11 (merged b62308f7a), due 2026-10-20 AWST: END status=0, a normal docs/data diff, and its 'Peak RSS after the whole run' log line well under the 13 GB of 2026-10-19 (expected ~5-6 GB)"
+  - "Verify the first scheduled aemo-generator-credit-daily run after #11 (merged b62308f7a), due 2026-10-20 AWST: END status=0, a normal docs/data diff, and its 'Peak RSS after the whole run' log line well under the 13 GB of 2026-10-19 (expected ~5-6 GB). Tracked as Brain dashboard To-Do cad5734818e8cb887 (owner's yes, 2026-10-19)"
 ---
 
 # BIDPEROFFER_D factor step: peak memory
