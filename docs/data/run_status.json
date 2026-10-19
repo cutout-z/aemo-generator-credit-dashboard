@@ -10,12 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-19T00:14:22Z",
+  "finished_utc": "2026-10-19T21:22:49Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-10-18T23:55:38Z"
+  "started_utc": "2026-10-19T21:15:08Z"
  },
  "schema_version": 1,
  "sources": {
