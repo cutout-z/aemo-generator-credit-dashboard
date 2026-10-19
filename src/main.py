@@ -629,6 +629,21 @@ def _partial_finished_months(
     return out
 
 
+def _log_peak_rss(stage: str) -> None:
+    """Log the process's peak resident memory so far (Linux VmHWM).
+
+    The daily lane's peak drove the NAS into swap on 2026-10-19 (13 GB) and
+    was only seen live in /proc. Logging it after the heavy steps leaves a
+    record in the lane log that each run can be checked against.
+    """
+    import resource
+    import sys
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    peak_bytes = peak if sys.platform == "darwin" else peak * 1024  # Linux: KiB
+    logger.info("Peak RSS after %s: %.2f GiB", stage, peak_bytes / 2**30)
+
+
 def _run_optional_factor_lanes(
     data_dir: Path,
     months: list[tuple[int, int]],
@@ -1174,6 +1189,8 @@ def main():
                 }
             logger.info(f"Saved FCAS cache: {len(fcas_by_region_month)} region×month entries")
 
+    _log_peak_rss("step 3 (SCADA + price aggregation)")
+
     # Step 3b: Binding constraint aggregation
     constraint_path = data_dir / "constraint_aggregates.feather"
     all_constraints = pd.DataFrame()
@@ -1300,6 +1317,7 @@ def main():
         skip_offer_factors=args.skip_offer_factors,
         full_refresh=args.full_refresh,
     )
+    _log_peak_rss("steps 3e/3e2/3e3 (FCAS + offer factors, offer curves)")
     if offer_curves_daily is not None and not offer_curves_daily.empty:
         # Daily stacks are an explicitly BOUNDED latest-window cache
         # (S3-07): recomputed each run for the processed window only,
@@ -1520,6 +1538,7 @@ def main():
     )
     write_run_manifest(manifest, docs_data_dir)
     logger.info("Done. Wrote index + %d generator files.", count)
+    _log_peak_rss("the whole run")
 
     # S1-1 (audit 2026-10-07): a constraints run whose constraint data is not
     # ok used to exit 0, so its lane read green while the published data was
