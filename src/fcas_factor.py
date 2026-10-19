@@ -86,9 +86,12 @@ def compute_fcas_factors(
     if bids is None or bids.empty:
         return pd.DataFrame()
 
-    bids = bids.copy()
-    bids["INTERVAL_DATETIME"] = pd.to_datetime(bids["INTERVAL_DATETIME"])
-    bids = bids.dropna(subset=["INTERVAL_DATETIME"])
+    # assign() leaves the caller's frame alone without first copying all of
+    # its ~13M rows, and dropna only runs when there is something to drop:
+    # each whole-frame copy here cost ~1 GiB at the run's peak (2026-10-19).
+    bids = bids.assign(INTERVAL_DATETIME=pd.to_datetime(bids["INTERVAL_DATETIME"]))
+    if bids["INTERVAL_DATETIME"].isna().any():
+        bids = bids.dropna(subset=["INTERVAL_DATETIME"])
     if bids.empty:
         return pd.DataFrame()
 
@@ -101,16 +104,14 @@ def compute_fcas_factors(
     source_complete = bool(last_day == date(year, month, last_cal))
     observed_through = last_day.isoformat() if not source_complete else None
 
-    positive = bids[bids["MAXAVAIL"] > 0]
-    pos_by_duid = {
-        duid: g for duid, g in positive.groupby("DUID")
-    } if not positive.empty else {}
-
     rows = []
     for duid, g in bids.groupby("DUID"):
         services = g["BIDTYPE"].nunique()
         observed_intervals = g["INTERVAL_DATETIME"].nunique()
-        gp = pos_by_duid.get(duid)
+        # The unit's positive offers, in frame order: the same rows a
+        # groupby of all positive rows gave, without holding a copy of every
+        # unit's positive rows at once (~0.5 GiB a month).
+        gp = g[g["MAXAVAIL"] > 0]
         positive_intervals = (
             int(gp["INTERVAL_DATETIME"].nunique())
             if gp is not None and not gp.empty else 0

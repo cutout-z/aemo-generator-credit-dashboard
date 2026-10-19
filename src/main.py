@@ -711,6 +711,11 @@ def _run_optional_factor_lanes(
 
     for year, month in months:
         month_label = f"{year}-{month:02d}"
+        # Release the previous month's frames BEFORE this month's read. A
+        # plain rebinding frees them only after the new read returns, so the
+        # last month's raw/bids/prices/volumes (~5 GiB) stayed resident under
+        # this month's read: the run's peak (NAS 2026-10-19, VmHWM 13 GB).
+        raw = bids = prices = volumes = None
         # ONE BIDPEROFFER_D fetch/decode per month, shared by every consumer.
         try:
             raw = fetch_bidperoffer_union(year, month, cache_dir, rebuild=rebuild)
@@ -738,6 +743,7 @@ def _run_optional_factor_lanes(
                 logger.warning(
                     "FCAS factor computation failed for %s: %s", month_label, e,
                 )
+            bids = None  # the month's factor rows are all the run keeps
 
         if want_offer:
             # ONE BIDDAYOFFER_D fetch/decode per month; the ENERGY volumes are
@@ -754,6 +760,7 @@ def _run_optional_factor_lanes(
                     )
                     continue
                 volumes = energy_volumes_from_raw(raw, year, month)
+                raw = None  # every consumer has sliced it
                 if volumes is None or volumes.empty:
                     logger.warning(
                         f"Offers {month_label}: prices without volumes — "

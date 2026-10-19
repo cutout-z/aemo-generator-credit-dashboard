@@ -59,6 +59,10 @@ BIDPEROFFER_REQUIRED_COLS = {
 }
 
 _FCAS_REQUIRED = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "MAXAVAIL"}
+# The columns an FCAS slice carries (the raw frame's order is kept). The
+# BANDAVAIL bands are ENERGY volumes: copying them for ~13M FCAS rows a month
+# cost ~1 GiB the FCAS lane never reads.
+_FCAS_SLICE_COLS = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "VERSIONNO", *_BIDPEROFFER_FCAS_COLS}
 
 
 def _nemosis_cache_path(cache_dir: str, table: str, year: int, month: int) -> Path:
@@ -187,7 +191,8 @@ def _window_parts(path: Path, start: datetime, end: datetime):
         keep = np.flatnonzero(mask.to_numpy(zero_copy_only=False))
         if keep.size:
             table = table.set_column(cols.index("INTERVAL_DATETIME"), "INTERVAL_DATETIME", ts)
-            table = table.take(pa.array(keep))
+            if keep.size < n:  # most groups sit wholly in the window: no copy
+                table = table.take(pa.array(keep))
             for i, name in enumerate(cols):
                 col = table.column(i)
                 if name in _TEXT_COLS:
@@ -207,11 +212,15 @@ def _parts_to_frame(cols: list[str], parts: list, positions: list[np.ndarray]) -
     if not parts:
         return pd.DataFrame(columns=cols)
     # pd.to_numeric types the WHOLE frame, so a column that is int64 in some
-    # row groups and float64 in others is float64 throughout.
+    # row groups and float64 in others is float64 throughout. Replaced in
+    # place: the caller's list must not keep the uncast tables alive.
     for i, name in enumerate(cols):
         if len({t.schema.field(i).type for t in parts}) > 1:
-            parts = [t.set_column(i, name, t.column(i).cast(pa.float64())) for t in parts]
+            for j, t in enumerate(parts):
+                parts[j] = t.set_column(i, name, t.column(i).cast(pa.float64()))
     table = pa.concat_tables(parts)
+    # The table is now the only owner of the row groups' buffers, so
+    # self_destruct can free each Arrow column as soon as it is converted.
     parts.clear()
     # The parquet's stored pandas metadata was dropped per part: it records
     # the cached string dtypes and would cast the typed columns back.
@@ -268,11 +277,15 @@ def _read_cached_window(
                 pieces.append(_window_parts(path, start, end))
         if len({tuple(cols) for cols, _, _ in pieces}) == 1:
             # One conversion for all files: no pd.concat copy of the month.
-            frame = _parts_to_frame(
-                pieces[0][0],
-                [t for _, parts, _ in pieces for t in parts],
-                [p for _, _, pos in pieces for p in pos],
-            )
+            cols = pieces[0][0]
+            parts = [t for _, ps, _ in pieces for t in ps]
+            positions = [p for _, _, pos in pieces for p in pos]
+            # Drop every other reference to the row-group tables first. While
+            # `pieces` held them, to_pandas(self_destruct=True) freed nothing,
+            # so the month was resident twice, as Arrow and as pandas (~2 GiB
+            # more at the read's peak; NAS 2026-10-19).
+            pieces.clear()
+            frame = _parts_to_frame(cols, parts, positions)
         else:
             frame = pd.concat([_parts_to_frame(*piece) for piece in pieces], sort=False)
     except Exception as e:
@@ -384,7 +397,8 @@ def fcas_bids_from_raw(
         )
         return pd.DataFrame()
 
-    bids = raw[raw["BIDTYPE"].isin(FCAS_BID_TYPES)].copy()
+    cols = [c for c in raw.columns if c in _FCAS_SLICE_COLS]
+    bids = raw.loc[raw["BIDTYPE"].isin(FCAS_BID_TYPES), cols].copy()
     if bids.empty:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no FCAS bid rows")
         return pd.DataFrame()
@@ -410,7 +424,8 @@ def fcas_bids_from_raw(
     # aggregation conflated "offered nothing" with "no offer on record" and
     # hid intervals from downstream coverage counts. Zero rows keep flowing;
     # factor aggregation separates observed intervals from positive ones.
-    bids = bids.dropna(subset=["MAXAVAIL"])
+    if bids["MAXAVAIL"].isna().any():  # no whole-frame copy when nothing drops
+        bids = bids.dropna(subset=["MAXAVAIL"])
     bids["INTERVAL_DATETIME"] = pd.to_datetime(bids["INTERVAL_DATETIME"])
 
     logger.info(

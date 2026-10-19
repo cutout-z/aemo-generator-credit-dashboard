@@ -45,6 +45,10 @@ PRICE_SELECT = (
     + BAND_PRICE_COLS
 )
 OFFER_FACTORS_CACHE = "offer_factors.feather"
+# The columns an ENERGY volume slice of BIDPEROFFER_D carries (raw order kept).
+_VOLUME_SLICE_COLS = {
+    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "VERSIONNO", "OFFERDATE", *BAND_AVAIL_COLS,
+}
 
 
 def _month_window(year: int, month: int) -> tuple[str, str]:
@@ -138,7 +142,10 @@ def energy_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.Data
     if missing:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: missing {sorted(missing)} — skipping")
         return pd.DataFrame()
-    volumes = raw[raw["BIDTYPE"] == "ENERGY"].copy()
+    # Only the columns the offer lanes read: the FCAS capacity columns are
+    # empty for ENERGY rows and would only be copied along.
+    cols = [c for c in raw.columns if c in _VOLUME_SLICE_COLS]
+    volumes = raw.loc[raw["BIDTYPE"] == "ENERGY", cols].copy()
     if volumes.empty:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no ENERGY rows")
         return pd.DataFrame()
