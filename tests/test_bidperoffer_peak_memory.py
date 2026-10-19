@@ -155,3 +155,28 @@ class TestMimallocPurgeDelay:
 
     def test_an_explicit_setting_wins(self):
         assert self._import_src({**os.environ, "MIMALLOC_PURGE_DELAY": "10"})[0] == "10"
+
+
+class TestPeakRssIsLogged:
+    """The lane log records each run's peak, so a run can be checked after it ends."""
+
+    def test_logs_peak_in_gib(self, caplog):
+        import logging
+        import re
+
+        from src.main import _log_peak_rss
+
+        with caplog.at_level(logging.INFO, logger="src.main"):
+            _log_peak_rss("a test")
+        msg = caplog.records[-1].getMessage()
+        m = re.fullmatch(r"Peak RSS after a test: (\d+\.\d\d) GiB", msg)
+        assert m and 0 < float(m.group(1)) < 1024, msg
+
+    def test_main_logs_after_the_heavy_steps(self):
+        import inspect
+
+        from src import main as m
+
+        src = inspect.getsource(m.main)
+        for stage in ("step 3 (SCADA", "steps 3e/3e2/3e3", "the whole run"):
+            assert f'_log_peak_rss("{stage}' in src, stage
