@@ -3,10 +3,9 @@ project: AEMO Generator Credit Dashboard
 agent: claude
 branch: perf/bidperoffer-peak-memory
 merged: true
-status: PR #10 merged 2026-10-19 (70f74bec1, owner's yes); factor-step peak footprint 13-16 GiB -> 4.9 GiB on real cached months, outputs identical; lane proof pending the first scheduled run after merge
+status: PR #10 (70f74bec1) and PR #11 (b62308f7a) merged 2026-10-19 with the owner's yes; factor-step peak footprint 13-16 GiB -> 4.9 GiB on real cached months, outputs identical; lane proof pending the first scheduled run after merge
 outstanding:
-  - "Owner: merge PR #11 (logs the run's peak RSS; without it nothing records a run's peak after it ends)"
-  - "Verify the first scheduled aemo-generator-credit-daily run after #11 merges: END status=0, a normal docs/data diff, and its 'Peak RSS after the whole run' log line well under the 13 GB of 2026-10-19 (expected ~5-6 GB)"
+  - "Verify the first scheduled aemo-generator-credit-daily run after #11 (merged b62308f7a), due 2026-10-20 AWST: END status=0, a normal docs/data diff, and its 'Peak RSS after the whole run' log line well under the 13 GB of 2026-10-19 (expected ~5-6 GB)"
 ---
 
 # BIDPEROFFER_D factor step: peak memory
@@ -93,7 +92,7 @@ Cumulative peak footprint per fix: 14.29 → 6.28 (release months, read fix, nar
 ## Follow-up: PR #11 (peak-RSS logging)
 
 Nothing recorded a run's peak memory: the 13 GB was read live from `/proc`, and the runner has no GNU
-`time`. https://github.com/cutout-z/aemo-generator-credit-dashboard/pull/11 logs `ru_maxrss`
+`time`. https://github.com/cutout-z/aemo-generator-credit-dashboard/pull/11 (merged as b62308f7a, owner's yes) logs `ru_maxrss`
 (VmHWM on Linux) as `Peak RSS after <stage>: N.NN GiB` after Step 3, after the factor step and at the
 end of the run. Tests: 516 passed, 3 skipped, 12 failed, 10 errors (the same 22 `test_outputs.py`
 non-passes as main); the 2 new tests fail with the change reverted.
