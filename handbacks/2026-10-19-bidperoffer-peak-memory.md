@@ -2,16 +2,17 @@
 project: AEMO Generator Credit Dashboard
 agent: claude
 branch: perf/bidperoffer-peak-memory
-merged: false
-status: PR #10 open; factor-step peak footprint 13-16 GiB -> 4.9 GiB on real cached months, outputs identical; lane proof pending the first scheduled run after merge
+merged: true
+status: PR #10 merged 2026-10-19 (70f74bec1, owner's yes); factor-step peak footprint 13-16 GiB -> 4.9 GiB on real cached months, outputs identical; lane proof pending the first scheduled run after merge
 outstanding:
-  - "Owner: review and merge PR #10 (pipeline code: data/ETL changes need the owner's yes)"
   - "Verify the first scheduled aemo-generator-credit-daily run after merge: END status=0, a normal docs/data diff, and its process VmHWM well under the 13 GB of 2026-10-19 (expected ~5-6 GB)"
 ---
 
 # BIDPEROFFER_D factor step: peak memory
 
-PR: https://github.com/cutout-z/aemo-generator-credit-dashboard/pull/10 (commit e7a06397e).
+PR: https://github.com/cutout-z/aemo-generator-credit-dashboard/pull/10 (commit e7a06397e), merged as
+70f74bec1 on 2026-10-19 with the owner's yes. Tests on merged main: 514 passed, 3 skipped, 12 failed,
+10 errors (all non-passes in `tests/test_outputs.py`, as before).
 
 ## What changed
 
