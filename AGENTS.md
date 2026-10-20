@@ -156,14 +156,14 @@ Location: `agent-contracts/facts/AEMO-FACTS.md` (git, `cutout-z/agent-contracts`
    `docs/index.html` and pin its DOM — see *Pitfalls*. If a change breaks one, the change or the test
    is wrong, deliberately: say which in the commit message.
 
-   **Baseline on a fresh clone (2026-10-20, `fcb962267`; nemosis 3.8.1, pandas 2.3.3, pyarrow 23):
-   `514 passed, 14 failed, 3 skipped, 10 errors`.** 22 of the 24 non-passes are in
+   **Baseline on a fresh clone (2026-10-20, `fcb962267` plus #12 and #13; nemosis 3.8.1, pandas 2.3.3,
+   pyarrow 23): `549 passed, 14 failed, 3 skipped, 10 errors`.** 22 of the 24 non-passes are in
    `tests/test_outputs.py`: a `FileNotFoundError` on generated data that git ignores (`data/**`), which
    only exists on the lane machine. The other 2 are `tests/test_bidperoffer_low_memory.py`
    `TestMatchesCompiler` (a `datetime64[us]` vs `[ns]` mismatch that depends on library versions;
    they pass on the lane). That is environmental, not a regression. `docs/data/processed-cache/**`
    is *tracked*, by design (`src/processed_cache.py`: a cold runner restores from it). Your bar: the
-   514 keep passing and you add no new failure.
+   549 keep passing and you add no new failure.
 
 ## Facts
 
