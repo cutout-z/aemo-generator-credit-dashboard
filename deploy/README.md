@@ -46,11 +46,52 @@ resets onto the fetched remote instead of exiting 128.
 
 ## Raw Cache Retention
 
-Routine runs prune raw NEMOSIS files and legacy full intermittent feather
-caches older than `RAW_CACHE_RETENTION_DAYS` after validation. The default is
-120 days, which is deliberately wider than the normal 2-month mutable window.
-The compact `docs/data/processed-cache` snapshot is never pruned by this
-script.
+`deploy/prune-raw-cache.sh` runs at the end of every lane run
+(`RUN_RAW_CACHE_PRUNE=1`): after `git push` on a publishing day and after the
+"No publishable docs/data changes" check on a no-change day, still inside the
+clone's flock. It cannot fail the run: an error prints
+`WARN: raw-cache prune failed (exit N)` and the run keeps its exit code, so a
+prune problem never blocks a publish. It has two passes.
+
+**1. CSV-duplicate pass** (`RAW_CSV_PRUNE`, default `1`; set `0` to switch it
+off). nemosis keeps every downloaded month's raw `<stem>.CSV` beside the
+`<stem>.parquet` it writes, and it reads the parquet whenever one exists: the
+CSV is re-read only when the parquet is missing or on a rebuild
+(`--full-refresh`, the BIDPEROFFER_D thin-cache heal). In 2026-10 those CSVs
+were ~33 GB of the ~38 GB cache. The pass deletes `<stem>.CSV` only when all
+of these hold:
+
+- `<stem>.parquet` exists, is non-empty, opens with pyarrow and has
+  `num_rows > 0` (nemosis writes it in place, so a killed run can leave a
+  truncated parquet; the CSV is then the only good copy);
+- for `BIDPEROFFER_D`, the parquet also carries every column in
+  `src/download_bids.py` `BIDPEROFFER_REQUIRED_COLS` (else the thin-cache heal
+  would re-download the month instead of re-decoding the CSV);
+- the CSV is older than `PRUNE_CSV_MIN_AGE_MINUTES` (default 360, i.e. 6 h),
+  so a file being written is never touched;
+- it is not a `GENCONDATA` or `SPDCONNECTIONPOINTCONSTRAINT` file.
+
+Guards: the pass refuses (prints a `WARN: CSV prune refused` line, deletes
+nothing, exits 0) when the cache dir is missing or holds fewer than
+`PRUNE_MIN_PARQUETS` parquets (default 100), because an unmounted or emptied
+cache must not look like one to prune. It deletes at most
+`PRUNE_MAX_CSV_DELETE` CSVs per run (default 1000, enough for the one-off
+backlog) and warns when it hits the cap. It ends with a summary line: files
+deleted, bytes freed on disk and apparent, and how many CSVs it kept and why.
+The parquet check runs in one invocation of the lane's `${PYTHON}`.
+
+**2. mtime pass** (`RAW_CACHE_RETENTION_DAYS`, default 120; `0` switches it
+off). Deletes raw nemosis files and legacy full intermittent feather caches
+older than the retention, which is deliberately wider than the normal 2-month
+mutable window. It never deletes `GENCONDATA` or `SPDCONNECTIONPOINTCONSTRAINT`
+month files, in either name form (`PUBLIC_DVD_<TABLE>_*` before 2024-08,
+`PUBLIC_ARCHIVE#<TABLE>#FILE01#*` from 2024-08): every constraints refresh
+recompiles those tables from 2009, so losing them means re-downloading the
+whole history.
+
+Neither pass touches `data/gencondata.feather`,
+`data/spdcp_constraint_versions.feather` or the compact
+`docs/data/processed-cache` snapshot.
 
 ---
 
