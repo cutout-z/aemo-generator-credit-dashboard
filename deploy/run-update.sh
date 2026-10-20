@@ -52,14 +52,21 @@ if [[ "${RUN_TESTS}" == "1" ]]; then
   "${PYTHON}" -m pytest tests/ -v
 fi
 
-if [[ "${RUN_RAW_CACHE_PRUNE}" == "1" ]]; then
-  "${APP_DIR}/deploy/prune-raw-cache.sh"
-fi
+# Raw-cache prune runs AFTER the publish (and on no-change days, which are
+# most days), still inside the flock, and can never fail the run: a prune
+# error used to abort under `set -e` before `git add`, blocking the publish.
+prune_raw_cache() {
+  if [[ "${RUN_RAW_CACHE_PRUNE}" == "1" ]]; then
+    APP_DIR="${APP_DIR}" PYTHON="${PYTHON}" "${APP_DIR}/deploy/prune-raw-cache.sh" \
+      || echo "WARN: raw-cache prune failed (exit $?)"
+  fi
+}
 
 git add docs/data/
 
 if git diff --cached --quiet; then
   echo "No publishable docs/data changes."
+  prune_raw_cache
   exit 0
 fi
 
@@ -72,3 +79,5 @@ if [[ "${PUSH_CHANGES}" == "1" ]]; then
 else
   echo "PUSH_CHANGES=0; commit created but not pushed."
 fi
+
+prune_raw_cache
