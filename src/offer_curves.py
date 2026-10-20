@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .download_bids import fetch_bidperoffer_union
+from .download_bids import fetch_bidperoffer_union, generating_offer_rows, offer_dedupe_keys
 from .interval_days import interval_calendar_day, interval_month, interval_trading_day_str
 from .semantic_publish import write_json_if_facts_changed
 
@@ -41,13 +41,13 @@ logger = logging.getLogger(__name__)
 BAND_AVAIL_COLS = [f"BANDAVAIL{i}" for i in range(1, 11)]
 BAND_PRICE_COLS = [f"PRICEBAND{i}" for i in range(1, 11)]
 PRICE_SELECT = (
-    ["SETTLEMENTDATE", "DUID", "BIDTYPE", "OFFERDATE", "VERSIONNO"]
+    ["SETTLEMENTDATE", "DUID", "BIDTYPE", "DIRECTION", "OFFERDATE", "VERSIONNO"]
     + BAND_PRICE_COLS
 )
 OFFER_FACTORS_CACHE = "offer_factors.feather"
 # The columns an ENERGY volume slice of BIDPEROFFER_D carries (raw order kept).
 _VOLUME_SLICE_COLS = {
-    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "VERSIONNO", "OFFERDATE", *BAND_AVAIL_COLS,
+    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", "VERSIONNO", "OFFERDATE", *BAND_AVAIL_COLS,
 }
 
 
@@ -89,16 +89,20 @@ def _fetch_bid_table(
     if missing:
         logger.warning(f"{table} {year}-{month:02d}: missing {sorted(missing)} — skipping")
         return pd.DataFrame()
-    df = df[df["BIDTYPE"] == "ENERGY"].copy()
+    # ENERGY offers on the generating side only (download_bids
+    # .offer_direction_mask): a battery's LOAD price bands must never stand in
+    # for its GEN bands.
+    df = df[generating_offer_rows(df, ["ENERGY"])].copy()
     if df.empty:
         logger.warning(f"{table} {year}-{month:02d}: no ENERGY rows")
         return pd.DataFrame()
     key = "INTERVAL_DATETIME" if "INTERVAL_DATETIME" in df.columns else "SETTLEMENTDATE"
+    keys = offer_dedupe_keys(df, ["DUID", key])
     if "VERSIONNO" in df.columns:
         # Latest offer version wins (rebids); OFFERDATE breaks ties.
         df["VERSIONNO"] = pd.to_numeric(df["VERSIONNO"], errors="coerce")
         sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in df.columns else [])
-        df = df.sort_values(sort_cols).drop_duplicates(subset=["DUID", key], keep="last")
+        df = df.sort_values(sort_cols).drop_duplicates(subset=keys, keep="last")
     else:
         # Monthly BIDPEROFFER_D archive CSVs lack VERSIONNO (daily files have
         # it). Rows appear in version order, so keep the last row per
@@ -107,12 +111,12 @@ def _fetch_bid_table(
             f"{table} {year}-{month:02d}: VERSIONNO absent — deduping by file "
             "order (last row per DUID/interval)"
         )
-        df = df.drop_duplicates(subset=["DUID", key], keep="last")
+        df = df.drop_duplicates(subset=keys, keep="last")
     return df
 
 
 def fetch_energy_prices(year: int, month: int, cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
-    """Daily ENERGY offer price bands per DUID (latest version only)."""
+    """Daily ENERGY offer price bands per DUID (GEN direction, latest version only)."""
     prices = _fetch_bid_table(
         "BIDDAYOFFER_D", year, month, cache_dir, PRICE_SELECT, rebuild=rebuild
     )
@@ -131,8 +135,9 @@ def energy_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.Data
     """ENERGY volume rows sliced from a raw BIDPEROFFER_D frame (S3-12).
 
     Applies the same post-processing as the historical
-    ``fetch_energy_volumes`` / ``_fetch_bid_table`` path — ENERGY-only filter,
-    latest-offer-version dedupe, band numeric coercion — but to the run's ONE
+    ``fetch_energy_volumes`` / ``_fetch_bid_table`` path — ENERGY-only,
+    GEN-direction filter, latest-offer-version dedupe, band numeric
+    coercion — but to the run's ONE
     decoded frame, so no consumer re-invokes the nemosis compiler for a month
     the run already fetched.
     """
@@ -145,7 +150,9 @@ def energy_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.Data
     # Only the columns the offer lanes read: the FCAS capacity columns are
     # empty for ENERGY rows and would only be copied along.
     cols = [c for c in raw.columns if c in _VOLUME_SLICE_COLS]
-    volumes = raw.loc[raw["BIDTYPE"] == "ENERGY", cols].copy()
+    # Generating side only (download_bids.offer_direction_mask): a battery
+    # has a GEN and a LOAD ENERGY row per interval.
+    volumes = raw.loc[generating_offer_rows(raw, ["ENERGY"]), cols].copy()
     if volumes.empty:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no ENERGY rows")
         return pd.DataFrame()
@@ -154,7 +161,7 @@ def energy_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.Data
         volumes["VERSIONNO"] = pd.to_numeric(volumes["VERSIONNO"], errors="coerce")
         sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in volumes.columns else [])
         volumes = volumes.sort_values(sort_cols).drop_duplicates(
-            subset=["DUID", "INTERVAL_DATETIME"], keep="last"
+            subset=offer_dedupe_keys(volumes, ["DUID", "INTERVAL_DATETIME"]), keep="last"
         )
     else:
         # Monthly BIDPEROFFER_D archive CSVs lack VERSIONNO (daily files have
@@ -164,7 +171,9 @@ def energy_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.Data
             f"BIDPEROFFER_D {year}-{month:02d}: VERSIONNO absent — deduping by file "
             "order (last row per DUID/interval)"
         )
-        volumes = volumes.drop_duplicates(subset=["DUID", "INTERVAL_DATETIME"], keep="last")
+        volumes = volumes.drop_duplicates(
+            subset=offer_dedupe_keys(volumes, ["DUID", "INTERVAL_DATETIME"]), keep="last"
+        )
     for col in BAND_AVAIL_COLS:
         if col not in volumes.columns:
             logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: {col} missing — fat rebuild required")
