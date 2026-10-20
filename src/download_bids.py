@@ -88,6 +88,25 @@ BIDIRECTIONAL_DIRECTION = "BIDIRECTIONAL"
 GEN_ONLY_BID_TYPES = frozenset({"ENERGY", "RAISEREG", "LOWERREG"})
 
 
+# IESS start: from this date a bidirectional unit's rows carry DIRECTION, so a
+# frame from on or after it without the column cannot separate GEN from LOAD
+# (e.g. a parquet written by an older nemosis that only kept requested columns).
+IESS_START = pd.Timestamp("2024-06-03")
+
+
+def _warn_if_post_iess_without_direction(frame: pd.DataFrame) -> None:
+    for col in ("INTERVAL_DATETIME", "SETTLEMENTDATE"):
+        if col in frame.columns and len(frame):
+            latest = pd.to_datetime(frame[col], errors="coerce").max()
+            if pd.notna(latest) and latest >= IESS_START:
+                logger.warning(
+                    "Offer rows dated %s lack DIRECTION: battery GEN and LOAD offers "
+                    "cannot be separated; the dedupe falls back to file order. "
+                    "Rebuild that month's parquet with DIRECTION.", latest.date()
+                )
+            return
+
+
 def offer_direction_mask(frame: pd.DataFrame) -> pd.Series | None:
     """Rows of a BIDPEROFFER_D / BIDDAYOFFER_D frame on the generating side.
 
@@ -95,6 +114,7 @@ def offer_direction_mask(frame: pd.DataFrame) -> pd.Series | None:
     no DIRECTION column (keep every row). See the rule above.
     """
     if DIRECTION_COL not in frame.columns:
+        _warn_if_post_iess_without_direction(frame)
         return None
     direction = frame[DIRECTION_COL]
     keep = direction.isna() | (direction == GEN_DIRECTION)

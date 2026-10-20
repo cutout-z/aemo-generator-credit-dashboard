@@ -233,3 +233,23 @@ class TestLowMemoryRead:
         raw = self._read_warm(tmp_path, monkeypatch)
         assert "DIRECTION" not in raw.columns
         assert len(oc.energy_volumes_from_raw(raw, 2026, 9)) == 4
+
+
+def test_post_iess_frame_without_direction_warns(caplog):
+    import logging
+    from src.download_bids import offer_direction_mask
+    frame = pd.DataFrame({"DUID": ["B1"], "BIDTYPE": ["ENERGY"],
+                          "INTERVAL_DATETIME": pd.to_datetime(["2026-09-01 00:05"])})
+    with caplog.at_level(logging.WARNING):
+        assert offer_direction_mask(frame) is None
+    assert "lack DIRECTION" in caplog.text
+
+
+def test_pre_iess_frame_without_direction_is_silent(caplog):
+    import logging
+    from src.download_bids import offer_direction_mask
+    frame = pd.DataFrame({"DUID": ["B1"], "BIDTYPE": ["ENERGY"],
+                          "INTERVAL_DATETIME": pd.to_datetime(["2023-09-01 00:05"])})
+    with caplog.at_level(logging.WARNING):
+        assert offer_direction_mask(frame) is None
+    assert "lack DIRECTION" not in caplog.text
