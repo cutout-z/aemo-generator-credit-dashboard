@@ -1,8 +1,8 @@
 {
  "guards": {
-  "daily_age_days": 19,
+  "daily_age_days": 20,
   "daily_freshness": "pass",
-  "monthly_age_days": 19,
+  "monthly_age_days": 20,
   "monthly_freshness": "pass"
  },
  "outputs": {
@@ -10,12 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-19T21:22:49Z",
+  "finished_utc": "2026-10-20T10:48:19Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-10-19T21:15:08Z"
+  "started_utc": "2026-10-20T10:42:18Z"
  },
  "schema_version": 1,
  "sources": {
@@ -43,9 +43,9 @@
   },
   "fcas_factors": {
    "asof_month": "2026-09",
-   "attempted_months": 3,
+   "attempted_months": 2,
    "error": null,
-   "months_with_data": 3,
+   "months_with_data": 2,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
@@ -105,18 +105,18 @@
   },
   "offer_curves": {
    "asof_month": "2026-09",
-   "attempted_months": 3,
+   "attempted_months": 2,
    "error": null,
-   "months_with_data": 3,
+   "months_with_data": 2,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
   },
   "offer_factors": {
    "asof_month": "2026-09",
-   "attempted_months": 3,
+   "attempted_months": 2,
    "error": null,
-   "months_with_data": 3,
+   "months_with_data": 2,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
