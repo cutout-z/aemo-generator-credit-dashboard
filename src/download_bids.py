@@ -43,7 +43,8 @@ FCAS_BID_TYPES = [
 #   - ENERGY offer volumes: BANDAVAIL1-10 (per-interval band volumes)
 # VERSIONNO/OFFERDATE drive rebid dedupe and are best-effort: monthly archive
 # vintages may lack them, so they are requested but never required for heal.
-_BIDPEROFFER_KEYS = ["INTERVAL_DATETIME", "DUID", "BIDTYPE", "VERSIONNO"]
+# DIRECTION (IESS, 2024-06) is best-effort too: pre-IESS archives lack it.
+_BIDPEROFFER_KEYS = ["INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", "VERSIONNO"]
 _BIDPEROFFER_FCAS_COLS = ["MAXAVAIL", "ENABLEMENTMIN", "ENABLEMENTMAX"]
 BIDPEROFFER_UNION_COLS = (
     _BIDPEROFFER_KEYS
@@ -51,7 +52,8 @@ BIDPEROFFER_UNION_COLS = (
     + [f"BANDAVAIL{i}" for i in range(1, 11)]
 )
 # Columns a healthy fetch must actually carry (VERSIONNO may be absent from
-# monthly archive CSVs; the dedupe then degrades with a warning).
+# monthly archive CSVs; the dedupe then degrades with a warning. DIRECTION is
+# absent before IESS; offer_direction_mask then treats every row as GEN).
 BIDPEROFFER_REQUIRED_COLS = {
     "INTERVAL_DATETIME", "DUID", "BIDTYPE",
     "MAXAVAIL", "ENABLEMENTMIN", "ENABLEMENTMAX",
@@ -62,7 +64,57 @@ _FCAS_REQUIRED = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "MAXAVAIL"}
 # The columns an FCAS slice carries (the raw frame's order is kept). The
 # BANDAVAIL bands are ENERGY volumes: copying them for ~13M FCAS rows a month
 # cost ~1 GiB the FCAS lane never reads.
-_FCAS_SLICE_COLS = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "VERSIONNO", *_BIDPEROFFER_FCAS_COLS}
+_FCAS_SLICE_COLS = {
+    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", "VERSIONNO", *_BIDPEROFFER_FCAS_COLS,
+}
+
+# ── Offer direction: the ONE rule every BIDPEROFFER_D / BIDDAYOFFER_D consumer uses ──
+# Since IESS (June 2024) a bidirectional unit (a battery) offers each service
+# per DIRECTION: ENERGY and regulation FCAS carry a GEN row AND a LOAD row
+# for the same unit and interval (BIDDAYOFFER_D price bands differ by
+# DIRECTION too); contingency FCAS carries one BIDIRECTIONAL row. Ordinary
+# generators carry GEN, scheduled loads LOAD. This dashboard measures a
+# unit's generating (discharge) side, so a consumer keeps:
+#   - ENERGY, RAISEREG, LOWERREG: DIRECTION == "GEN" only;
+#   - contingency FCAS: "GEN" or "BIDIRECTIONAL";
+#   - "LOAD" rows: never (no consumer here measures charging).
+# A frame without DIRECTION (pre-IESS archives), or a null DIRECTION in a
+# mixed-vintage frame, is the old single-direction world: kept, as GEN.
+# Without this, a (DUID, interval) dedupe kept GEN or LOAD by file order and
+# the FCAS lane averaged both directions' MAXAVAIL.
+DIRECTION_COL = "DIRECTION"
+GEN_DIRECTION = "GEN"
+BIDIRECTIONAL_DIRECTION = "BIDIRECTIONAL"
+GEN_ONLY_BID_TYPES = frozenset({"ENERGY", "RAISEREG", "LOWERREG"})
+
+
+def offer_direction_mask(frame: pd.DataFrame) -> pd.Series | None:
+    """Rows of a BIDPEROFFER_D / BIDDAYOFFER_D frame on the generating side.
+
+    Returns a boolean Series aligned to ``frame``, or None when the frame has
+    no DIRECTION column (keep every row). See the rule above.
+    """
+    if DIRECTION_COL not in frame.columns:
+        return None
+    direction = frame[DIRECTION_COL]
+    keep = direction.isna() | (direction == GEN_DIRECTION)
+    if "BIDTYPE" in frame.columns:
+        keep |= (direction == BIDIRECTIONAL_DIRECTION) & ~frame["BIDTYPE"].isin(GEN_ONLY_BID_TYPES)
+    return keep
+
+
+def generating_offer_rows(frame: pd.DataFrame, bid_types) -> pd.Series:
+    """Rows of ``bid_types`` on the generating side: the slice every offer
+    consumer takes (BIDTYPE filter AND ``offer_direction_mask``)."""
+    rows = frame["BIDTYPE"].isin(bid_types)
+    direction = offer_direction_mask(frame)
+    return rows if direction is None else rows & direction
+
+
+def offer_dedupe_keys(frame: pd.DataFrame, keys: list[str]) -> list[str]:
+    """Dedupe keys for offer rows: ``keys`` plus DIRECTION when the frame has it,
+    so a GEN offer and a LOAD offer are never collapsed into one row."""
+    return keys + [DIRECTION_COL] if DIRECTION_COL in frame.columns else list(keys)
 
 
 def _nemosis_cache_path(cache_dir: str, table: str, year: int, month: int) -> Path:
@@ -108,7 +160,7 @@ def _cached_parquet_columns(cache_dir: str, table: str, year: int, month: int):
 # falls back to the compiler.
 
 _ARCHIVE_TS_FORMAT = "%Y/%m/%d %H:%M:%S"
-_TEXT_COLS = {"DUID", "BIDTYPE"}
+_TEXT_COLS = {"DUID", "BIDTYPE", "DIRECTION"}
 
 
 def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
@@ -376,9 +428,11 @@ def fcas_bids_from_raw(
     """Slice + post-process the FCAS rows out of a raw BIDPEROFFER_D frame.
 
     Mirrors the post-fetch steps of the historical ``fetch_fcas_bids_month``:
-    requires the FCAS columns, keeps only the 8 FCAS bid types, dedupes to the
-    latest offer version per (unit, service, interval) when VERSIONNO is
-    present, and returns rows with columns:
+    requires the FCAS columns, keeps only the 8 FCAS bid types on the
+    generating side (``offer_direction_mask``: regulation GEN, contingency GEN
+    or BIDIRECTIONAL), dedupes to the latest offer version per (unit, service,
+    direction, interval) when VERSIONNO is present, and returns rows with
+    columns (plus DIRECTION when the archive carries it):
         INTERVAL_DATETIME, DUID, BIDTYPE, MAXAVAIL, ENABLEMENTMIN, ENABLEMENTMAX
     ENERGY bids are dropped here. MAXAVAIL == 0 rows are KEPT (S3-05): an
     explicit zero offer is observed source coverage, not an absence.
@@ -398,7 +452,7 @@ def fcas_bids_from_raw(
         return pd.DataFrame()
 
     cols = [c for c in raw.columns if c in _FCAS_SLICE_COLS]
-    bids = raw.loc[raw["BIDTYPE"].isin(FCAS_BID_TYPES), cols].copy()
+    bids = raw.loc[generating_offer_rows(raw, FCAS_BID_TYPES), cols].copy()
     if bids.empty:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no FCAS bid rows")
         return pd.DataFrame()
@@ -410,7 +464,7 @@ def fcas_bids_from_raw(
     if "VERSIONNO" in bids.columns:
         bids["VERSIONNO"] = pd.to_numeric(bids["VERSIONNO"], errors="coerce")
         bids = bids.sort_values("VERSIONNO").drop_duplicates(
-            subset=["INTERVAL_DATETIME", "DUID", "BIDTYPE"], keep="last"
+            subset=offer_dedupe_keys(bids, ["INTERVAL_DATETIME", "DUID", "BIDTYPE"]), keep="last"
         )
     else:
         logger.warning(
