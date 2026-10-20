@@ -10,16 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-20T11:49:17Z",
+  "finished_utc": "2026-10-20T21:22:08Z",
   "mode": "incremental",
-  "months_back": 28,
-  "problems": [
-   "fcas_factors: degraded \u2014 2024-06: Compiling data for table BIDPEROFFER_D failed. This probably because none of the requested data could be download from AEMO. Check your internet connection and that the requested data is archived on: https://nemweb.com.au see nemosis.defaults for table specific urls.",
-   "offer_factors: degraded \u2014 2024-06: Compiling data for table BIDPEROFFER_D failed. This probably because none of the requested data could be download from AEMO. Check your internet connection and that the requested data is archived on: https://nemweb.com.au see nemosis.defaults for table specific urls.",
-   "offer_curves: degraded \u2014 2024-06: Compiling data for table BIDPEROFFER_D failed. This probably because none of the requested data could be download from AEMO. Check your internet connection and that the requested data is archived on: https://nemweb.com.au see nemosis.defaults for table specific urls."
-  ],
-  "result": "degraded",
-  "started_utc": "2026-10-20T10:57:12Z"
+  "months_back": 2,
+  "problems": [],
+  "result": "ok",
+  "started_utc": "2026-10-20T21:15:05Z"
  },
  "schema_version": 1,
  "sources": {
@@ -47,12 +43,12 @@
   },
   "fcas_factors": {
    "asof_month": "2026-09",
-   "attempted_months": 28,
-   "error": "2024-06: Compiling data for table BIDPEROFFER_D failed. This probably because none of the requested data could be download from AEMO. Check your internet connection and that the requested data is archived on: https://nemweb.com.au see nemosis.defaults for table specific urls.",
-   "months_with_data": 26,
+   "attempted_months": 2,
+   "error": null,
+   "months_with_data": 2,
    "note": null,
    "retained_last_good": false,
-   "status": "degraded"
+   "status": "ok"
   },
   "geninfo": {
    "asof_month": "2026-07",
@@ -109,21 +105,21 @@
   },
   "offer_curves": {
    "asof_month": "2026-09",
-   "attempted_months": 28,
-   "error": "2024-06: Compiling data for table BIDPEROFFER_D failed. This probably because none of the requested data could be download from AEMO. Check your internet connection and that the requested data is archived on: https://nemweb.com.au see nemosis.defaults for table specific urls.",
-   "months_with_data": 26,
+   "attempted_months": 2,
+   "error": null,
+   "months_with_data": 2,
    "note": null,
    "retained_last_good": false,
-   "status": "degraded"
+   "status": "ok"
   },
   "offer_factors": {
    "asof_month": "2026-09",
-   "attempted_months": 28,
-   "error": "2024-06: Compiling data for table BIDPEROFFER_D failed. This probably because none of the requested data could be download from AEMO. Check your internet connection and that the requested data is archived on: https://nemweb.com.au see nemosis.defaults for table specific urls.",
-   "months_with_data": 26,
+   "attempted_months": 2,
+   "error": null,
+   "months_with_data": 2,
    "note": null,
    "retained_last_good": false,
-   "status": "degraded"
+   "status": "ok"
   }
  }
 }

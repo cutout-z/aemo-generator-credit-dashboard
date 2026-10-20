@@ -12,13 +12,13 @@
     },
     {
       "name": "fcas_aggregates.feather",
-      "sha256": "37f795249e72c331f2b21ba93022117c83604a5afb292d79a2b50f4269194b94",
-      "size_bytes": 19042
+      "sha256": "c5fb7b1172e8b6a0d600e0e0d5130948dc61278267a0ea78e1042ea2e1207a4e",
+      "size_bytes": 18738
     },
     {
       "name": "fcas_factors.feather",
-      "sha256": "809756f95ee6b375f69a0b48c91c0ecf8f29cc335870696b0dbdff8471567640",
-      "size_bytes": 342842
+      "sha256": "8a18e326c38cee32518e5011d8954f4cff417f1462b671128c5c963983d7058e",
+      "size_bytes": 217426
     },
     {
       "name": "generators.feather",
@@ -72,13 +72,13 @@
     },
     {
       "name": "offer_curves.feather",
-      "sha256": "6eca774cd0958155f6b8cd18d6dfacfd0e055135de5f99bb34e2f1159ffa932d",
-      "size_bytes": 1984802
+      "sha256": "befb3bc2ce245bce915c68f73c2365ecea4d111f2e2b715481b72fb3e310322d",
+      "size_bytes": 1784722
     },
     {
       "name": "offer_factors.feather",
-      "sha256": "3a84c97ad536e135d0e0403de98b7d50afd6ab69fcb46f416350326b3e089737",
-      "size_bytes": 531690
+      "sha256": "a6ba03396954a6a0352a0c30c4b3effc20edf6422f871310f24112f83090c687",
+      "size_bytes": 274802
     }
   ],
   "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
