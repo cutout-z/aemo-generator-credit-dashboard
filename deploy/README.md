@@ -81,9 +81,12 @@ deleted, bytes freed on disk and apparent, and how many CSVs it kept and why.
 The parquet check runs in one invocation of the lane's `${PYTHON}`.
 
 **2. mtime pass** (`RAW_CACHE_RETENTION_DAYS`, default 120; `0` switches it
-off). Deletes raw nemosis files and legacy full intermittent feather caches
+off). Deletes raw nemosis CSVs and legacy full intermittent feather caches
 older than the retention, which is deliberately wider than the normal 2-month
-mutable window. It never deletes `GENCONDATA` or `SPDCONNECTIONPOINTCONSTRAINT`
+mutable window. It never deletes a parquet: once the CSVs are gone a parquet
+is the only copy of its month (about 5 GB for 2021-2026), and the October 2026
+full refreshes gave every cache file the same mtime, so an age rule on
+parquets would delete the whole history in one run. It never deletes `GENCONDATA` or `SPDCONNECTIONPOINTCONSTRAINT`
 month files, in either name form (`PUBLIC_DVD_<TABLE>_*` before 2024-08,
 `PUBLIC_ARCHIVE#<TABLE>#FILE01#*` from 2024-08): every constraints refresh
 recompiles those tables from 2009, so losing them means re-downloading the

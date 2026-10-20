@@ -16,10 +16,13 @@
 #    look like a cache to prune); at most PRUNE_MAX_CSV_DELETE files go per
 #    run. GENCONDATA and SPDCONNECTIONPOINTCONSTRAINT files are never touched.
 #
-# 2. mtime pass (RAW_CACHE_RETENTION_DAYS > 0): delete raw nemosis files and
+# 2. mtime pass (RAW_CACHE_RETENTION_DAYS > 0): delete raw nemosis CSVs and
 #    legacy full intermittent feathers older than the retention, EXCEPT the
 #    GENCONDATA / SPDCONNECTIONPOINTCONSTRAINT month files (both name forms),
-#    which every constraints refresh recompiles from 2009 onwards.
+#    which every constraints refresh recompiles from 2009 onwards. Parquets
+#    are never aged out: with the CSVs gone they are the only copy of each
+#    month (~5 GB for 2021-2026), and every cache file carries the same
+#    October 2026 mtime, so an age rule would delete the whole history at once.
 #
 # data/gencondata.feather and data/spdcp_constraint_versions.feather sit
 # outside the nemosis cache and match neither pass.
@@ -153,8 +156,8 @@ if [[ "${RAW_CACHE_RETENTION_DAYS}" -le 0 ]]; then
 fi
 
 if [[ -d "${NEMOSIS_CACHE_DIR}" ]]; then
-  echo "Pruning raw NEMOSIS cache files older than ${RAW_CACHE_RETENTION_DAYS} days from ${NEMOSIS_CACHE_DIR} (GENCONDATA/SPDCONNECTIONPOINTCONSTRAINT kept)"
-  find "${NEMOSIS_CACHE_DIR}" -type f -mtime "+${RAW_CACHE_RETENTION_DAYS}" \
+  echo "Pruning raw NEMOSIS CSVs older than ${RAW_CACHE_RETENTION_DAYS} days from ${NEMOSIS_CACHE_DIR} (parquets, GENCONDATA, SPDCONNECTIONPOINTCONSTRAINT kept)"
+  find "${NEMOSIS_CACHE_DIR}" -type f -iname '*.csv' -mtime "+${RAW_CACHE_RETENTION_DAYS}" \
     ! -name '*GENCONDATA*' ! -name '*SPDCONNECTIONPOINTCONSTRAINT*' \
     -print -delete
 fi

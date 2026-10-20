@@ -198,7 +198,7 @@ def test_raw_csv_prune_off(tmp_path, cache):
 
 
 def test_csv_pass_failure_does_not_stop_mtime_pass(tmp_path, cache):
-    old = cache / "PUBLIC_DVD_DISPATCHPRICE_202001010000.parquet"
+    old = cache / "PUBLIC_DVD_DISPATCHPRICE_202001010000.CSV"
     old.write_bytes(b"x")
     _age(old, 200 * DAYS)
     run = _prune(tmp_path, PYTHON="/nonexistent/python")
@@ -218,9 +218,12 @@ def test_mtime_pass_skips_gencondata_and_spdcp(tmp_path, cache):
         cache / "PUBLIC_ARCHIVE#SPDCONNECTIONPOINTCONSTRAINT#FILE01#202501010000.parquet",
         data / "gencondata.feather",
         data / "spdcp_constraint_versions.feather",
+        # parquets are the only copy once the CSVs go: never aged out
+        cache / "PUBLIC_DVD_DISPATCHPRICE_202001010000.parquet",
+        cache / "PUBLIC_ARCHIVE#BIDPEROFFER_D#FILE01#202408010000.parquet",
     ]
     doomed = [
-        cache / "PUBLIC_DVD_DISPATCHPRICE_202001010000.parquet",
+        cache / "PUBLIC_DVD_DISPATCHPRICE_202001010000.CSV",
         cache / "PUBLIC_ARCHIVE#DISPATCHLOAD#FILE01#202408010000.CSV",
         data / "intermittent_2024_01.feather",
     ]
