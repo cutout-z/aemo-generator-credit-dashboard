@@ -35,8 +35,8 @@ from .market_factors import (
     build_market_factors, build_quarterly_summary, check_qed_divergence,
     months_needing_backfill, QED_NEM_SPREAD_AUD_MWH,
 )
-from .download_bids import fcas_bids_from_raw, fetch_bidperoffer_union
-from .fcas_factor import compute_fcas_factors
+from .download_bids import fcas_bids_from_raw, fcas_load_bids_from_raw, fetch_bidperoffer_union
+from .fcas_factor import compute_fcas_factors, fcas_load_fields, with_fcas_load_columns
 from .factor_cache import merge_month_rows
 from .loss_factors import fetch_loss_factor_periods
 from .offer_curves import (
@@ -44,12 +44,16 @@ from .offer_curves import (
     OFFER_CURVES_DAILY_CACHE,
     OFFER_FACTORS_CACHE,
     OFFER_FACTOR_COMPLETENESS_COLS,
+    compute_load_offer_side,
     compute_offer_curves,
     compute_offer_curves_daily,
     compute_offer_features,
+    energy_load_volumes_from_raw,
     energy_volumes_from_raw,
-    fetch_energy_prices,
+    fetch_energy_price_sides,
     keep_most_complete_offer_rows,
+    with_load_curve_columns,
+    with_load_offer_columns,
     bound_published_curves,
     write_offer_curve_files,
 )
@@ -651,6 +655,7 @@ def _run_optional_factor_lanes(
     skip_fcas_factors: bool,
     skip_offer_factors: bool,
     full_refresh: bool,
+    load_daily_out: list | None = None,
 ) -> tuple[
     pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame | None,
     LaneRun, LaneRun, LaneRun,
@@ -679,6 +684,13 @@ def _run_optional_factor_lanes(
     fcas_lane, offer_lane, curve_lane)`` — ``offer_curves_daily`` is None when
     no daily stacks were computed (skipped lane or failed month), so the
     caller leaves the published per-DUID day files untouched.
+
+    Bidirectional units (batteries): each month also slices the charging
+    (LOAD) side's ENERGY and regulation FCAS rows and adds them to the same
+    facts as separate ``*_load`` columns (the generating-side columns are
+    unchanged). The charging side's daily stacks are appended to
+    ``load_daily_out`` when a list is passed. A load-side failure degrades the
+    lane, with the error surfaced; it never drops the generating side.
     """
     fcas_cache = data_dir / "fcas_factors.feather"
     offer_cache = data_dir / OFFER_FACTORS_CACHE
@@ -730,7 +742,7 @@ def _run_optional_factor_lanes(
         # plain rebinding frees them only after the new read returns, so the
         # last month's raw/bids/prices/volumes (~5 GiB) stayed resident under
         # this month's read: the run's peak (NAS 2026-10-19, VmHWM 13 GB).
-        raw = bids = prices = volumes = None
+        raw = bids = prices = volumes = load_prices = load_volumes = None
         # ONE BIDPEROFFER_D fetch/decode per month, shared by every consumer.
         try:
             raw = fetch_bidperoffer_union(year, month, cache_dir, rebuild=rebuild)
@@ -751,6 +763,19 @@ def _run_optional_factor_lanes(
                 bids = fcas_bids_from_raw(raw, year, month)
                 if bids is not None and not bids.empty:
                     facts = compute_fcas_factors(bids, year, month)
+                    bids = None
+                    # Charging-side regulation rows (batteries), sliced only
+                    # after the generating slice is freed, reduced to a few
+                    # numbers per unit and added as separate *_load columns.
+                    try:
+                        facts = with_fcas_load_columns(
+                            facts, fcas_load_fields(fcas_load_bids_from_raw(raw, year, month)),
+                        )
+                    except Exception as e:
+                        fcas_errors.append(f"{month_label}: load side: {e}")
+                        logger.warning(
+                            "FCAS load-side slice failed for %s: %s", month_label, e,
+                        )
                     if not facts.empty:
                         fcas_frames.append(facts)
             except Exception as e:
@@ -767,13 +792,30 @@ def _run_optional_factor_lanes(
             # shared source degrades both offer lanes; compute failures after
             # that degrade only the lane that failed.
             try:
-                prices = fetch_energy_prices(year, month, cache_dir)
+                prices, load_prices = fetch_energy_price_sides(year, month, cache_dir)
                 if prices is None or prices.empty:
                     logger.warning(
                         f"BIDDAYOFFER_D {month_label}: no price rows — "
                         "offer lanes skip this month"
                     )
                     continue
+                # Charging side first, computed and released before the
+                # generating slice, so the month's peak (raw + one ENERGY
+                # slice) does not grow by the LOAD slice.
+                load_feats = load_curves = None
+                try:
+                    load_volumes = energy_load_volumes_from_raw(raw, year, month)
+                    load_feats, load_curves, load_daily = compute_load_offer_side(
+                        load_prices, load_volumes, month_label,
+                    )
+                    if load_daily_out is not None and not load_daily.empty:
+                        load_daily_out.append(load_daily)
+                except Exception as e:
+                    msg = f"{month_label}: load side: {e}"
+                    logger.warning("Offer load side failed for %s: %s", month_label, e)
+                    offer_errors.append(msg)
+                    curve_errors.append(msg)
+                load_prices = load_volumes = load_daily = None
                 volumes = energy_volumes_from_raw(raw, year, month)
                 raw = None  # every consumer has sliced it
                 if volumes is None or volumes.empty:
@@ -789,7 +831,9 @@ def _run_optional_factor_lanes(
                 curve_errors.append(msg)
                 continue
             try:  # offer-factor lane
-                feats = compute_offer_features(prices, volumes, month_label)
+                feats = with_load_offer_columns(
+                    compute_offer_features(prices, volumes, month_label), load_feats,
+                )
                 if not feats.empty:
                     logger.info(
                         f"Offer factors {month_label}: {feats['duid'].nunique()} DUIDs"
@@ -803,7 +847,9 @@ def _run_optional_factor_lanes(
             try:  # offer-curve lane: monthly + daily share the resident frames
                 # in ONE guard — a failed month must not advance the daily
                 # window while its monthly curve could not be derived.
-                curves = compute_offer_curves(prices, volumes, month_label)
+                curves = with_load_curve_columns(
+                    compute_offer_curves(prices, volumes, month_label), load_curves,
+                )
                 if not curves.empty:
                     curve_frames.append(curves)
                     logger.info(
@@ -1310,12 +1356,14 @@ def main():
         "=== Steps 3e/3e2/3e3: FCAS + offer factors and offer curves "
         "(%d month(s), one fetch per table/month) ===", len(factor_months),
     )
+    load_daily_frames: list[pd.DataFrame] = []
     (fcas_factors, offer_factors, offer_curves, offer_curves_daily,
      fcas_lane, offer_lane, curve_lane) = _run_optional_factor_lanes(
         data_dir, factor_months,
         skip_fcas_factors=args.skip_fcas_factors,
         skip_offer_factors=args.skip_offer_factors,
         full_refresh=args.full_refresh,
+        load_daily_out=load_daily_frames,
     )
     _log_peak_rss("steps 3e/3e2/3e3 (FCAS + offer factors, offer curves)")
     if offer_curves_daily is not None and not offer_curves_daily.empty:
@@ -1330,9 +1378,18 @@ def main():
         # (last-known-good) and the manifest records the lane as degraded —
         # they are never rewritten from stale frames.
         offer_curves_daily.to_feather(data_dir / OFFER_CURVES_DAILY_CACHE)
+        # Batteries' charging-side day stacks ride in the same files as
+        # ``load_days``, bounded the same way.
+        load_daily = (
+            bound_published_curves(
+                pd.concat(load_daily_frames, ignore_index=True),
+                generators["DUID"], config.OFFER_CURVE_WINDOW_MONTHS,
+            ) if load_daily_frames else None
+        )
         write_offer_curve_files(
             bound_published_curves(offer_curves_daily, generators["DUID"], config.OFFER_CURVE_WINDOW_MONTHS),
             str(docs_data_dir),
+            load_curves=load_daily,
         )
 
     factor_lanes = [

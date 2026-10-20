@@ -36,6 +36,45 @@ re-doing the access research (all URLs below were live-verified 3 Sep 2026).
   current registration-list row) are not published at all after S3-06, so
   the dashboard never offers them and no offer file is written.
 
+### Battery charging side (Oct 2026)
+- **What**: since IESS (3 Jun 2024) a bidirectional unit (a battery) has one
+  `DIRECTION = GEN` row (discharging) and one `LOAD` row (charging) per unit
+  and interval for ENERGY and regulation FCAS (`RAISEREG`, `LOWERREG`) in
+  `BIDPEROFFER_D`, and per day in `BIDDAYOFFER_D`. Contingency FCAS carries one
+  `BIDIRECTIONAL` row and stays one combined side. Ordinary generators carry
+  GEN only; pre-IESS archives have no `DIRECTION` column.
+- **Rule** (`src/download_bids.py`): every existing field is the generating
+  side (`generating_offer_rows`: GEN, or BIDIRECTIONAL for contingency FCAS);
+  the charging side comes from `load_offer_rows` (LOAD only) and is published
+  as ADDITIONAL fields, only for units that have LOAD rows. Nothing existing
+  is renamed or changes meaning, and a unit without LOAD rows gets no new
+  field.
+- **New fields** (the same functions, run on the LOAD rows):
+  - `processed-cache/offer_factors.feather`: `offered_mw_avg_load`,
+    `offered_mw_p95_load`, `price_band_min_avg_load`,
+    `price_band_max_avg_load`, `negative_band_day_share_load`,
+    `top2_band_volume_share_load`, `vol_intervals_observed_load`.
+  - `processed-cache/offer_curves.feather`: `price_load`, `cum_mw_load` on
+    each (duid, month, band) row.
+  - `processed-cache/fcas_factors.feather`: `fcas_load_observed_intervals`
+    (intervals with any LOAD regulation offer, zero included),
+    `fcas_avg_RAISEREG_load_mw`, `fcas_avg_LOWERREG_load_mw` (average
+    positive offered MW).
+  - `generators/{DUID}.json`: `offers.load` (the `offers` figures for the
+    charging side, plus `intervals_observed` and `price_asof_month` when it
+    differs), `offer_curve.load_bands` (same shape as `bands`),
+    `fcas_participation.regulation_by_direction`
+    (`{"GEN": {"RAISEREG", "LOWERREG"}, "LOAD": {...}, "load_observed_intervals"}`,
+    average positive offered MW; null when a side offered only zero).
+  - `offer_curves/{DUID}.json`: `load_days` (same shape as `days`).
+- **History**: months computed before this change carry no `*_load` values;
+  one lane run with `--months-back 28` recomputes them. Until then a battery
+  shows its charging side as "not in the published data", never a filled-in
+  number.
+- **Reading a charging stack**: a LOAD band's MW is taken when the price is at
+  or below that band's price. The page shows the two sides separately and
+  never adds them.
+
 ### AEMO network outages (Sep 2026)
 - **What**: Transmission outage windows from the MMSDM monthly
   `NETWORK_OUTAGEDETAIL` archive (LINE / CB / TRANS / BUS / CAP / SVC / REAC …)

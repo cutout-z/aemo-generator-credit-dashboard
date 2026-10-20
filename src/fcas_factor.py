@@ -79,6 +79,9 @@ def compute_fcas_factors(
         fcas_avg_max_avail_mw        (mean offered MW across positive offers),
         fcas_max_max_avail_mw        (peak positive offered MW),
         and per-service avg positive offered MW: fcas_avg_<BIDTYPE>_mw
+
+    A bidirectional unit's charging-side regulation offers are added
+    afterwards, as separate columns, by ``with_fcas_load_columns``.
     """
     month_label = f"{year}-{month:02d}"
     intervals_in_month = monthrange(year, month)[1] * 24 * 12
@@ -157,6 +160,47 @@ def compute_fcas_factors(
         f"source_complete={source_complete}"
     )
     return result
+
+
+def fcas_load_fields(load_bids: pd.DataFrame | None) -> dict:
+    """``{duid: {*_load column: value}}`` from charging-side regulation rows
+    (download_bids.fcas_load_bids_from_raw):
+        fcas_load_observed_intervals  (distinct intervals with any LOAD
+                                       regulation offer, incl. zero)
+        fcas_avg_RAISEREG_load_mw, fcas_avg_LOWERREG_load_mw
+                                      (avg positive offered MW, LOAD side)
+    """
+    if load_bids is None or load_bids.empty:
+        return {}
+    out: dict = {}
+    for duid, g in load_bids.groupby("DUID"):
+        fields = {"fcas_load_observed_intervals": int(g["INTERVAL_DATETIME"].nunique())}
+        for btype in sorted(g["BIDTYPE"].unique()):
+            sgp = g[(g["BIDTYPE"] == btype) & (g["MAXAVAIL"] > 0)]
+            if not sgp.empty:
+                fields[f"fcas_avg_{btype}_load_mw"] = round(float(sgp["MAXAVAIL"].mean()), 2)
+        out[duid] = fields
+    return out
+
+
+def with_fcas_load_columns(facts: pd.DataFrame, load_fields: dict | None) -> pd.DataFrame:
+    """``facts`` (compute_fcas_factors: the generating side, unchanged) plus the
+    charging side's ``*_load`` columns for the units that have them. Units
+    without generating-side facts are not added; with no load fields the frame
+    is returned as is (no column added)."""
+    if facts is None or facts.empty or not load_fields:
+        return facts
+    load = pd.DataFrame.from_dict(load_fields, orient="index")
+    load = load.loc[load.index.intersection(facts["duid"])]
+    if load.empty:
+        return facts
+    load = load.rename_axis("duid").reset_index()
+    return facts.merge(load, on="duid", how="left")
+
+
+# The regulation services a bidirectional unit offers per direction, as the
+# doc's ``regulation_by_direction`` block publishes them.
+REGULATION_SERVICES = ("RAISEREG", "LOWERREG")
 
 
 def attach_fcas_factor_doc(
@@ -240,5 +284,15 @@ def attach_fcas_factor_doc(
                     "positive_intervals": _i(later_partial, lp.name, "fcas_positive_intervals"),
                     "observed_through": None if pd.isna(lp_through) else str(lp_through),
                 }
+
+    # A bidirectional unit (battery): regulation offers per direction, for the
+    # same headline month. Only units with load-side rows that month get it.
+    load_obs = _i(rs, base_idx, "fcas_load_observed_intervals")
+    if load_obs:
+        out["regulation_by_direction"] = {
+            "GEN": {s: _f(rs, base_idx, f"fcas_avg_{s}_mw") for s in REGULATION_SERVICES},
+            "LOAD": {s: _f(rs, base_idx, f"fcas_avg_{s}_load_mw") for s in REGULATION_SERVICES},
+            "load_observed_intervals": load_obs,
+        }
 
     doc["fcas_participation"] = out

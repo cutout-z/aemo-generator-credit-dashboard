@@ -71,7 +71,7 @@ class TestFactorDriverReleasesMonths:
             return raw
 
         monkeypatch.setattr("src.main.fetch_bidperoffer_union", fake_fetch)
-        monkeypatch.setattr("src.main.fetch_energy_prices", lambda y, m, d: _prices(y, m))
+        monkeypatch.setattr("src.main.fetch_energy_price_sides", lambda y, m, d: (_prices(y, m), pd.DataFrame()))
         fcas, offer, curves, *_ = _run_optional_factor_lanes(
             tmp_path, [(2026, 7), (2026, 8), (2026, 9)],
             skip_fcas_factors=False, skip_offer_factors=False, full_refresh=False,

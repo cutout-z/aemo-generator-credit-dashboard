@@ -73,19 +73,28 @@ _FCAS_SLICE_COLS = {
 # per DIRECTION: ENERGY and regulation FCAS carry a GEN row AND a LOAD row
 # for the same unit and interval (BIDDAYOFFER_D price bands differ by
 # DIRECTION too); contingency FCAS carries one BIDIRECTIONAL row. Ordinary
-# generators carry GEN, scheduled loads LOAD. This dashboard measures a
-# unit's generating (discharge) side, so a consumer keeps:
+# generators carry GEN, scheduled loads LOAD. The dashboard's existing
+# fields measure a unit's generating (discharge) side, so those consumers
+# keep (``generating_offer_rows``):
 #   - ENERGY, RAISEREG, LOWERREG: DIRECTION == "GEN" only;
 #   - contingency FCAS: "GEN" or "BIDIRECTIONAL";
-#   - "LOAD" rows: never (no consumer here measures charging).
+#   - "LOAD" rows: never.
+# The charging side is published SEPARATELY, as additional ``*_load`` fields
+# (``load_offer_rows``): ENERGY and regulation FCAS rows with
+# DIRECTION == "LOAD", and nothing else. Contingency FCAS has no LOAD row; it
+# stays one combined (BIDIRECTIONAL) side.
 # A frame without DIRECTION (pre-IESS archives), or a null DIRECTION in a
-# mixed-vintage frame, is the old single-direction world: kept, as GEN.
-# Without this, a (DUID, interval) dedupe kept GEN or LOAD by file order and
-# the FCAS lane averaged both directions' MAXAVAIL.
+# mixed-vintage frame, is the old single-direction world: kept, as GEN, and
+# it has no load side. Without this, a (DUID, interval) dedupe kept GEN or
+# LOAD by file order and the FCAS lane averaged both directions' MAXAVAIL.
 DIRECTION_COL = "DIRECTION"
 GEN_DIRECTION = "GEN"
+LOAD_DIRECTION = "LOAD"
 BIDIRECTIONAL_DIRECTION = "BIDIRECTIONAL"
 GEN_ONLY_BID_TYPES = frozenset({"ENERGY", "RAISEREG", "LOWERREG"})
+# The FCAS services a bidirectional unit offers per direction (a GEN and a
+# LOAD row): the only FCAS rows a load side has.
+REGULATION_BID_TYPES = ("RAISEREG", "LOWERREG")
 
 
 # IESS start: from this date a bidirectional unit's rows carry DIRECTION, so a
@@ -129,6 +138,16 @@ def generating_offer_rows(frame: pd.DataFrame, bid_types) -> pd.Series:
     rows = frame["BIDTYPE"].isin(bid_types)
     direction = offer_direction_mask(frame)
     return rows if direction is None else rows & direction
+
+
+def load_offer_rows(frame: pd.DataFrame, bid_types) -> pd.Series:
+    """Rows of ``bid_types`` on the charging (LOAD) side: BIDTYPE filter AND
+    DIRECTION == "LOAD". All False for a frame without DIRECTION (pre-IESS:
+    no unit there has a separate load side)."""
+    rows = frame["BIDTYPE"].isin(bid_types)
+    if DIRECTION_COL not in frame.columns:
+        return rows & False
+    return rows & (frame[DIRECTION_COL] == LOAD_DIRECTION)
 
 
 def offer_dedupe_keys(frame: pd.DataFrame, keys: list[str]) -> list[str]:
@@ -471,11 +490,50 @@ def fcas_bids_from_raw(
         )
         return pd.DataFrame()
 
-    cols = [c for c in raw.columns if c in _FCAS_SLICE_COLS]
-    bids = raw.loc[generating_offer_rows(raw, FCAS_BID_TYPES), cols].copy()
-    if bids.empty:
+    bids = _fcas_rows(raw, generating_offer_rows(raw, FCAS_BID_TYPES), year, month)
+    if bids is None:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no FCAS bid rows")
         return pd.DataFrame()
+
+    logger.info(
+        f"BIDPEROFFER_D FCAS {year}-{month:02d}: {len(bids):,} rows, "
+        f"{bids['DUID'].nunique()} DUIDs with offers "
+        f"(incl. {int((bids['MAXAVAIL'] == 0).sum()):,} zero-offer rows)"
+    )
+    return bids
+
+
+def fcas_load_bids_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+    """The charging (LOAD) side's regulation FCAS rows of a raw BIDPEROFFER_D frame.
+
+    Same post-processing as ``fcas_bids_from_raw`` (latest offer version per
+    unit, service, direction and interval; zero offers kept), on RAISEREG /
+    LOWERREG rows with DIRECTION == "LOAD" only (``load_offer_rows``). Empty
+    for a frame without DIRECTION, or with no bidirectional unit. These rows
+    feed only the ``*_load`` FCAS fields; the existing fields never see them.
+    """
+    if raw is None or raw.empty or _FCAS_REQUIRED - set(raw.columns) \
+            or DIRECTION_COL not in raw.columns:
+        return pd.DataFrame()
+    bids = _fcas_rows(raw, load_offer_rows(raw, REGULATION_BID_TYPES), year, month)
+    if bids is None:
+        return pd.DataFrame()
+    if not bids.empty:
+        logger.info(
+            f"BIDPEROFFER_D FCAS {year}-{month:02d} load side: {len(bids):,} rows, "
+            f"{bids['DUID'].nunique()} DUIDs"
+        )
+    return bids
+
+
+def _fcas_rows(raw: pd.DataFrame, rows: pd.Series, year: int, month: int) -> pd.DataFrame | None:
+    """The FCAS slice of ``raw`` at ``rows``: deduped to the latest offer
+    version, MAXAVAIL numeric (nulls dropped, zeros kept), timestamps typed.
+    None when ``rows`` selects nothing."""
+    cols = [c for c in raw.columns if c in _FCAS_SLICE_COLS]
+    bids = raw.loc[rows, cols].copy()
+    if bids.empty:
+        return None
 
     # Rebids create multiple versions per (unit, service, interval):
     # the latest VERSIONNO is the operative offer. VERSIONNO is optional —
@@ -501,12 +559,6 @@ def fcas_bids_from_raw(
     if bids["MAXAVAIL"].isna().any():  # no whole-frame copy when nothing drops
         bids = bids.dropna(subset=["MAXAVAIL"])
     bids["INTERVAL_DATETIME"] = pd.to_datetime(bids["INTERVAL_DATETIME"])
-
-    logger.info(
-        f"BIDPEROFFER_D FCAS {year}-{month:02d}: {len(bids):,} rows, "
-        f"{bids['DUID'].nunique()} DUIDs with offers "
-        f"(incl. {int((bids['MAXAVAIL'] == 0).sum()):,} zero-offer rows)"
-    )
     return bids
 
 

@@ -270,8 +270,8 @@ class TestOfferLanesRetention:
             lambda year, month, cache_dir, rebuild=None: _energy_raw(year, month),
         )
         monkeypatch.setattr(
-            "src.main.fetch_energy_prices",
-            lambda year, month, cache_dir, rebuild=False: _prices_frame(year, month),
+            "src.main.fetch_energy_price_sides",
+            lambda year, month, cache_dir, rebuild=False: (_prices_frame(year, month), pd.DataFrame()),
         )
         monkeypatch.setattr(
             "src.main.compute_offer_features",
@@ -298,8 +298,8 @@ class TestOfferLanesRetention:
             lambda year, month, cache_dir, rebuild=None: _energy_raw(year, month),
         )
         monkeypatch.setattr(
-            "src.main.fetch_energy_prices",
-            lambda year, month, cache_dir, rebuild=False: _prices_frame(year, month),
+            "src.main.fetch_energy_price_sides",
+            lambda year, month, cache_dir, rebuild=False: (_prices_frame(year, month), pd.DataFrame()),
         )
         monkeypatch.setattr(
             "src.main.compute_offer_curves",
