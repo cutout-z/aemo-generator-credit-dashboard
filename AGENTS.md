@@ -152,15 +152,18 @@ Location: `agent-contracts/facts/AEMO-FACTS.md` (git, `cutout-z/agent-contracts`
    to fill (see the `state` pattern).
 4. **Verify in a browser, not by grep.** A change is done when a real browser renders it with real
    data: element present, height > 0, content non-empty. An HTTP 200 on the HTML file proves nothing.
-5. **Keep the tests green.** 19 test files under `tests/` (`pytest -q`). Three of them parse
+5. **Keep the tests green.** 56 test files under `tests/` (`pytest -q`). Three of them parse
    `docs/index.html` and pin its DOM — see *Pitfalls*. If a change breaks one, the change or the test
    is wrong, deliberately: say which in the commit message.
 
-   **Baseline on a fresh clone: `301 passed, 12 failed, 1 skipped, 9 errors`.** Every one of the 21
-   non-passes is in `tests/test_outputs.py` and is a `FileNotFoundError` on *generated* data that git
-   ignores (`data/**`, `docs/data/processed-cache/**`) — it validates pipeline output that only exists
-   on the lane machine. That is environmental, not a regression. Your bar: the 301 keep passing and you
-   add no new failure.
+   **Baseline on a fresh clone (2026-10-20, `fcb962267`; nemosis 3.8.1, pandas 2.3.3, pyarrow 23):
+   `514 passed, 14 failed, 3 skipped, 10 errors`.** 22 of the 24 non-passes are in
+   `tests/test_outputs.py`: a `FileNotFoundError` on generated data that git ignores (`data/**`), which
+   only exists on the lane machine. The other 2 are `tests/test_bidperoffer_low_memory.py`
+   `TestMatchesCompiler` (a `datetime64[us]` vs `[ns]` mismatch that depends on library versions;
+   they pass on the lane). That is environmental, not a regression. `docs/data/processed-cache/**`
+   is *tracked*, by design (`src/processed_cache.py`: a cold runner restores from it). Your bar: the
+   514 keep passing and you add no new failure.
 
 ## Facts
 
