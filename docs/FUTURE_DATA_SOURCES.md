@@ -71,6 +71,11 @@ re-doing the access research (all URLs below were live-verified 3 Sep 2026).
   one lane run with `--months-back 28` recomputes them. Until then a battery
   shows its charging side as "not in the published data", never a filled-in
   number.
+- **Charge-only months**: the monthly factor tables are keyed on the GEN side,
+  so a month in which a unit offered only LOAD rows (no GEN rows) is not in
+  `offer_factors` / `fcas_factors`, and the page reports no charging offers for
+  it; its daily curve can still appear in `load_days`. That is a gap in the
+  published data, not in AEMO's.
 - **Reading a charging stack**: a LOAD band's MW is taken when the price is at
   or below that band's price. The page shows the two sides separately and
   never adds them.
