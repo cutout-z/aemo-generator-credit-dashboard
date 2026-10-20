@@ -32,6 +32,7 @@ A credit risk analysis tool for Australian NEM (National Electricity Market) gen
   - `DISPATCHLOAD` — bid-in `AVAILABILITY` for the curtailment proxy (`UIGF` is fetched but not used by any published metric)
   - `BIDPEROFFER_D` — daily bid/offer data per DUID, used for per-DUID FCAS participation factors (services offered, share of intervals offering, average/peak offered MW by service) and for per-interval energy offer volumes (BANDAVAIL1-10 on BIDTYPE='ENERGY' rows)
   - `BIDDAYOFFER_D` — daily 10-band energy offer prices per DUID (with rebid versions via VERSIONNO), combined with the volumes above for offer-curve factors
+  - Batteries (bidirectional units, since IESS in June 2024) offer ENERGY and regulation FCAS separately for discharging (`DIRECTION = GEN`) and charging (`LOAD`); contingency FCAS is one combined `BIDIRECTIONAL` offer. The existing offer and FCAS fields are the discharging side; the charging side is published beside them as separate fields (see `docs/FUTURE_DATA_SOURCES.md`, *Battery charging side*)
 - **Also**: `DISPATCHCONSTRAINT`, `GENCONDATA` and `SPDCONNECTIONPOINTCONSTRAINT` for the binding-constraint panel (monthly constraints lane, see `deploy/README.md`)
 - **Coverage**: Rolling 5 years of history
 - **Update**: Daily incremental on the NAS (last 2 months reprocessed to capture late-arriving data)

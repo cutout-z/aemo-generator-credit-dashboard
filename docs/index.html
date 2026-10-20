@@ -450,7 +450,7 @@
                     <h3>Energy offers — this unit</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
                     <div class="chart-tooltip">
                         <div class="tooltip-title">Methodology</div>
-                        This unit's energy offer behaviour from BIDDAYOFFER_D (daily 10-band offer prices, latest rebid version) and BIDPEROFFER_D ENERGY volumes (10-band availability). A day's stack is the day's mean offered MW per band; BANDAVAIL tranches are incremental, so the curve is cumulative offered MW as price rises.
+                        This unit's energy offer behaviour from BIDDAYOFFER_D (daily 10-band offer prices, latest rebid version) and BIDPEROFFER_D ENERGY volumes (10-band availability). A day's stack is the day's mean offered MW per band; BANDAVAIL tranches are incremental, so the curve is cumulative offered MW as price rises. A battery offers each side separately: discharging (generation) and charging (load). A charging band's MW is taken when the price is at or below that band's price; the two sides are never added together.
                         <div class="tooltip-caveat">Offers are intent, not dispatch outcomes or settled revenue (offer_based_estimate). Unit-level block: shown whenever this unit's offer data exists, independently of the regional FCAS block (thin or absent FCAS history must not hide it).</div>
                     </div>
                 </div>
@@ -458,6 +458,10 @@
                 <div id="offerCurveWrap" style="display:none;">
                     <div class="mb-1 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[13px]">
                         <span class="font-medium text-ink">Offer curve — daily bid stack</span>
+                        <div id="offerCurveSide" class="seg" role="group" aria-label="Offer side" style="display:none;">
+                            <button type="button" data-side="gen" class="seg-item seg-item-active" aria-pressed="true">Discharging (generation)</button>
+                            <button type="button" data-side="load" class="seg-item" aria-pressed="false">Charging (load)</button>
+                        </div>
                         <span class="relative">
                             <select id="offerCurveDay" class="input h-7 w-auto cursor-pointer appearance-none pr-7 font-mono text-[12px]" aria-label="Offer day"></select>
                             <svg class="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
@@ -894,6 +898,52 @@ function statGridHTML(title, stats, note) {
             '<dd class="num truncate text-[14px] font-medium text-ink">' + value + '</dd></div>').join('') +
         '</dl>' +
         (note ? '<p class="mt-2 text-[12px] leading-4 text-faint">' + note + '</p>' : '');
+}
+
+// One side of a battery's offers (discharging / charging) for a two-column note box. A side with
+// no published figures says so in place (the `state` pattern) instead of showing n/a cells.
+function sideGridHTML(label, stats, emptyText) {
+    return '<div class="min-w-0"><div class="mb-1.5 text-[12px] font-medium text-muted">' + label + '</div>' +
+        (stats
+            ? '<dl class="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">' +
+                stats.map(([l, value]) =>
+                    '<div class="min-w-0"><dt class="text-[12px] text-faint">' + l + '</dt>' +
+                    '<dd class="num truncate text-[14px] font-medium text-ink">' + value + '</dd></div>').join('') +
+                '</dl>'
+            : '<p class="text-[12px] leading-4 text-faint" data-side-empty>' + emptyText + '</p>') +
+        '</div>';
+}
+
+// A unit with separate discharging and charging offers: a battery, or any unit whose payload
+// carries a charging (load) side.
+function isTwoSidedUnit(data) {
+    return !!data && data.fuel_category === 'Battery';
+}
+
+const SIDE_GEN = 'Discharging (generation)';
+const SIDE_LOAD = 'Charging (load)';
+
+// A battery's regulation FCAS offers per side (fcas_participation.regulation_by_direction).
+// Contingency FCAS has one combined side, so it is not split. '' for a one-sided unit.
+function regulationSidesHTML(data, fp, mw) {
+    const reg = fp && fp.regulation_by_direction;
+    if (!reg && !isTwoSidedUnit(data)) return '';
+    const stats = (side) => [['Raise Reg', mw(side && side.RAISEREG)], ['Lower Reg', mw(side && side.LOWERREG)]];
+    const month = esc(fmtMonthLong(fp.month || ''));
+    const head = '<div class="mt-3 border-t border-line-soft pt-3" data-fcas-sides>' +
+        '<div class="mb-2 text-[13px] font-medium text-ink">Regulation FCAS offers by side · average offered</div>';
+    if (!reg) {
+        // No charging-side rows published for the month: a state, not two columns of n/a.
+        return head + '<p class="text-[12px] leading-4 text-faint" data-side-empty>No charging-side regulation offers in the published data for ' +
+            month + ', so regulation is not split by side.</p></div>';
+    }
+    return head +
+        '<div class="grid gap-4 lg:grid-cols-2">' +
+        sideGridHTML(SIDE_GEN, stats(reg.GEN)) +
+        sideGridHTML(SIDE_LOAD, stats(reg.LOAD)) +
+        '</div>' +
+        '<p class="mt-2 text-[12px] leading-4 text-faint">Average over intervals with a positive offer; a side offered only at zero shows n/a. Contingency FCAS (6s, 60s, 5min) is offered as one combined side.</p>' +
+        '</div>';
 }
 
 // A panel with nothing to draw says why, in place (the `state` pattern). Plotly hides the
@@ -1661,7 +1711,8 @@ function renderCharts(data) {
                     ['Average offered', mw(fp.avg_max_avail_mw)],
                     ['Peak offered', mw(fp.max_max_avail_mw)],
                 ],
-                'Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are regional market averages shared by every generator in ' + esc(data.region || 'the region') + '.');
+                'Offer behaviour from BIDPEROFFER_D — offers, not settled revenue or enablement. The price lines below are regional market averages shared by every generator in ' + esc(data.region || 'the region') + '.') +
+                regulationSidesHTML(data, fp, mw);
         } else {
             fpBox.style.display = 'none';
         }
@@ -1691,18 +1742,32 @@ function renderCharts(data) {
                     ? Number(of.intervals_observed).toLocaleString('en-AU') + (full ? ' of ' + full.toLocaleString('en-AU') : '') + ' five-minute intervals'
                     : 'part of its intervals') + ', so these figures cover only that part.';
             }
-            ofBox.innerHTML = statGridHTML(
-                'Energy offers · ' + esc(fmtMonthLong(of.month || '')) +
-                    (partial ? ' <span class="pill pill-warn ml-1.5" data-offers-partial>Partial month</span>' : ''),
-                [
-                    ['Average offered', mw(of.avg_offered_mw)],
-                    ['95th percentile offered', mw(of.offered_mw_p95)],
-                    ['Band 1 average price', dol(of.price_band_min_avg) + '<span class="text-[12px] font-normal text-faint">/MWh</span>'],
-                    ['Band 10 average price', dol(of.price_band_max_avg) + '<span class="text-[12px] font-normal text-faint">/MWh</span>'],
-                    ['Days with a negative band', pc(of.negative_band_day_share)],
-                ],
-                'Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.' +
-                    (of.price_asof_month ? ' Prices as of ' + esc(fmtMonthLong(of.price_asof_month)) + '.' : '') + partialNote);
+            const offerStats = (o) => [
+                ['Average offered', mw(o.avg_offered_mw)],
+                ['95th percentile offered', mw(o.offered_mw_p95)],
+                ['Band 1 average price', dol(o.price_band_min_avg) + '<span class="text-[12px] font-normal text-faint">/MWh</span>'],
+                ['Band 10 average price', dol(o.price_band_max_avg) + '<span class="text-[12px] font-normal text-faint">/MWh</span>'],
+                ['Days with a negative band', pc(o.negative_band_day_share)],
+            ];
+            const title = 'Energy offers · ' + esc(fmtMonthLong(of.month || '')) +
+                (partial ? ' <span class="pill pill-warn ml-1.5" data-offers-partial>Partial month</span>' : '');
+            const note = 'Offer behaviour from BIDDAYOFFER_D + BIDPEROFFER_D — offers, not dispatch outcomes or settled revenue.' +
+                (of.price_asof_month ? ' Prices as of ' + esc(fmtMonthLong(of.price_asof_month)) + '.' : '') + partialNote;
+            if (of.load || isTwoSidedUnit(data)) {
+                // A battery offers each side separately: shown side by side, never summed.
+                const ld = of.load;
+                ofBox.innerHTML = '<div class="mb-2 text-[13px] font-medium text-ink">' + title + '</div>' +
+                    '<div class="grid gap-4 lg:grid-cols-2" data-offer-sides>' +
+                    sideGridHTML(SIDE_GEN, offerStats(of)) +
+                    sideGridHTML(SIDE_LOAD, ld ? offerStats(ld) : null,
+                        'No charging-side offers in the published data for ' + esc(fmtMonthLong(of.month || '')) + '.') +
+                    '</div>' +
+                    '<p class="mt-2 text-[12px] leading-4 text-faint">' + note +
+                    (ld && ld.price_asof_month ? ' Charging prices as of ' + esc(fmtMonthLong(ld.price_asof_month)) + '.' : '') +
+                    '</p>';
+            } else {
+                ofBox.innerHTML = statGridHTML(title, offerStats(of), note);
+            }
         } else {
             ofBox.style.display = 'none';
         }
@@ -1716,14 +1781,19 @@ function renderCharts(data) {
     const ocChart = document.getElementById('offerCurveChart');
     const ocDay = document.getElementById('offerCurveDay');
     const ocNote = document.getElementById('offerCurveNote');
-    function drawBidStack(stack, label) {
+    const ocSide = document.getElementById('offerCurveSide');
+    function drawBidStack(stack, label, side) {
         if (!stack || !stack.length) return;
         const px = [stack[0][0]], py = [0];
         for (const [price, cum] of stack) { px.push(price); py.push(cum); }
+        const load = side === 'load';
+        const colour = load ? C('accent') : C('info');
         Plotly.newPlot('offerCurveChart', [{
-            x: px, y: py, type: 'scatter', mode: 'lines+markers', name: 'Offered MW',
-            line: { shape: 'hv', width: 2, color: C('info') }, marker: { color: C('info'), size: 5 },
-            hovertemplate: '%{y:,.0f} MW offered at or below $%{x:,.0f}/MWh<extra></extra>'
+            x: px, y: py, type: 'scatter', mode: 'lines+markers', name: load ? SIDE_LOAD : 'Offered MW',
+            line: { shape: 'hv', width: 2, color: colour }, marker: { color: colour, size: 5 },
+            hovertemplate: load
+                ? '%{y:,.0f} MW in charging bands priced at or below $%{x:,.0f}/MWh<extra></extra>'
+                : '%{y:,.0f} MW offered at or below $%{x:,.0f}/MWh<extra></extra>'
         }], chartLayout({
             height: H.md,
             hovermode: 'closest',
@@ -1742,18 +1812,53 @@ function renderCharts(data) {
                 .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
                 .then((doc) => {
                     if (ocToken !== selectionToken) return; // superseded selection
-                    const days = (doc.days || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+                    const byDate = (a, b) => b.date.localeCompare(a.date);
+                    const days = (doc.days || []).slice().sort(byDate);
                     if (!days.length) { ocWrap.style.display = 'none'; syncOffersPanel(); return; }
+                    // A battery's charging (load) stacks, when published (load_days).
+                    const loadDays = (doc.load_days || []).slice().sort(byDate);
+                    const twoSided = loadDays.length > 0 || isTwoSidedUnit(data);
+                    let side = 'gen';
+                    const sideDays = () => (side === 'load' ? loadDays : days);
                     ocWrap.style.display = 'block';
+                    if (ocSide) ocSide.style.display = twoSided ? '' : 'none';
                     // Show the panel (and let it take layout) BEFORE the first
                     // Plotly.newPlot, or the plot renders into a 0-height box.
                     syncOffersPanel();
-                    ocDay.innerHTML = days.map((d) => '<option value="' + d.date + '">' + d.date + '</option>').join('');
-                    ocDay.value = days[0].date;
-                    const draw = () => {
-                        const sel = days.find((d) => d.date === ocDay.value) || days[0];
-                        drawBidStack(sel.stack, '(day offers, latest rebid version)');
+                    const fillDays = (keep) => {
+                        const list = sideDays();
+                        ocDay.innerHTML = list.map((d) => '<option value="' + d.date + '">' + d.date + '</option>').join('');
+                        ocDay.disabled = !list.length;
+                        if (list.length) ocDay.value = list.some((d) => d.date === keep) ? keep : list[0].date;
                     };
+                    const draw = () => {
+                        const list = sideDays();
+                        if (!list.length) {
+                            // An empty charging side is a state, never a borrowed curve.
+                            Plotly.purge(ocChart);
+                            showChartState('offerCurveChart', 'No charging-side offers published',
+                                'The published data has no charging (load) bid stacks for this unit.');
+                            if (ocNote) ocNote.textContent = '';
+                            return;
+                        }
+                        const sel = list.find((d) => d.date === ocDay.value) || list[0];
+                        drawBidStack(sel.stack, side === 'load'
+                            ? '(charging bids, latest rebid version)'
+                            : '(day offers, latest rebid version)', side);
+                    };
+                    const setSide = (next) => {
+                        side = next;
+                        if (ocSide) ocSide.querySelectorAll('button').forEach((b) => {
+                            const on = b.dataset.side === side;
+                            b.classList.toggle('seg-item-active', on);
+                            b.setAttribute('aria-pressed', String(on));
+                        });
+                    };
+                    if (ocSide) ocSide.querySelectorAll('button').forEach((b) => {
+                        b.onclick = () => { const keep = ocDay.value; setSide(b.dataset.side); fillDays(keep); draw(); };
+                    });
+                    setSide('gen');
+                    fillDays(null);
                     ocDay.onchange = draw;
                     draw();
                 })
@@ -2472,31 +2577,50 @@ function buildFCASParticipationRows(data) {
         'Avg Max Avail (MW)': p.avg_max_avail_mw != null ? p.avg_max_avail_mw : '',
         'Max Max Avail (MW)': p.max_max_avail_mw != null ? p.max_max_avail_mw : '',
         'Note': p.note || '',
+        // A battery's regulation offers per side (only units that publish them).
+        ...regulationSideColumns(p.regulation_by_direction),
     }];
+}
+
+function regulationSideColumns(reg) {
+    if (!reg) return {};
+    const v = (side, s) => (reg[side] && reg[side][s] != null ? reg[side][s] : '');
+    return {
+        'Raise Reg Discharging Avg (MW)': v('GEN', 'RAISEREG'),
+        'Lower Reg Discharging Avg (MW)': v('GEN', 'LOWERREG'),
+        'Raise Reg Charging Avg (MW)': v('LOAD', 'RAISEREG'),
+        'Lower Reg Charging Avg (MW)': v('LOAD', 'LOWERREG'),
+    };
 }
 
 function buildOffersRows(data) {
     const o = data && data.offers;
     if (!o) return [];
-    return [{
+    const row = (x, side) => ({
+        // 'Side' only for a unit with a published charging side; other units' rows are unchanged.
+        ...(side ? { 'Side': side } : {}),
         'Month': o.month || '',
-        'Avg Offered (MW)': o.avg_offered_mw != null ? o.avg_offered_mw : '',
-        'P95 Offered (MW)': o.offered_mw_p95 != null ? o.offered_mw_p95 : '',
-        'Price Band Min Avg ($/MWh)': o.price_band_min_avg != null ? o.price_band_min_avg : '',
-        'Price Band Max Avg ($/MWh)': o.price_band_max_avg != null ? o.price_band_max_avg : '',
-        'Negative Band Day Share': o.negative_band_day_share != null ? o.negative_band_day_share : '',
-        'Top-2 Band Volume Share': o.top2_band_volume_share != null ? o.top2_band_volume_share : '',
-        'Price Data As Of': o.price_asof_month || '',
-    }];
+        'Avg Offered (MW)': x.avg_offered_mw != null ? x.avg_offered_mw : '',
+        'P95 Offered (MW)': x.offered_mw_p95 != null ? x.offered_mw_p95 : '',
+        'Price Band Min Avg ($/MWh)': x.price_band_min_avg != null ? x.price_band_min_avg : '',
+        'Price Band Max Avg ($/MWh)': x.price_band_max_avg != null ? x.price_band_max_avg : '',
+        'Negative Band Day Share': x.negative_band_day_share != null ? x.negative_band_day_share : '',
+        'Top-2 Band Volume Share': x.top2_band_volume_share != null ? x.top2_band_volume_share : '',
+        'Price Data As Of': x.price_asof_month || '',
+    });
+    return o.load ? [row(o, SIDE_GEN), row(o.load, SIDE_LOAD)] : [row(o)];
 }
 
 function buildOfferCurveRows(data) {
     const oc = data && data.offer_curve;
     if (!oc || !oc.bands) return [];
-    return oc.bands.map(b => ({
+    const load = oc.load_bands || [];
+    return oc.bands.map((b, i) => ({
         'Band': b.band,
         'Price ($/MWh)': b.price,
         'Cumulative (MW)': b.cum_mw,
+        // A battery's charging side, per band (only units that publish it).
+        ...(load[i] ? { 'Charging Price ($/MWh)': load[i].price, 'Charging Cumulative (MW)': load[i].cum_mw } : {}),
     }));
 }
 

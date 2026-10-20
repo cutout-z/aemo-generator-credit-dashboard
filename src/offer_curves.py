@@ -32,7 +32,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from .download_bids import fetch_bidperoffer_union, generating_offer_rows, offer_dedupe_keys
+from .download_bids import (
+    fetch_bidperoffer_union,
+    generating_offer_rows,
+    load_offer_rows,
+    offer_dedupe_keys,
+)
 from .interval_days import interval_calendar_day, interval_month, interval_trading_day_str
 from .semantic_publish import write_json_if_facts_changed
 
@@ -68,6 +73,21 @@ def _fetch_bid_table(
     select_columns: list[str],
     rebuild: bool = False,
 ) -> pd.DataFrame:
+    """The table's ENERGY rows on the generating side, latest version only."""
+    return _fetch_bid_sides(table, year, month, cache_dir, select_columns, rebuild)[0]
+
+
+def _fetch_bid_sides(
+    table: str,
+    year: int,
+    month: int,
+    cache_dir: str,
+    select_columns: list[str],
+    rebuild: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """ONE decode of ``table`` for the month, split into its ENERGY sides:
+    ``(generating, load)``, each deduped to the latest offer version. The
+    load side is empty unless the frame has DIRECTION and LOAD rows."""
     from nemosis import dynamic_data_compiler
 
     start_time, end_time = _month_window(year, month)
@@ -84,18 +104,26 @@ def _fetch_bid_table(
     )
     if df is None or df.empty:
         logger.warning(f"{table} {year}-{month:02d}: no data (unpublished month?)")
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
     missing = {"DUID", "BIDTYPE"} - set(df.columns)
     if missing:
         logger.warning(f"{table} {year}-{month:02d}: missing {sorted(missing)} — skipping")
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
+    # A battery's charging side, sliced before the generating side; it is
+    # published only as separate *_load fields.
+    load = df[load_offer_rows(df, ["ENERGY"])].copy()
+    load = _dedupe_bid_rows(load, table, year, month) if not load.empty else pd.DataFrame()
     # ENERGY offers on the generating side only (download_bids
     # .offer_direction_mask): a battery's LOAD price bands must never stand in
     # for its GEN bands.
     df = df[generating_offer_rows(df, ["ENERGY"])].copy()
     if df.empty:
         logger.warning(f"{table} {year}-{month:02d}: no ENERGY rows")
-        return pd.DataFrame()
+        return pd.DataFrame(), load
+    return _dedupe_bid_rows(df, table, year, month), load
+
+
+def _dedupe_bid_rows(df: pd.DataFrame, table: str, year: int, month: int) -> pd.DataFrame:
     key = "INTERVAL_DATETIME" if "INTERVAL_DATETIME" in df.columns else "SETTLEMENTDATE"
     keys = offer_dedupe_keys(df, ["DUID", key])
     if "VERSIONNO" in df.columns:
@@ -117,9 +145,23 @@ def _fetch_bid_table(
 
 def fetch_energy_prices(year: int, month: int, cache_dir: str, rebuild: bool = False) -> pd.DataFrame:
     """Daily ENERGY offer price bands per DUID (GEN direction, latest version only)."""
-    prices = _fetch_bid_table(
+    return fetch_energy_price_sides(year, month, cache_dir, rebuild=rebuild)[0]
+
+
+def fetch_energy_price_sides(
+    year: int, month: int, cache_dir: str, rebuild: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Daily ENERGY offer price bands per DUID from ONE BIDDAYOFFER_D decode:
+    ``(generating, load)``. The first is exactly ``fetch_energy_prices``; the
+    second holds a bidirectional unit's charging-side (LOAD) bands, empty when
+    the month has none (ordinary generators, pre-IESS archives)."""
+    gen, load = _fetch_bid_sides(
         "BIDDAYOFFER_D", year, month, cache_dir, PRICE_SELECT, rebuild=rebuild
     )
+    return _typed_prices(gen, year, month), _typed_prices(load, year, month)
+
+
+def _typed_prices(prices: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
     if prices.empty:
         return prices
     for col in BAND_PRICE_COLS:
@@ -147,15 +189,34 @@ def energy_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.Data
     if missing:
         logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: missing {sorted(missing)} — skipping")
         return pd.DataFrame()
+    # Generating side only (download_bids.offer_direction_mask): a battery
+    # has a GEN and a LOAD ENERGY row per interval.
+    volumes = _volume_rows(raw, generating_offer_rows(raw, ["ENERGY"]), year, month)
+    if volumes is None:
+        logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no ENERGY rows")
+        return pd.DataFrame()
+    return volumes
+
+
+def energy_load_volumes_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+    """A bidirectional unit's charging-side (LOAD) ENERGY volume rows, with the
+    same post-processing as ``energy_volumes_from_raw``. Empty for a frame
+    without DIRECTION or without LOAD rows. Feeds only the *_load fields."""
+    if raw is None or raw.empty or {"DUID", "BIDTYPE", "DIRECTION"} - set(raw.columns):
+        return pd.DataFrame()
+    volumes = _volume_rows(raw, load_offer_rows(raw, ["ENERGY"]), year, month)
+    return pd.DataFrame() if volumes is None else volumes
+
+
+def _volume_rows(raw: pd.DataFrame, rows: pd.Series, year: int, month: int) -> pd.DataFrame | None:
+    """The ENERGY volume slice of ``raw`` at ``rows``, deduped and typed.
+    None when ``rows`` selects nothing."""
     # Only the columns the offer lanes read: the FCAS capacity columns are
     # empty for ENERGY rows and would only be copied along.
     cols = [c for c in raw.columns if c in _VOLUME_SLICE_COLS]
-    # Generating side only (download_bids.offer_direction_mask): a battery
-    # has a GEN and a LOAD ENERGY row per interval.
-    volumes = raw.loc[generating_offer_rows(raw, ["ENERGY"]), cols].copy()
+    volumes = raw.loc[rows, cols].copy()
     if volumes.empty:
-        logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: no ENERGY rows")
-        return pd.DataFrame()
+        return None
     if "VERSIONNO" in volumes.columns:
         # Latest offer version wins (rebids); OFFERDATE breaks ties.
         volumes["VERSIONNO"] = pd.to_numeric(volumes["VERSIONNO"], errors="coerce")
@@ -305,6 +366,64 @@ def keep_most_complete_offer_rows(rows: pd.DataFrame) -> pd.DataFrame:
     return ranked.sort_values("_order").drop(columns=keys)
 
 
+# ── Charging (LOAD) side of a bidirectional unit ──────────────────────────
+# A battery offers ENERGY twice per interval since IESS: GEN (discharge) and
+# LOAD (charge). The existing fields stay the generating side; the charging
+# side is computed with the SAME functions from the LOAD rows and published
+# beside it as additional ``*_load`` columns (offer factors, monthly offer
+# curves) and ``load_days`` (daily stacks). A unit without LOAD rows gets no
+# load column and no load key, so its published output is unchanged.
+
+# offer_factors.feather: generating-side column -> its charging-side column.
+LOAD_OFFER_FACTOR_COLS = {
+    "offered_mw_avg": "offered_mw_avg_load",
+    "offered_mw_p95": "offered_mw_p95_load",
+    "price_band_min_avg": "price_band_min_avg_load",
+    "price_band_max_avg": "price_band_max_avg_load",
+    "negative_band_day_share": "negative_band_day_share_load",
+    "top2_band_volume_share": "top2_band_volume_share_load",
+    "vol_intervals_observed": "vol_intervals_observed_load",
+}
+# offer_curves.feather: per band row.
+LOAD_OFFER_CURVE_COLS = {"price": "price_load", "cum_mw": "cum_mw_load"}
+
+
+def compute_load_offer_side(
+    load_prices: pd.DataFrame | None, load_volumes: pd.DataFrame | None, month: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """The charging side's ``(offer features, monthly curve, daily stacks)``
+    for one month, from LOAD price and volume rows (all empty without them)."""
+    if load_prices is None or load_prices.empty or load_volumes is None or load_volumes.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    return (
+        compute_offer_features(load_prices, load_volumes, month),
+        compute_offer_curves(load_prices, load_volumes, month),
+        compute_offer_curves_daily(load_prices, load_volumes, month),
+    )
+
+
+def with_load_offer_columns(feats: pd.DataFrame, load_feats: pd.DataFrame | None) -> pd.DataFrame:
+    """``feats`` (generating side) plus the charging side's ``*_load`` columns,
+    joined on (duid, month). Only units with generating-side rows are kept, and
+    with no load rows ``feats`` is returned as is (no column added)."""
+    if feats is None or feats.empty or load_feats is None or load_feats.empty:
+        return feats
+    cols = [c for c in LOAD_OFFER_FACTOR_COLS if c in load_feats.columns]
+    load = load_feats[["duid", "month", *cols]].rename(columns=LOAD_OFFER_FACTOR_COLS)
+    return feats.merge(load, on=["duid", "month"], how="left")
+
+
+def with_load_curve_columns(curves: pd.DataFrame, load_curves: pd.DataFrame | None) -> pd.DataFrame:
+    """Monthly curve rows plus ``price_load`` / ``cum_mw_load`` per band, joined
+    on (duid, month, band); unchanged when there are no load rows."""
+    if curves is None or curves.empty or load_curves is None or load_curves.empty:
+        return curves
+    load = load_curves[["duid", "month", "band", *LOAD_OFFER_CURVE_COLS]].rename(
+        columns=LOAD_OFFER_CURVE_COLS
+    )
+    return curves.merge(load, on=["duid", "month", "band"], how="left")
+
+
 def build_offer_factors(months: list[tuple[int, int]], cache_dir: str) -> pd.DataFrame:
     """Fetch + compute offer factors for each (year, month).
 
@@ -422,6 +541,33 @@ def attach_offer_factor_doc(doc: dict, rows: pd.DataFrame | None) -> None:
     asof_months = sorted({m for m in price_fields.values() if m})
     if asof_months and asof_months[-1] != out["month"]:
         out["price_asof_month"] = asof_months[-1]
+
+    # The charging side of a bidirectional unit: only when the headline month
+    # has LOAD volume rows. Volumes come from that month; prices follow the
+    # generating side's rule (latest month at or before it that has them).
+    load_obs = latest.get("vol_intervals_observed_load")
+    if load_obs is not None and not pd.isna(load_obs):
+        load_out, load_asof = {}, set()
+        for col, key in (
+            ("offered_mw_avg_load", "avg_offered_mw"),
+            ("offered_mw_p95_load", "offered_mw_p95"),
+            ("price_band_min_avg_load", "price_band_min_avg"),
+            ("price_band_max_avg_load", "price_band_max_avg"),
+            ("negative_band_day_share_load", "negative_band_day_share"),
+            ("top2_band_volume_share_load", "top2_band_volume_share"),
+        ):
+            if key in ("avg_offered_mw", "offered_mw_p95", "top2_band_volume_share"):
+                v = latest.get(col)
+                load_out[key] = None if v is None or pd.isna(v) else float(v)
+                continue
+            v, asof = _latest_val(col)
+            load_out[key] = v
+            if asof:
+                load_asof.add(asof)
+        load_out["intervals_observed"] = int(load_obs)
+        if load_asof and max(load_asof) != out["month"]:
+            load_out["price_asof_month"] = max(load_asof)
+        out["load"] = load_out
 
     if has_cov:
         flag = latest.get("vol_source_complete")
@@ -584,6 +730,13 @@ def attach_offer_curve_doc(doc: dict, rows: pd.DataFrame | None) -> None:
         flag = cur["source_complete"].iloc[0]
         if flag is not None and not pd.isna(flag) and not bool(flag):
             out["window"] = "partial"
+    # The charging side's stack for the same month (bidirectional units only).
+    load_cols = list(LOAD_OFFER_CURVE_COLS.values())
+    if set(load_cols) <= set(cur.columns) and cur[load_cols].notna().all().all():
+        out["load_bands"] = [
+            {"band": int(r["band"]), "price": float(r["price_load"]), "cum_mw": float(r["cum_mw_load"])}
+            for _, r in cur.iterrows()
+        ]
     doc["offer_curve"] = out
 
 
@@ -666,8 +819,21 @@ def bound_published_curves(curves: pd.DataFrame, listed_duids, window_months: in
     return out[dates >= first_day]
 
 
-def write_offer_curve_files(curves: pd.DataFrame, docs_data_dir: str) -> int:
+def _day_stacks(grp: pd.DataFrame) -> list[dict]:
+    return [
+        {"date": date, "stack": [[float(r["price"]), float(r["cum_mw"])] for _, r in dgrp.iterrows()]}
+        for date, dgrp in grp.groupby("date")
+    ]
+
+
+def write_offer_curve_files(
+    curves: pd.DataFrame, docs_data_dir: str, load_curves: pd.DataFrame | None = None,
+) -> int:
     """Write compact per-DUID day-stack JSONs: docs/data/offer_curves/{DUID}.json.
+
+    ``load_curves`` (the charging side's daily stacks, same columns): a unit
+    that has them gains a ``load_days`` list beside ``days``; every other
+    file is unchanged.
 
     S3-12 semantic-diff publish gate: each file is written only when its facts
     (the day stacks) changed — the ``updated`` date stamps data-as-of, not the
@@ -681,18 +847,18 @@ def write_offer_curve_files(curves: pd.DataFrame, docs_data_dir: str) -> int:
     n = 0
     unchanged = 0
     stamp = pd.Timestamp.utcnow().strftime("%Y-%m-%d")
+    load_by_duid = {}
+    if load_curves is not None and not load_curves.empty:
+        load_by_duid = dict(tuple(load_curves.sort_values(["date", "price"]).groupby("duid")))
     for duid, grp in curves.sort_values(["date", "price"]).groupby("duid"):
         # Sanitize path-hostile characters (some DUIDs contain '/' or '#')
         safe = str(duid).replace("/", "_")
-        days = []
-        for date, dgrp in grp.groupby("date"):
-            days.append({
-                "date": date,
-                "stack": [[float(r["price"]), float(r["cum_mw"])] for _, r in dgrp.iterrows()],
-            })
+        payload = {"scope": "offer_based_estimate", "updated": stamp, "days": _day_stacks(grp)}
+        if duid in load_by_duid:
+            payload["load_days"] = _day_stacks(load_by_duid[duid])
         if write_json_if_facts_changed(
             out_dir / f"{safe}.json",
-            {"scope": "offer_based_estimate", "updated": stamp, "days": days},
+            payload,
             stamp_keys=("updated",),
         ):
             n += 1
