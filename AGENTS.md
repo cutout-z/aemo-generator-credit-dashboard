@@ -120,7 +120,7 @@ handback notes get copied and published.
 <!-- END agent-contracts:family -->
 
 <!-- BEGIN agent-contracts:aemo-facts -->
-<!-- source: facts/AEMO-FACTS.md sha256:7e1d899cbe03 — edit in cutout-z/agent-contracts, not here -->
+<!-- source: facts/AEMO-FACTS.md sha256:b1d367751e0f — edit in cutout-z/agent-contracts, not here -->
 ## AEMO shared facts — every agent, every repo
 
 One canonical home for cross-repo AEMO domain facts, so a fact established in one repo is never
@@ -128,9 +128,12 @@ invisible to an agent working in another (the battery-MLF lesson, 2026-10-05: th
 was established inside one repo's rollout doc while other agents recomputed with the wrong factor).
 
 **Who reads this:** any agent (Hermes, Claude Code, Codex) working in an AEMO repo. It is stamped
-into each AEMO repo's `AGENTS.md` between `agent-contracts:aemo-facts` markers, and the `aemo-logic-pass`
-skill points here instead of duplicating facts. A fact here overrides anything
-remembered or re-derived.
+into each AEMO repo's `AGENTS.md` between `agent-contracts:aemo-facts` markers, and the logic-pass procedure
+points here instead of duplicating facts. A fact here overrides anything remembered or re-derived.
+
+**Read beside it (2026-10-21; paths in the `cutout-z/agent-contracts` checkout on `main`):** for a logic pass,
+`agent-contracts/facts/aemo-logic-pass.md`; to pull NEMWEB, MMSDM or nemosis data, `agent-contracts/facts/nem-market-data.md`;
+for an ETL publish or health failure, `agent-contracts/docs/data-pipeline-safety.md`.
 
 **Maintenance:** append with date + source; supersede in place (`~~SUPERSEDED~~ <date> <reason>`).
 Location: `agent-contracts/facts/AEMO-FACTS.md` (git, `cutout-z/agent-contracts`). Edit here only; `scripts/stamp.py` copies it into each AEMO repo's AGENTS.md.
