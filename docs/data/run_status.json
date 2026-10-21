@@ -1,8 +1,8 @@
 {
  "guards": {
-  "daily_age_days": 20,
+  "daily_age_days": 21,
   "daily_freshness": "pass",
-  "monthly_age_days": 20,
+  "monthly_age_days": 21,
   "monthly_freshness": "pass"
  },
  "outputs": {
@@ -10,12 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-20T21:22:08Z",
+  "finished_utc": "2026-10-21T21:20:50Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-10-20T21:15:05Z"
+  "started_utc": "2026-10-21T21:15:08Z"
  },
  "schema_version": 1,
  "sources": {
@@ -42,10 +42,10 @@
    "status": "skipped"
   },
   "fcas_factors": {
-   "asof_month": "2026-09",
-   "attempted_months": 2,
+   "asof_month": "2026-10",
+   "attempted_months": 3,
    "error": null,
-   "months_with_data": 2,
+   "months_with_data": 3,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
@@ -85,7 +85,7 @@
    "attempted_months": 1,
    "details": {
     "draft_fy": null,
-    "last_modified": "Fri, 16 Oct 2026 03:29:12 GMT",
+    "last_modified": "Wed, 21 Oct 2026 14:03:32 GMT",
     "source": "download"
    },
    "error": null,
@@ -105,7 +105,7 @@
   },
   "offer_curves": {
    "asof_month": "2026-09",
-   "attempted_months": 2,
+   "attempted_months": 3,
    "error": null,
    "months_with_data": 2,
    "note": null,
@@ -113,10 +113,10 @@
    "status": "ok"
   },
   "offer_factors": {
-   "asof_month": "2026-09",
-   "attempted_months": 2,
+   "asof_month": "2026-10",
+   "attempted_months": 3,
    "error": null,
-   "months_with_data": 2,
+   "months_with_data": 3,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
