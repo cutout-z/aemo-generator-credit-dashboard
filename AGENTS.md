@@ -4,7 +4,7 @@ Read this before touching anything. The design brief (`BRIEF.md`) says *what* to
 work here is allowed to happen.
 
 <!-- BEGIN agent-contracts:family -->
-<!-- source: family/AGENTS.family.md sha256:629efe6d8812 — edit in cutout-z/agent-contracts, not here -->
+<!-- source: family/AGENTS.family.md sha256:ef0f0f373b26 — edit in cutout-z/agent-contracts, not here -->
 ## Family conventions (every repo, every agent)
 
 *Generated from `agent-contracts/family/AGENTS.family.md`. Edit it there, never here: a drift check
@@ -44,29 +44,44 @@ where a harness supports it.
   and date. If it applies across repos, propose it for the shared facts block in your handback. Your
   own memory or skills are invisible to the other agents.
 
-### What needs the owner's yes
+### Standing permissions and the owner's decisions
 
-An explicit instruction from the owner in the current session covers that action only, not similar
-later ones: the yes was for what the owner saw, not for what follows. A repo contract may record a
-standing permission from the owner (e.g. "the agent merges to `main` once `check.sh` is green"). It
-counts as the owner's yes only for the actions and the agents it names, only in the repo whose
-contract records it, and only as that text stands on `origin/main` when you start. It never covers
-adding, widening or rewording a standing permission, or any change to `AGENTS.md` or this block:
-those always need the owner's yes in the current session. Without either, declare these and wait
-for a yes:
+The owner's instruction in the current session covers that action only, not similar later ones:
+the yes was for what the owner saw, not for what follows. A repo contract may record a standing
+permission (e.g. "the agent merges to `main` once `check.sh` is green"). It counts only for the
+actions and the agents it names, only in the repo whose contract records it, and only as that text
+stands on `origin/main` when you start. It never covers adding, widening or rewording a standing
+permission, or any change to `AGENTS.md` or this block: those need the owner's yes in the current
+session, and so does any widening of a harness's permissions.
+
+The owner wants to decide, not approve. Finish the work, land it and roll it out yourself where the
+owner's private contract or the repo contract says you may, and bring the owner only a **decision**:
+a choice between materially different outcomes, a matter of taste, or a scope change. Put each one
+where the owner reads decisions (the private contract says where), with the options and your pick,
+and carry on with everything that doesn't depend on it. Never choose a default for a decision you
+raised: the work that depends on it waits. The owner's private contract names the landing and
+rollout scripts; an agent without it pushes the branch and hands back, as "Branches" above says.
+
+Some things keep a condition however the work is landed, and some stay the owner's. Name each one
+you touch in the handback:
 
 - **Publishing**: anything that changes what other people can see (`main` on a published repo,
-  Pages, public data files).
-- **Data and ETL**: data files, pipeline code, data contracts (columns, keys, paths, schemas).
-  Lanes, dashboards and other repos read them, and a change breaks them silently.
+  Pages, public data files) lands only through the landing script with a reviewer's verdict on
+  record.
+- **Data and ETL**: data files, pipeline code and data contracts (columns, keys, paths, schemas)
+  land only with a reviewer's verdict on record (the landing script takes it, quoted from the review that ran, never written for the flag). Lanes, dashboards
+  and other repos read them, and a change breaks them silently.
 - **The instruments**: `check.sh`, guard tests, audit and verify scripts. They are how anyone,
   including you, knows a change works. Never weaken one to make something pass. If one is wrong,
   say so and leave it.
-- **Infra**: ports, scheduled jobs, servers, publish pipelines. Other jobs, and the owner, rely on
-  them running as they are.
-- **Another agent's state**: another agent's memory, config or notes. With the owner's yes any agent
-  may change them; no agent is the only writer. The owning agent can't see your edit, so commit it
-  where it's visible, and edit the source rather than a generated copy.
+- **Another agent's state**: another agent's memory, config or notes, and the vault notes other
+  agents are generated from. The owner says which of these any agent may change without asking; the
+  rest wait for the owner's yes. The owning agent can't see your edit, so commit it where it's
+  visible, and edit the source rather than a generated copy.
+- **Backups and the owner's media**: never touched by any agent, and never a target of a cleanup,
+  sync or delete.
+- **Scheduled jobs and services** change through the rollout script where one covers them; a job the
+  script doesn't know waits for the owner.
 
 Never read, quote or commit secrets (`.env`, auth files, keys, tokens): repos, transcripts and
 handback notes get copied and published.
@@ -109,14 +124,23 @@ handback notes get copied and published.
   project: <project name as on the owner's dashboard>
   agent: <the trailer's Agent, lowercase: claude, codex, hermes, …>
   branch: <branch>
-  merged: false
+  pr: <owner/repo#number, one per PR; or none>
   status: <one line>
-  outstanding:
-    - "to-do [mac-local] <item>"   # [mac-local] = only actionable on the owner's Mac
+  noticed:                        # everything seen and not finished; [] when nothing was
+    - "<item> -> done: <evidence>"
+    - "<item> -> tracked: <where it will be picked up>"
+    - "<item> -> decision: <the card>"          # `-> card:` means the same
+    - "<item> -> blocked: <what blocks it>"
+  outstanding:                    # only decisions and items blocked outside the session
+    - "decision: <the choice, where the card is>"
+    - "to-do [mac-local] <item>; blocked on: <what>"   # the words `blocked on:` literally; [mac-local] = the owner's hands or login
   ---
   ```
 
-  Then cover what changed, the evidence, what's left, and any decision the brief didn't cover.
+  Then cover what changed, the evidence, what's left, and any decision the brief didn't cover. A
+  `noticed:` item without one of the four dispositions, or an `outstanding:` item that names no
+  blocker, is the mistake the drift scan flags on every note that has no `merged:` line (the field
+  this schema replaced).
 <!-- END agent-contracts:family -->
 
 <!-- BEGIN agent-contracts:aemo-facts -->
