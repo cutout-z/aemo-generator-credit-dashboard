@@ -58,8 +58,9 @@ SNAPSHOT_FILES = (
 RETIRED_SNAPSHOT_FILES = (
     "mlf_history.feather",
 )
-
-SNAPSHOT_GLOBS = (
+# intermittent_quality_YYYY_MM.feather: nothing has written them since S3-01
+# (the six published copies froze at 2026-02..07) and nothing reads them.
+RETIRED_SNAPSHOT_GLOBS = (
     "intermittent_quality_*.feather",
 )
 
@@ -96,13 +97,6 @@ def restore_processed_cache(data_dir: Path, docs_data_dir: Path) -> list[str]:
             shutil.copy2(src, dest)
             restored.append(name)
 
-    for pattern in SNAPSHOT_GLOBS:
-        for src in source_dir.glob(pattern):
-            dest = data_dir / src.name
-            if not dest.exists():
-                shutil.copy2(src, dest)
-                restored.append(src.name)
-
     if restored:
         logger.info("Restored %d processed cache files: %s", len(restored), ", ".join(restored))
     else:
@@ -126,18 +120,13 @@ def publish_processed_cache(data_dir: Path, docs_data_dir: Path) -> list[str]:
             published.append(name)
             manifest_files.append(_manifest_entry(dest))
 
-    for pattern in SNAPSHOT_GLOBS:
-        for src in sorted(data_dir.glob(pattern)):
-            dest = target_dir / src.name
-            shutil.copy2(src, dest)
-            published.append(src.name)
-            manifest_files.append(_manifest_entry(dest))
-
-    for name in RETIRED_SNAPSHOT_FILES:
-        stale = target_dir / name
+    stale_files = [target_dir / name for name in RETIRED_SNAPSHOT_FILES]
+    for pattern in RETIRED_SNAPSHOT_GLOBS:
+        stale_files.extend(sorted(target_dir.glob(pattern)))
+    for stale in stale_files:
         if stale.exists():
             stale.unlink()
-            logger.info("Removed retired processed-cache file %s", name)
+            logger.info("Removed retired processed-cache file %s", stale.name)
 
     manifest = {
         "schema_version": 1,

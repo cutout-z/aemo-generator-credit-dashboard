@@ -41,19 +41,21 @@ FCAS_BID_TYPES = [
 # Column groups of the two BIDPEROFFER_D consumers in this pipeline:
 #   - FCAS factors: MAXAVAIL/ENABLEMENTMIN/ENABLEMENTMAX (offer capacity)
 #   - ENERGY offer volumes: BANDAVAIL1-10 (per-interval band volumes)
-# VERSIONNO/OFFERDATE drive rebid dedupe and are best-effort: monthly archive
-# vintages may lack them, so they are requested but never required for heal.
-# DIRECTION (IESS, 2024-06) is best-effort too: pre-IESS archives lack it.
-_BIDPEROFFER_KEYS = ["INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", "VERSIONNO"]
+# No VERSIONNO: nemosis keeps only its default BIDPEROFFER_D columns, which
+# have none, so asking for it never brings it. Nor is it needed: BIDPEROFFER_D
+# holds the one dispatch-applicable offer per (DUID, BIDTYPE, DIRECTION,
+# interval), with no rebid versions to choose between (NAS check 2026-10-22:
+# Sep 2026, 19,607,712 rows, every key once).
+# DIRECTION (IESS, 2024-06) is best-effort: pre-IESS archives lack it.
+_BIDPEROFFER_KEYS = ["INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION"]
 _BIDPEROFFER_FCAS_COLS = ["MAXAVAIL", "ENABLEMENTMIN", "ENABLEMENTMAX"]
 BIDPEROFFER_UNION_COLS = (
     _BIDPEROFFER_KEYS
     + _BIDPEROFFER_FCAS_COLS
     + [f"BANDAVAIL{i}" for i in range(1, 11)]
 )
-# Columns a healthy fetch must actually carry (VERSIONNO may be absent from
-# monthly archive CSVs; the dedupe then degrades with a warning. DIRECTION is
-# absent before IESS; offer_direction_mask then treats every row as GEN).
+# Columns a healthy fetch must actually carry (DIRECTION is absent before
+# IESS; offer_direction_mask then treats every row as GEN).
 BIDPEROFFER_REQUIRED_COLS = {
     "INTERVAL_DATETIME", "DUID", "BIDTYPE",
     "MAXAVAIL", "ENABLEMENTMIN", "ENABLEMENTMAX",
@@ -65,7 +67,7 @@ _FCAS_REQUIRED = {"INTERVAL_DATETIME", "DUID", "BIDTYPE", "MAXAVAIL"}
 # BANDAVAIL bands are ENERGY volumes: copying them for ~13M FCAS rows a month
 # cost ~1 GiB the FCAS lane never reads.
 _FCAS_SLICE_COLS = {
-    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", "VERSIONNO", *_BIDPEROFFER_FCAS_COLS,
+    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", *_BIDPEROFFER_FCAS_COLS,
 }
 
 # ── Offer direction: the ONE rule every BIDPEROFFER_D / BIDDAYOFFER_D consumer uses ──
@@ -200,6 +202,8 @@ def _cached_parquet_columns(cache_dir: str, table: str, year: int, month: int):
 
 _ARCHIVE_TS_FORMAT = "%Y/%m/%d %H:%M:%S"
 _TEXT_COLS = {"DUID", "BIDTYPE", "DIRECTION"}
+# The dtype nemosis gives a parsed archive timestamp under the installed pandas.
+_NEMOSIS_TS_DTYPE = pd.to_datetime(pd.Series(["2000/01/01 00:00:00"]), format=_ARCHIVE_TS_FORMAT).dtype
 
 
 def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
@@ -318,6 +322,12 @@ def _parts_to_frame(cols: list[str], parts: list, positions: list[np.ndarray]) -
     frame = table.to_pandas(split_blocks=True, self_destruct=True)
     del table
     frame.index = pd.Index(np.concatenate(positions))
+    # nemosis types the column with pd.to_datetime, whose resolution depends
+    # on the pandas version (ns on pandas 2, us on pandas 3, the lane's). Match
+    # it, so the frame stays identical to the compiler's whatever is installed;
+    # a no-op (no copy) where the two already agree.
+    if "INTERVAL_DATETIME" in frame.columns and frame["INTERVAL_DATETIME"].dtype != _NEMOSIS_TS_DTYPE:
+        frame["INTERVAL_DATETIME"] = frame["INTERVAL_DATETIME"].astype(_NEMOSIS_TS_DTYPE)
     return frame
 
 
@@ -469,9 +479,8 @@ def fcas_bids_from_raw(
     Mirrors the post-fetch steps of the historical ``fetch_fcas_bids_month``:
     requires the FCAS columns, keeps only the 8 FCAS bid types on the
     generating side (``offer_direction_mask``: regulation GEN, contingency GEN
-    or BIDIRECTIONAL), dedupes to the latest offer version per (unit, service,
-    direction, interval) when VERSIONNO is present, and returns rows with
-    columns (plus DIRECTION when the archive carries it):
+    or BIDIRECTIONAL), and returns rows with columns (plus DIRECTION when the
+    archive carries it):
         INTERVAL_DATETIME, DUID, BIDTYPE, MAXAVAIL, ENABLEMENTMIN, ENABLEMENTMAX
     ENERGY bids are dropped here. MAXAVAIL == 0 rows are KEPT (S3-05): an
     explicit zero offer is observed source coverage, not an absence.
@@ -506,8 +515,7 @@ def fcas_bids_from_raw(
 def fcas_load_bids_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
     """The charging (LOAD) side's regulation FCAS rows of a raw BIDPEROFFER_D frame.
 
-    Same post-processing as ``fcas_bids_from_raw`` (latest offer version per
-    unit, service, direction and interval; zero offers kept), on RAISEREG /
+    Same post-processing as ``fcas_bids_from_raw`` (zero offers kept), on RAISEREG /
     LOWERREG rows with DIRECTION == "LOAD" only (``load_offer_rows``). Empty
     for a frame without DIRECTION, or with no bidirectional unit. These rows
     feed only the ``*_load`` FCAS fields; the existing fields never see them.
@@ -527,28 +535,17 @@ def fcas_load_bids_from_raw(raw: pd.DataFrame, year: int, month: int) -> pd.Data
 
 
 def _fcas_rows(raw: pd.DataFrame, rows: pd.Series, year: int, month: int) -> pd.DataFrame | None:
-    """The FCAS slice of ``raw`` at ``rows``: deduped to the latest offer
-    version, MAXAVAIL numeric (nulls dropped, zeros kept), timestamps typed.
+    """The FCAS slice of ``raw`` at ``rows``: MAXAVAIL numeric (nulls
+    dropped, zeros kept), timestamps typed.
     None when ``rows`` selects nothing."""
     cols = [c for c in raw.columns if c in _FCAS_SLICE_COLS]
     bids = raw.loc[rows, cols].copy()
     if bids.empty:
         return None
 
-    # Rebids create multiple versions per (unit, service, interval):
-    # the latest VERSIONNO is the operative offer. VERSIONNO is optional —
-    # parquets cached before it was ever requested lack the column; then we
-    # skip dedupe (slight offer-minute overstatement possible, logged).
-    if "VERSIONNO" in bids.columns:
-        bids["VERSIONNO"] = pd.to_numeric(bids["VERSIONNO"], errors="coerce")
-        bids = bids.sort_values("VERSIONNO").drop_duplicates(
-            subset=offer_dedupe_keys(bids, ["INTERVAL_DATETIME", "DUID", "BIDTYPE"]), keep="last"
-        )
-    else:
-        logger.warning(
-            f"BIDPEROFFER_D {year}-{month:02d}: VERSIONNO absent from cache — "
-            "skipping rebid dedupe (delete the cached parquet to rebuild)"
-        )
+    # No rebid dedupe: BIDPEROFFER_D already holds one row per (unit,
+    # service, direction, interval), the dispatch-applicable offer (see
+    # _BIDPEROFFER_KEYS).
 
     bids["MAXAVAIL"] = pd.to_numeric(bids["MAXAVAIL"], errors="coerce")
     # S3-05: retain explicit zero offers. A MAXAVAIL=0 row is an OBSERVED

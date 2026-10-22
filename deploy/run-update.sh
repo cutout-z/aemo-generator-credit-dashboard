@@ -72,7 +72,9 @@ fi
 
 git config user.name "${GIT_AUTHOR_NAME:-aemo-nas-bot}"
 git config user.email "${GIT_AUTHOR_EMAIL:-aemo-nas-bot@users.noreply.github.com}"
-git commit -m "${COMMIT_MESSAGE_PREFIX} $(date -u +%Y-%m-%d)"
+# Label with the NEM date (AEST, UTC+10 all year; a POSIX TZ, no tzdata needed).
+# A UTC label read a day early: the daily run starts 21:15 UTC, 07:15 AEST next day.
+git commit -m "${COMMIT_MESSAGE_PREFIX} $(TZ=AEST-10 date +%Y-%m-%d)"
 
 if [[ "${PUSH_CHANGES}" == "1" ]]; then
   git push origin main

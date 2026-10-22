@@ -52,7 +52,7 @@ PRICE_SELECT = (
 OFFER_FACTORS_CACHE = "offer_factors.feather"
 # The columns an ENERGY volume slice of BIDPEROFFER_D carries (raw order kept).
 _VOLUME_SLICE_COLS = {
-    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", "VERSIONNO", "OFFERDATE", *BAND_AVAIL_COLS,
+    "INTERVAL_DATETIME", "DUID", "BIDTYPE", "DIRECTION", "OFFERDATE", *BAND_AVAIL_COLS,
 }
 
 
@@ -132,9 +132,8 @@ def _dedupe_bid_rows(df: pd.DataFrame, table: str, year: int, month: int) -> pd.
         sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in df.columns else [])
         df = df.sort_values(sort_cols).drop_duplicates(subset=keys, keep="last")
     else:
-        # Monthly BIDPEROFFER_D archive CSVs lack VERSIONNO (daily files have
-        # it). Rows appear in version order, so keep the last row per
-        # (DUID, interval) — same no-guarantee caveat as the FCAS lane.
+        # A BIDDAYOFFER_D frame without VERSIONNO (nemosis requests it, so
+        # an old or truncated cache): keep the last row per (DUID, day).
         logger.warning(
             f"{table} {year}-{month:02d}: VERSIONNO absent — deduping by file "
             "order (last row per DUID/interval)"
@@ -217,24 +216,12 @@ def _volume_rows(raw: pd.DataFrame, rows: pd.Series, year: int, month: int) -> p
     volumes = raw.loc[rows, cols].copy()
     if volumes.empty:
         return None
-    if "VERSIONNO" in volumes.columns:
-        # Latest offer version wins (rebids); OFFERDATE breaks ties.
-        volumes["VERSIONNO"] = pd.to_numeric(volumes["VERSIONNO"], errors="coerce")
-        sort_cols = ["VERSIONNO"] + (["OFFERDATE"] if "OFFERDATE" in volumes.columns else [])
-        volumes = volumes.sort_values(sort_cols).drop_duplicates(
-            subset=offer_dedupe_keys(volumes, ["DUID", "INTERVAL_DATETIME"]), keep="last"
-        )
-    else:
-        # Monthly BIDPEROFFER_D archive CSVs lack VERSIONNO (daily files have
-        # it). Rows appear in version order, so keep the last row per
-        # (DUID, interval) — same no-guarantee caveat as the FCAS lane.
-        logger.warning(
-            f"BIDPEROFFER_D {year}-{month:02d}: VERSIONNO absent — deduping by file "
-            "order (last row per DUID/interval)"
-        )
-        volumes = volumes.drop_duplicates(
-            subset=offer_dedupe_keys(volumes, ["DUID", "INTERVAL_DATETIME"]), keep="last"
-        )
+    # BIDPEROFFER_D has no VERSIONNO and needs none: it holds one row per
+    # (DUID, BIDTYPE, DIRECTION, interval), the dispatch-applicable offer
+    # (download_bids._BIDPEROFFER_KEYS). The keep-last dedupe is a backstop.
+    volumes = volumes.drop_duplicates(
+        subset=offer_dedupe_keys(volumes, ["DUID", "INTERVAL_DATETIME"]), keep="last"
+    )
     for col in BAND_AVAIL_COLS:
         if col not in volumes.columns:
             logger.warning(f"BIDPEROFFER_D {year}-{month:02d}: {col} missing — fat rebuild required")

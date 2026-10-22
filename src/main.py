@@ -23,7 +23,6 @@ from .download_constraints import (
     fetch_spdconnectionpointconstraint, reference_cache_date,
 )
 from .download_dispatch import fetch_dispatch_price_month, fetch_trading_price_month
-from .download_intermittent import fetch_intermittent_month  # noqa: F401  (S3-01: retained for cache-migration tooling; unused by pipeline)
 from .download_metadata import fetch_generators
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .fetch_mlf import fetch_mlf_data
@@ -393,6 +392,17 @@ def _loss_factor_lane(report: dict) -> LaneRun:
         lane.error = "; ".join(errors) or (
             "DUDETAILSUMMARY unavailable and no cache; revenue uses the tracker's per-FY MLF"
         )
+    # A battery period without SECONDARY_TLF has no dated export factor, so
+    # its revenue uses the tracker's per-FY MLF: degraded, naming the units.
+    gaps = list(report.get("export_tlf_missing") or [])
+    if gaps:
+        lane.details["export_tlf_missing"] = gaps
+        lane.status = STATUS_DEGRADED
+        gap_note = (
+            f"{len(gaps)} BIDIRECTIONAL unit(s) lack SECONDARY_TLF (export MLF); their revenue "
+            f"uses the tracker's per-FY MLF: {', '.join(gaps[:20])}"
+        )
+        lane.error = f"{lane.error}; {gap_note}" if lane.error else gap_note
     return lane
 
 
