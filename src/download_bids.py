@@ -200,6 +200,8 @@ def _cached_parquet_columns(cache_dir: str, table: str, year: int, month: int):
 
 _ARCHIVE_TS_FORMAT = "%Y/%m/%d %H:%M:%S"
 _TEXT_COLS = {"DUID", "BIDTYPE", "DIRECTION"}
+# The dtype nemosis gives a parsed archive timestamp under the installed pandas.
+_NEMOSIS_TS_DTYPE = pd.to_datetime(pd.Series(["2000/01/01 00:00:00"]), format=_ARCHIVE_TS_FORMAT).dtype
 
 
 def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
@@ -318,6 +320,12 @@ def _parts_to_frame(cols: list[str], parts: list, positions: list[np.ndarray]) -
     frame = table.to_pandas(split_blocks=True, self_destruct=True)
     del table
     frame.index = pd.Index(np.concatenate(positions))
+    # nemosis types the column with pd.to_datetime, whose resolution depends
+    # on the pandas version (ns on pandas 2, us on pandas 3, the lane's). Match
+    # it, so the frame stays identical to the compiler's whatever is installed;
+    # a no-op (no copy) where the two already agree.
+    if "INTERVAL_DATETIME" in frame.columns and frame["INTERVAL_DATETIME"].dtype != _NEMOSIS_TS_DTYPE:
+        frame["INTERVAL_DATETIME"] = frame["INTERVAL_DATETIME"].astype(_NEMOSIS_TS_DTYPE)
     return frame
 
 

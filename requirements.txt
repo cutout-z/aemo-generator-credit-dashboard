@@ -1,7 +1,11 @@
-pandas>=2.0
-pyarrow>=14.0
-openpyxl>=3.1
-requests>=2.31
-nemosis>=3.5
-xlrd>=2.0
-pytest>=7.0
+# Pinned to the NAS lane venv (pip freeze, 2026-10-22), the set the publish-gate
+# tests run under: a reinstall must reproduce it, not pull whatever is newest.
+# Upgrade deliberately: change a pin, run the full suite, then reinstall the lane.
+pandas==3.0.3
+pyarrow==24.0.0
+numpy==2.4.6
+nemosis==3.8.1
+openpyxl==3.1.5
+requests==2.34.2
+xlrd==2.0.2
+pytest==9.0.3
