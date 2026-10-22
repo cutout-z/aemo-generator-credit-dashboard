@@ -14,7 +14,7 @@ from src import fetch_mlf as fm
 from src import loss_factors as lf
 from src import main as pipeline
 from src.run_status import STATUS_DEGRADED, STATUS_OK, build_manifest
-from tests.test_loss_factors import QPSFB1_ROWS, FakeResponse, _archive
+from tests.test_loss_factors import QPSFB1_ROWS, FakeResponse, _archive, _d
 
 SUMMARY = "DUID,CONNECTIONPOINTID,FY25-26,FY26-27,FY27-28 (Draft)\nGEN1,CP1,0.98,0.97,0.96\n"
 
@@ -115,6 +115,24 @@ class TestLossFactors:
         assert lf.fetch_loss_factor_periods(str(tmp_path), today=datetime(2026, 10, 5), report=report) is None
         lane = pipeline._loss_factor_lane(report)
         assert lane.status == STATUS_DEGRADED and "per-FY MLF" in lane.error
+
+
+def test_battery_without_export_factor_degrades_the_lane(tmp_path, monkeypatch):
+    """A BIDIRECTIONAL period with no SECONDARY_TLF used to fall back to the
+    import factor with only a log line (code pass 2026-10-20, R3 L)."""
+    rows = QPSFB1_ROWS + [_d("BAT9", "2026/07/01", "2999/12/31", "0.95", dtype="BIDIRECTIONAL")]
+    monkeypatch.setattr(lf.requests, "get", lambda url, **kw: FakeResponse(
+        200, _archive(rows).encode()) if "202609010000" in url else FakeResponse(404))
+    report = {}
+    lf.fetch_loss_factor_periods(str(tmp_path), today=datetime(2026, 10, 5), report=report)
+    lane = pipeline._loss_factor_lane(report)
+    assert lane.status == STATUS_DEGRADED and "BAT9" in lane.error
+    assert lane.details["export_tlf_missing"] == ["BAT9"]
+    # The cache keeps the gap: the next run (cache path) reports it too.
+    report = {}
+    lf.fetch_loss_factor_periods(str(tmp_path), today=datetime(2026, 10, 6), report=report)
+    assert report["source"] == "cache" and report["export_tlf_missing"] == ["BAT9"]
+    assert pipeline._loss_factor_lane(report).status == STATUS_DEGRADED
 
 
 def test_both_sources_appear_in_the_manifest():

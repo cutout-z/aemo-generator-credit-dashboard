@@ -208,12 +208,19 @@ class TestRevenueByEffectiveDate:
                      periods)
         assert row[REVENUE_MLF_VALUE_COL] == 0.9862
 
-    def test_bidirectional_without_secondary_falls_back_and_logs(self, caplog):
+    def test_bidirectional_without_secondary_has_no_dated_factor(self, caplog):
+        """Never the import factor for a battery's export (code pass 2026-10-20,
+        R3 L): the period has no dated factor, revenue keeps the tracker's
+        export MLF and says so, and the gap is listed for the lane."""
         with caplog.at_level(logging.WARNING):
             p = _periods([_d("BAT9", "2026/07/01", "2999/12/31", "0.95",
                              dtype="BIDIRECTIONAL")])
-        assert p["TLF"].tolist() == [0.95]
+        assert p["TLF"].isna().all()
         assert "BAT9" in caplog.text
+        assert lf.export_tlf_missing(p) == ["BAT9"]
+        row = _month("BAT9", ["2026-08-10 12:00"], 2026, 8, _history([("BAT9", 2026, 0.98)]), p)
+        assert row[REVENUE_MLF_VALUE_COL] == 0.98
+        assert row[REVENUE_MLF_SOURCE_COL] == "mlf-tracker"
 
     def test_generator_secondary_tlf_is_ignored(self):
         p = _periods([_d("GEN8", "2026/07/01", "2999/12/31", "1.019", secondary="0.9176")])

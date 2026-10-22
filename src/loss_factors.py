@@ -113,12 +113,16 @@ def parse_dudetailsummary(raw: bytes | str) -> pd.DataFrame:
         )
         missing = bidir & export.isna()
         if missing.any():
+            # Never the import factor for a battery's export (AEMO shared
+            # facts, TLF orientation): no dated factor, so revenue keeps the
+            # MLF tracker's export value and its provenance says so. The
+            # loss_factors lane reports these DUIDs (export_tlf_missing).
             logger.warning(
                 f"DUDETAILSUMMARY: {int(missing.sum())} BIDIRECTIONAL periods lack "
-                "SECONDARY_TLF (export MLF) — falling back to TRANSMISSIONLOSSFACTOR "
-                f"(import) for: {', '.join(sorted(set(df.loc[missing, 'DUID'].str.strip()))[:20])}"
+                "SECONDARY_TLF (export MLF) — no dated factor for: "
+                f"{', '.join(sorted(set(df.loc[missing, 'DUID'].str.strip()))[:20])}"
             )
-        tlf = tlf.where(~bidir | missing, export)
+        tlf = tlf.where(~bidir, export)
 
     out = pd.DataFrame({
         "DUID": df["DUID"].str.strip(),
@@ -141,6 +145,14 @@ def parse_dudetailsummary(raw: bytes | str) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     return out[list(LOSS_FACTOR_COLUMNS)]
+
+
+def export_tlf_missing(periods: pd.DataFrame | None) -> list[str]:
+    """BIDIRECTIONAL DUIDs with a period that has no usable export factor."""
+    if periods is None or periods.empty:
+        return []
+    gap = (periods["DISPATCHTYPE"] == "BIDIRECTIONAL") & periods["TLF"].isna()
+    return sorted(set(periods.loc[gap, "DUID"]))
 
 
 def _archive_months(today: datetime) -> list[tuple[int, int]]:
@@ -171,12 +183,21 @@ def fetch_loss_factor_periods(
 
     ``report`` (optional dict) is filled for the run manifest (audit
     2026-10-07, S2-6): ``archive_month`` used, ``source`` (``download``,
-    ``cache``, ``fallback_cache`` or ``none``) and ``errors`` (probe
-    failures other than 404). ``fallback_cache`` means a download failed or
+    ``cache``, ``fallback_cache`` or ``none``), ``errors`` (probe
+    failures other than 404) and ``export_tlf_missing`` (``export_tlf_missing``
+    of the periods returned). ``fallback_cache`` means a download failed or
     the cache is more than one archive behind and nothing newer was reachable.
     """
-    today = today or datetime.now()
     report = report if report is not None else {}
+    periods = _fetch_loss_factor_periods(cache_dir, force, today, report)
+    report["export_tlf_missing"] = export_tlf_missing(periods)
+    return periods
+
+
+def _fetch_loss_factor_periods(
+    cache_dir: str, force: bool, today: datetime | None, report: dict,
+) -> pd.DataFrame | None:
+    today = today or datetime.now()
     report.setdefault("errors", [])
     cache_path = Path(cache_dir) / LOSS_FACTOR_CACHE
     cached = None
