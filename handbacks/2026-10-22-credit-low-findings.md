@@ -5,7 +5,7 @@ branch: fix/credit-low-findings
 merged: false
 status: PR #17 open with every 2026-10-20 code-pass low finding for credit fixed, except FCAS 1SEC (dropped); waiting on Zalen's merge yes
 outstanding:
-  - "to-do: Zalen's yes to merge PR #17 (includes an AGENTS.md edit); not while the 28-month rerun or the 05:15 run is going"
+  - "to-do: Zalen's yes to merge PR #17 (includes an AGENTS.md edit); not while the 28-month rerun or the daily run (21:15 UTC) is going"
   - "to-do: after merge, check the next daily lane log: suite passes under pandas 3, commit label is the AEST date, processed-cache drops the 6 intermittent_quality files"
 ---
 
@@ -21,7 +21,7 @@ Branch `fix/credit-low-findings`, PR #17. There is one commit per finding, and e
 | Missing SECONDARY_TLF falls back silently | Fixed `327d554b8`: no import-factor fallback; revenue uses the tracker's export MLF; the lane is degraded and names the DUIDs. Has never fired |
 | Dead code (fy_opening_tlf, intermittent import, snapshot glob) | Fixed `fd56e6313`. Six frozen intermittent_quality snapshots leave docs/data on the next publish |
 | FCAS_BID_TYPES lacks 1SEC | Dropped: missing scope (prices, offers and page copy all lack R1/L1, and nemosis's defaults have no 1SEC price). Reopen if very fast FCAS should be shown |
-| Commit label uses the UTC date | Fixed `489f3f791`: the label is the NEM date (TZ=AEST-10) |
+| Commit label uses the UTC date | Fixed `489f3f791` + `cec08bd2f`: the label is the NEM date (TZ=AEST-10); the 21:15 UTC run had labelled commits a day early |
 | AGENTS.md baseline and pitfall | `314ddbfb6`: baseline 577/12/3/10; corrected the nemosis-columns pitfall. Needs Zalen's yes |
 
 ## Evidence
