@@ -26,36 +26,6 @@
       "size_bytes": 39146
     },
     {
-      "name": "intermittent_quality_2026_02.feather",
-      "sha256": "2e2a6c86e7a5822c7d96a5f66befe4248fbe43183b5f4ce95be051fbf3c7d538",
-      "size_bytes": 5178
-    },
-    {
-      "name": "intermittent_quality_2026_03.feather",
-      "sha256": "f8f2fab0dc9b339548a18db3424df1f558543ee452a7b3c0301dbcc04b419463",
-      "size_bytes": 6114
-    },
-    {
-      "name": "intermittent_quality_2026_04.feather",
-      "sha256": "6ecafa6be79bee7b572b77221ad27f472e349f0ace350fdd237a98b4b77ef8b3",
-      "size_bytes": 6210
-    },
-    {
-      "name": "intermittent_quality_2026_05.feather",
-      "sha256": "4ee092922444f3004eb7e54b86c40e2e3b9b4e539508b797f02b7027189d4f30",
-      "size_bytes": 6234
-    },
-    {
-      "name": "intermittent_quality_2026_06.feather",
-      "sha256": "2e650e6217c7064d9c5dd3dce99ee5920a1e4e939040dd53a9ee480337b343b8",
-      "size_bytes": 6290
-    },
-    {
-      "name": "intermittent_quality_2026_07.feather",
-      "sha256": "4b7974b8230c25740b5f5dc3ff293bdfa10f2b9819f623fd0ad39d2cf25e4b55",
-      "size_bytes": 6282
-    },
-    {
       "name": "market_factors_daily.feather",
       "sha256": "456dbcafe3e834cb9eba47d7bd243476db6e151db359e175a9e3d466deec8499",
       "size_bytes": 393210

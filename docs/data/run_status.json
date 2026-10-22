@@ -1,8 +1,8 @@
 {
  "guards": {
-  "daily_age_days": 21,
+  "daily_age_days": 22,
   "daily_freshness": "pass",
-  "monthly_age_days": 21,
+  "monthly_age_days": 22,
   "monthly_freshness": "pass"
  },
  "outputs": {
@@ -10,12 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-21T21:20:50Z",
+  "finished_utc": "2026-10-22T21:21:39Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-10-21T21:15:08Z"
+  "started_utc": "2026-10-22T21:15:15Z"
  },
  "schema_version": 1,
  "sources": {
@@ -85,7 +85,7 @@
    "attempted_months": 1,
    "details": {
     "draft_fy": null,
-    "last_modified": "Wed, 21 Oct 2026 14:03:32 GMT",
+    "last_modified": "Thu, 22 Oct 2026 10:59:24 GMT",
     "source": "download"
    },
    "error": null,
