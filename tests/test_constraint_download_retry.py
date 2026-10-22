@@ -56,11 +56,32 @@ def test_gives_up_after_three_retries(tmp_path, monkeypatch, calls):
 
 
 def test_a_404_is_retried_once_only(tmp_path, monkeypatch, calls):
-    old = URL.replace("2026/MMSDM_2026_03", "2010/MMSDM_2010_03").replace("202603", "201003")
+    month = URL.replace("2026/MMSDM_2026_03", "2020/MMSDM_2020_03").replace("202603", "202003")
     _serve(monkeypatch, calls, [_Resp(404, b"", "text/html")] * 2)
     with pytest.raises(zipfile.BadZipFile, match="HTTP 404"):
-        dc._download_unzip_csv_with_retry(old, str(tmp_path))
+        dc._download_unzip_csv_with_retry(month, str(tmp_path))
     assert calls["sleep"] == [5] and len(calls["get"]) == 2
+
+
+@pytest.mark.parametrize("url", [
+    # Before the MMSDM archive starts: GENCONDATA/SPDCP are searched from 2009-07.
+    URL.replace("2026/MMSDM_2026_03", "2010/MMSDM_2010_03").replace("202603", "201003"),
+    # A second file part: nemosis asks for FILE02 after every FILE01.
+    URL.replace("#FILE01#", "#FILE02#"),
+])
+def test_a_404_that_cannot_be_a_blip_is_not_retried(tmp_path, monkeypatch, calls, url):
+    _serve(monkeypatch, calls, [_Resp(404, b"", "text/html")])
+    with pytest.raises(zipfile.BadZipFile, match="HTTP 404"):
+        dc._download_unzip_csv_with_retry(url, str(tmp_path))
+    assert calls["sleep"] == [] and len(calls["get"]) == 1
+
+
+def test_a_later_file_part_still_retries_a_non_zip_answer(tmp_path, monkeypatch, calls):
+    """Only a 404 is final for FILE02+: a busy nemweb is retried as usual."""
+    _serve(monkeypatch, calls, [_Resp(200, b"<html>busy</html>", "text/html"),
+                                _Resp(200, _zip_bytes(), "application/zip")])
+    dc._download_unzip_csv_with_retry(URL.replace("#FILE01#", "#FILE02#"), str(tmp_path))
+    assert calls["sleep"] == [5]
 
 
 def test_a_month_that_has_not_happened_is_not_retried(tmp_path, monkeypatch, calls):

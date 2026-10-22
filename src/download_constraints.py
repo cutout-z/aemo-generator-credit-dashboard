@@ -43,11 +43,18 @@ REFERENCE_MAX_LAG_DAYS = 183
 
 # nemweb intermittently answers a run of archive requests with something that
 # is not a zip; a burst of the same requests minutes later succeeds. Archive
-# downloads for these tables retry: a 404 once (most are real: no archive
-# before 2015, months to 2030 are requested), anything else up to three times.
+# downloads for these tables retry: a 404 once, anything else up to three
+# times. A 404 that cannot be a blip is not retried: a month that has not
+# happened, a month before the MMSDM archive starts (GENCONDATA and
+# SPDCONNECTIONPOINTCONSTRAINT are searched from 2009-07; the NAS cache's
+# first months are 2015-01), and a second or later file part (nemosis asks
+# for FILE02 after every FILE01; none exists for these tables, NAS cache
+# 2026-10-22). Each such retry cost 5 s, ~90 months x 2 tables per run.
 DOWNLOAD_RETRY_DELAYS = (5, 20, 60)
+ARCHIVE_FIRST_YEAR = 2015
 _sleep = time.sleep
 _FILE_MONTH = re.compile(r"(20\d{2})(\d{2})010000")
+_LATER_FILE_PART = re.compile(r"%23FILE0*([2-9]|[1-9]\d)%23")
 
 
 def _stale_reason(df: pd.DataFrame, table: str, today=None) -> str | None:
@@ -71,6 +78,8 @@ def _download_unzip_csv_with_retry(url: str, down_load_to: str) -> None:
     m = _FILE_MONTH.search(url)
     future = bool(m) and (int(m.group(1)), int(m.group(2))) > (
         pd.Timestamp.now().year, pd.Timestamp.now().month)
+    never_published = (bool(m) and int(m.group(1)) < ARCHIVE_FIRST_YEAR) \
+        or bool(_LATER_FILE_PART.search(url))
     last = None
     for attempt in range(len(DOWNLOAD_RETRY_DELAYS) + 1):
         try:
@@ -84,7 +93,8 @@ def _download_unzip_csv_with_retry(url: str, down_load_to: str) -> None:
             not_found = r.status_code == 404
         except (requests.RequestException, zipfile.BadZipFile) as e:
             last, not_found = f"{type(e).__name__}: {e}", False
-        if future or attempt >= len(DOWNLOAD_RETRY_DELAYS) or (not_found and attempt >= 1):
+        if future or attempt >= len(DOWNLOAD_RETRY_DELAYS) \
+                or (not_found and (attempt >= 1 or never_published)):
             break
         _sleep(DOWNLOAD_RETRY_DELAYS[attempt])
     raise zipfile.BadZipFile(f"{url.rsplit('/', 1)[-1]}: {last}")
