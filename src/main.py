@@ -23,7 +23,6 @@ from .download_constraints import (
     fetch_spdconnectionpointconstraint, reference_cache_date,
 )
 from .download_dispatch import fetch_dispatch_price_month, fetch_trading_price_month
-from .download_intermittent import fetch_intermittent_month  # noqa: F401  (S3-01: retained for cache-migration tooling; unused by pipeline)
 from .download_metadata import fetch_generators
 from .download_scada import fetch_dispatchload_month, fetch_scada_month
 from .fetch_mlf import fetch_mlf_data

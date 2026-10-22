@@ -305,23 +305,6 @@ def interval_loss_factors(
     return out
 
 
-def fy_opening_tlf(periods: pd.DataFrame | None, fy_start_year: int) -> dict[str, float]:
-    """{DUID: TLF of the DUID's first period in effect during the FY}.
-
-    Diagnostic only: aggregate_month's agreement check uses every factor in
-    the FY (fy_tlf_values), because the tracker may carry a mid-year revision.
-    """
-    if periods is None or periods.empty:
-        return {}
-    a = pd.Timestamp(year=fy_start_year, month=7, day=1)
-    b = pd.Timestamp(year=fy_start_year + 1, month=7, day=1)
-    q = periods[(periods["START_DATE"] < b) & (periods["END_DATE"] > a)].dropna(subset=["TLF"])
-    if q.empty:
-        return {}
-    first = q.sort_values("START_DATE").drop_duplicates("DUID", keep="first")
-    return dict(zip(first["DUID"], first["TLF"].astype(float)))
-
-
 def fy_tlf_values(periods: pd.DataFrame | None, fy_start_year: int) -> dict[str, list[float]]:
     """{DUID: every TLF in effect at some point during the FY}.
 

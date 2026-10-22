@@ -30,7 +30,6 @@ from src.aggregate import (
     build_mlf_lookup,
 )
 from src.loss_factors import (
-    fy_opening_tlf,
     interval_loss_factors,
     parse_dudetailsummary,
 )
@@ -126,11 +125,6 @@ class TestIntervalMapping:
         out = interval_loss_factors(iv, _periods())
         assert list(out.index) == [7, 3]
         assert pd.isna(out.loc[7, "TLF"]) and out.loc[3, "TLF"] == 0.9176
-
-    def test_fy_opening_factor(self):
-        assert fy_opening_tlf(_periods(), 2025) == {"QPSFB1": 1.019}
-        assert fy_opening_tlf(_periods(), 2026) == {"QPSFB1": 0.9032}
-        assert fy_opening_tlf(None, 2025) == {}
 
 
 def _history(rows):
