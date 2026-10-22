@@ -2,10 +2,9 @@
 project: AEMO Generator Credit dashboard
 agent: claude
 branch: fix/credit-low-findings
-merged: false
-status: PR #17 open with every 2026-10-20 code-pass low finding for credit fixed, except FCAS 1SEC (dropped); waiting on Zalen's merge yes
+merged: true
+status: PR #17 merged 2026-10-22 (bcbdd9a00) with Zalen's yes; every credit low finding fixed except FCAS 1SEC (dropped); lane picks it up at the next 21:15 UTC run
 outstanding:
-  - "to-do: Zalen's yes to merge PR #17 (includes an AGENTS.md edit); not while the 28-month rerun or the daily run (21:15 UTC) is going"
   - "to-do: after merge, check the next daily lane log: suite passes under pandas 3, commit label is the AEST date, processed-cache drops the 6 intermittent_quality files"
 ---
 
@@ -41,3 +40,9 @@ Branch `fix/credit-low-findings`, PR #17. There is one commit per finding, and e
 ## Seen in passing (not in scope)
 
 - In the NAS cache, GENCONDATA 2026 holds only 01, 02, 05 and 08; 03, 04, 06 and 07 are missing, while SPDCP has 01 through 08. All files are dated Oct 7. This fits R3's [M] finding that `_stale_reason` only checks the newest month. The next constraints refresh after the 25-day cache age may refill them.
+
+## Landing
+
+- Merged with Zalen's yes ("merge ... #17, including its AGENTS.md change"), merge commit `bcbdd9a00`. main had not moved since the branch was cut. At merge time no credit lock was held and the 28-month rerun had not started.
+- Suite on the merged main: 577/12/3/10, the same as the branch.
+- There is no Mac live checkout. The NAS lane pulls origin/main at the start of its next run (21:15 UTC), so the change is not live until then.
