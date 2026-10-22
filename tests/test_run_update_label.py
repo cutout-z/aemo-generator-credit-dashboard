@@ -1,7 +1,8 @@
 """Data commits are labelled with the NEM date, not the UTC date (code pass 2026-10-20, R3 L).
 
-The daily lane runs at 05:15 AEST, which is 19:15 UTC the day before, so a
-`date -u` label named the previous day. The label's command is evaluated here
+The daily lane starts at 21:15 UTC, which is 07:15 AEST the next day, so a
+`date -u` label named the previous day (scheduler log, 2026-10-21T21:15Z run
+committed "... 2026-10-21" on the 22nd). The label's command is evaluated here
 under a stub `date` that answers as `date` would at that moment.
 """
 
@@ -19,7 +20,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "deploy" / "run-update.sh"
 
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
 
-# 2026-10-22 05:15 AEST == 2026-10-21 19:15 UTC.
+# 2026-10-22 07:15 AEST == 2026-10-21 21:15 UTC.
 _STUB_DATE = """#!/bin/sh
 case " $* " in *" -u "*) echo 2026-10-21; exit 0;; esac
 case "$TZ" in AEST-10) echo 2026-10-22;; *) echo 2026-10-21;; esac
