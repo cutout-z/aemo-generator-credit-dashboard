@@ -1,8 +1,8 @@
 {
  "guards": {
-  "daily_age_days": 23,
+  "daily_age_days": 24,
   "daily_freshness": "pass",
-  "monthly_age_days": 23,
+  "monthly_age_days": 24,
   "monthly_freshness": "pass"
  },
  "outputs": {
@@ -10,12 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-10-23T21:22:13Z",
+  "finished_utc": "2026-10-24T21:21:36Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-10-23T21:15:03Z"
+  "started_utc": "2026-10-24T21:15:02Z"
  },
  "schema_version": 1,
  "sources": {
