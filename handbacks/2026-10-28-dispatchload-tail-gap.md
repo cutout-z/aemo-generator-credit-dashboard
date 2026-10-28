@@ -3,15 +3,17 @@ project: AEMO Generator Credit Dashboard
 agent: claude
 branch: fix/dispatchload-tail-gap
 pr: cutout-z/aemo-generator-credit-dashboard#19
-status: merged 4ee4ab9; the lane picks it up on its next run; Sep 2025 stays partial until a deliberate reprocess
+pr: cutout-z/aemo-generator-credit-dashboard#20
+status: #19 merged 4ee4ab9, #20 merged bfb8f67; Sep 2025 reprocess approved, waiting on the manual --months-back 14 lane run
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
-  - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: Brain Needs-me card c56b9b118f16fac68 (reprocess with --months-back 14, or leave)"
+  - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed; run is outstanding below"
+  - "Review L notes on #20 (legacy-row rounding drift up to 0.05 MWh per member; non-curtailable units carry all-null arrays like their pct) -> done: accepted, 0 legacy rows in the cache"
   - "Cross-repo fact (short settled MMSDM month; nemosis Next_Day reads Current only) -> tracked: cutout-z/agent-contracts#175, open for the owner's merge"
   - "download_intermittent.py stages its archive zip in /tmp (NAS RAM disk) -> done: unreachable, fetch_intermittent_month has no caller since S3-01 (grep src/)"
   - "A parse failure after a successful Next_Day download is not cached, so a short in-window month would re-download ~215 MB each run -> done: accepted; heal fires only on a short archive month (one in 26 cached); revisit if it recurs"
 outstanding:
-  - "decision: reprocess Sep 2025 (Needs-me card c56b9b118f16fac68)"
+  - "to-do [mac-local] run the Sep 2025 reprocess (--months-back 14) from the QNAP admin shell; blocked on: the owner's hands (lane secrets, manual trigger)"
   - "to-do merge cutout-z/agent-contracts#175; blocked on: the owner's merge (land refuses agent-contracts)"
 ---
 
@@ -65,3 +67,22 @@ This is a decision for the owner (card above).
 
 Ruling: healed only whole intervals missing for every unit, not per-unit holes, because the
 observed gap is an archive truncation; if wrong, a unit-level hole stays unfilled, as before.
+
+## Follow-up, 28 Oct 2026: curtailment energy fields (#20)
+
+The owner approved the reprocess and PR 1 of the portfolio plan. #20 adds monthly
+`curtailment_actual_mwh` and `curtailment_potential_mwh` to every unit and station JSON, resolved by
+`_curtailment_energy_columns`. The summing rule is `max(0, 1 − Σactual/Σpotential)`, with the clip applied
+after summing, because actual exceeds potential in 1,150 of 10,252 unit-months. Evidence: the full suite
+gave 591 passed, and all 22 non-passes are the known `tests/test_outputs.py` set. The adversary's verdict
+was "changes" (the clip rule was unstated); after the fix it was "pass", quoted in the merge commit.
+
+The owner chose (a) for the commissioning default in the portfolio view: include every month, with a
+switch to exclude the months before full commercial use, because the financial models already account
+for commissioning. This binds PR 2, which is not started.
+
+Ruling: the reprocess run pushes as normal (`PUSH_CHANGES=1`) and is diffed month by month afterwards,
+not held unpushed, because the lane pulls with `--ff-only || reset --hard origin/main`. An unpushed
+commit would be silently dropped the next time `main` moves. If wrong, a month outside Sep 2025 reaches
+the public site until it is reverted.
+
