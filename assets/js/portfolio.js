@@ -58,7 +58,8 @@
 
     // AEMO full commercial use date for a unit, from its Generation Information block. That
     // block lists the unit's whole project, later stages included (ERB01 carries a Committed
-    // stage 2 due 2027), so: the row named after the DUID when there is one; otherwise only rows
+    // stage 2 due 2027), so: the row named after the DUID when there is one; a block of one row,
+    // whatever its status (WTAHB1 generates while still listed Committed); otherwise only rows
     // already In Service or In Commissioning, and no date at all if one of those has none (an
     // undated stage is running, so which row is this unit can't be told); else the earliest.
     // An In Service row dated after the unit's latest published month contradicts itself
@@ -70,7 +71,9 @@
         const months = (doc && doc.monthly && doc.monthly.months) || [];
         const last = months.length ? months[months.length - 1] : null;
         const own = rows.filter(u => duid && String(u.unit_name || '').toUpperCase() === duid);
-        const candidates = own.length ? own : rows.filter(u => OPERATING.test(u.commitment_status || ''));
+        const candidates = own.length ? own
+            : rows.length === 1 ? rows
+            : rows.filter(u => OPERATING.test(u.commitment_status || ''));
         const dates = candidates.map(u => {
             const d = u.full_commercial_use_date;
             return d && last && /^in service$/i.test(u.commitment_status || '') && d.slice(0, 7) > last ? null : d;

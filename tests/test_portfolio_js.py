@@ -152,12 +152,13 @@ def test_economic_curtailment_matches_pipeline(tmp_path):
     nan = float("nan")
     rows = [
         # 2026-03: energy columns; GEN_C's economic % (0.3) is above its total (0.2) and is capped.
+        # GEN_B's potential is not 10× its nameplate, so energy and nameplate weights differ.
         ("GEN_A", "2026-03", 900, 0.10, 0.02, 900, 1000),
-        ("GEN_B", "2026-03", 2400, 0.20, 0.15, 2400, 3000),
+        ("GEN_B", "2026-03", 2400, 0.40, 0.15, 2400, 4000),
         ("GEN_C", "2026-03", 400, 0.20, 0.30, 400, 500),
         # 2026-04: legacy rows, potential recovered as generation / (1 − pct).
         ("GEN_A", "2026-04", 800, 0.20, 0.05, nan, nan),
-        ("GEN_B", "2026-04", 2700, 0.10, 0.08, nan, nan),
+        ("GEN_B", "2026-04", 2700, 0.40, 0.08, nan, nan),
         ("GEN_C", "2026-04", 450, 0.10, 0.01, nan, nan),
         # 2026-05: no total, so no derivable potential: nameplate-weighted fallback.
         ("GEN_A", "2026-05", 1000, nan, 0.04, nan, nan),
@@ -186,8 +187,12 @@ def test_economic_curtailment_matches_pipeline(tmp_path):
     assert proc.returncode == 0, proc.stderr
     r = json.loads(proc.stdout)
     assert r["pMonths"] == r["months"] == ["2026-03", "2026-04", "2026-05", "2026-06"]
-    # March: (0.02·1000 + 0.15·3000 + 0.2·500) / 4500 = 0.1267 (GEN_C capped at 0.2).
-    assert r["pipeline"][0] == pytest.approx(0.1267, abs=1e-4)
+    # March: (0.02·1000 + 0.15·4000 + 0.2·500) / 5500 = 0.1309 (GEN_C capped at 0.2);
+    # nameplate weights would give 57/450 = 0.1267.
+    assert r["pipeline"][0] == pytest.approx(0.1309, abs=1e-4)
+    # April, legacy: potentials 800/0.8, 2700/0.6, 450/0.9 = 1000, 4500, 500 →
+    # (0.05·1000 + 0.08·4500 + 0.01·500) / 6000 = 0.0692 (nameplate: 0.0656).
+    assert r["pipeline"][1] == pytest.approx(0.0692, abs=1e-4)
     # May: nameplate fallback (0.04·100 + 0.12·300) / 400 = 0.1.
     assert r["pipeline"][2] == pytest.approx(0.1, abs=1e-4)
     assert r["pipeline"][3] == 0.0
@@ -273,6 +278,8 @@ console.log(JSON.stringify({
     // Several dated operating stages, none named: the earliest (leaves out the fewest months).
     stages: at('XYZ1', [row('X2', 'In Service', '2025-02-01'), row('X1', 'In Commissioning', '2024-11-15'), row('X3', 'Anticipated', '2028-01-01')]),
     none: at('NONE1', []),
+    // WTAHB1: one Committed row, generating since 2024-09: a one-row block is this unit whatever its status.
+    oneRow: at('WTAHB1', [row('WSB_G1', 'Committed', '2026-09-01')]),
     // MP2: in service since before our data, yet dated 2027 in the register: no usable date.
     future: P.fullCommercialUse({ duid: 'MP2', monthly: { months: ['2021-09', '2026-09'] },
         gen_info: { units: [row('Mt Piper 2', 'In Service', '2027-01-31')] } }),
@@ -290,5 +297,6 @@ def test_full_commercial_use_reads_the_units_own_stage():
     assert r["own"] == {"date": "2024-05-10", "commissioning": False}
     assert r["stages"] == {"date": "2024-11-15", "commissioning": True}
     assert r["none"] == {"date": None, "commissioning": False}
+    assert r["oneRow"] == {"date": "2026-09-01", "commissioning": False}
     assert r["future"] == {"date": None, "commissioning": False}
     assert r["commissioningAhead"] == {"date": "2026-12-01", "commissioning": True}

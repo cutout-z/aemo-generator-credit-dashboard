@@ -1979,8 +1979,9 @@ function makeRollingTrace(fmtMonths, key, valueFormat) {
     if (selectedMonths < 12) return null;
     const full = currentData && currentData.monthly && currentData.monthly[key];
     if (!Array.isArray(full) || !fmtMonths.length) return null;
-    const avg = rolling12(full).slice(-fmtMonths.length);
-    if (!avg) return null;
+    const rolled = rolling12(full);
+    if (!rolled) return null;
+    const avg = rolled.slice(-fmtMonths.length);
     return {
         x: fmtMonths,
         y: avg,
