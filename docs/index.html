@@ -200,18 +200,18 @@
 <!-- App bar: brand, search, and the filters that narrow the search. One row at lg+; below that
      they stack, and the result list opens under the whole block so it never covers a filter.
      (.search-container spans the filters too: clicking one must not close the results.) -->
-<header class="z-30 border-b border-line bg-canvas lg:sticky lg:top-0 md:rounded-t-panel">
-    <div class="search-container relative flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 md:px-6 lg:h-14 lg:flex-nowrap lg:py-0">
+<header class="z-30 border-b border-line bg-canvas min-[1280px]:sticky min-[1280px]:top-0 md:rounded-t-panel">
+    <div class="search-container relative flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 md:px-6 min-[1280px]:h-14 min-[1280px]:flex-nowrap min-[1280px]:py-0">
         <div class="flex shrink-0 items-center gap-2.5">
             <span class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-bg" aria-hidden="true">GC</span>
             <h1 class="text-[13px] font-semibold leading-tight text-ink">AEMO Generator Credit<span class="block text-[12px] font-normal text-faint">Dashboard</span></h1>
         </div>
-        <button type="button" id="themeToggle" class="btn btn-ghost btn-icon ml-auto shrink-0 lg:order-last min-[1600px]:ml-0"
+        <button type="button" id="themeToggle" class="btn btn-ghost btn-icon ml-auto shrink-0 min-[1280px]:order-last min-[1600px]:ml-0"
                 aria-label="Switch to light theme" title="Switch to light theme">
             <svg class="size-4 [[data-theme=light]_&]:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
             <svg class="hidden size-4 [[data-theme=light]_&]:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-        <div class="w-full lg:relative lg:w-auto lg:min-w-[220px] lg:max-w-[480px] lg:flex-1">
+        <div class="w-full min-[1280px]:relative min-[1280px]:w-auto min-[1280px]:min-w-[220px] min-[1280px]:max-w-[480px] min-[1280px]:flex-1">
             <span class="relative block">
                 <svg class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
                 <input type="text" class="search-input input pl-8" id="searchInput"
@@ -219,7 +219,7 @@
                        aria-label="Search generators by name or DUID"
                        autocomplete="off">
             </span>
-            <div class="search-dropdown absolute inset-x-4 top-full z-50 mt-1.5 max-h-[400px] overflow-y-auto rounded-xl border border-line bg-surface shadow-pop md:inset-x-6 lg:right-auto lg:left-0 lg:w-[max(100%,640px)]" id="searchDropdown"></div>
+            <div class="search-dropdown absolute inset-x-4 top-full z-50 mt-1.5 max-h-[400px] overflow-y-auto rounded-xl border border-line bg-surface shadow-pop md:inset-x-6 min-[1280px]:right-auto min-[1280px]:left-0 min-[1280px]:w-[max(100%,640px)]" id="searchDropdown"></div>
         </div>
         <select class="filter-select" id="filterMarket" hidden>
             <option value="">All Markets</option>
@@ -383,7 +383,7 @@
         <!-- Monthly performance: the five panels the period control governs. The control lives in
              this group's header (sticky while the group is on screen), not in a floating strip. -->
         <section class="panel-group w-full" aria-labelledby="grpMonthly">
-            <div class="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-1.5 bg-canvas px-1 py-2 sm:py-3 lg:top-14">
+            <div class="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-1.5 bg-canvas px-1 py-2 sm:py-3 min-[1280px]:top-14">
                 <div class="min-w-0">
                     <h2 id="grpMonthly" class="text-[15px] font-semibold leading-6 text-ink">Monthly performance</h2>
                     <p class="text-[13px] leading-5 text-muted"><span class="hidden sm:inline">The period applies to every chart in this group</span><span id="periodSep" class="hidden sm:inline" hidden> · </span><span id="periodRange" class="num"></span></p>
@@ -2906,14 +2906,18 @@ function initAxisRangeDrag() {
         if (!gd) return;
         const key = zoneFor(gd, e);
         if (!key) return;
-        const ax = gd._fullLayout[key];
+        // A `matches` follower (the daily chart's x2) takes its range from its target, so relayout on
+        // the follower is overridden: drag the strip under the pointer, but write to the target.
+        const axKey = gd._fullLayout[key].matches
+            ? gd._fullLayout[key].matches.replace(/^([xy])(\d*)$/, '$1axis$2') : key;
+        const ax = gd._fullLayout[axKey] || gd._fullLayout[key];
         if (!ax.range) return;
         e.preventDefault();
         e.stopPropagation();
         const isX = key[0] === 'x';
         drag = {
             gd,
-            key,
+            key: gd._fullLayout[axKey] ? axKey : key,
             isX,
             start: isX ? e.clientX : e.clientY,
             // Work in Plotly's linear units: a date axis keeps its range as date strings, and
