@@ -179,27 +179,27 @@ Location: `agent-contracts/facts/AEMO-FACTS.md` (git, `cutout-z/agent-contracts`
    to fill (see the `state` pattern).
 4. **Verify in a browser, not by grep.** A change is done when a real browser renders it with real
    data: element present, height > 0, content non-empty. An HTTP 200 on the HTML file proves nothing.
-5. **Keep the tests green.** 56 test files under `tests/` (`pytest -q`). Three of them parse
+5. **Keep the tests green.** The suite is `tests/` (`pytest -q`). Three of its files parse
    `docs/index.html` and pin its DOM — see *Pitfalls*. If a change breaks one, the change or the test
    is wrong, deliberately: say which in the commit message.
 
-   **Baseline on a fresh clone (2026-10-22, the code-pass low fixes on `bed296c8b`; Mac anaconda:
-   nemosis 3.8.1, pandas 2.3.3, pyarrow 23): `577 passed, 12 failed, 3 skipped, 10 errors`.** All 22
+   **Baseline on a fresh clone (2026-10-28, `1e656ca`, after the portfolio view; Mac anaconda:
+   nemosis 3.8.1, pandas 2.3.3, pyarrow 23): `596 passed, 12 failed, 3 skipped, 10 errors`.** All 22
    non-passes are in `tests/test_outputs.py`: a `FileNotFoundError` on generated data that git ignores
    (`data/**`), which only exists on the lane machine. That is environmental, not a regression. The
    lane runs the versions pinned in `requirements.txt` (pandas 3, pyarrow 24). `docs/data/processed-cache/**`
    is *tracked*, by design (`src/processed_cache.py`: a cold runner restores from it). Your bar: the
-   577 keep passing and you add no new failure.
+   596 keep passing and you add no new failure.
 
 ## Facts
 
 | | |
 |---|---|
-| What it is | One static page — `docs/index.html` (2,521 lines; one inline `<style>`, one inline `<script>`) |
+| What it is | One static page — `docs/index.html` (one inline `<style>`; a small theme `<script>` in `<head>` and the main inline `<script>` in `<body>`), plus the portfolio combiner `assets/js/portfolio.js` |
 | Served by | **GitHub Pages from `docs/` on `main`** — public, no server, no login, no build step at deploy |
 | Stack | Plotly **2.35.2** (CDN), SheetJS **0.20.3** (CDN, XLSX export), Tailwind **v3.4.17 standalone** (compiled CSS, committed) |
 | Shared sidebar | `docs/index.html` loads `https://cutout-z.github.io/aemo-dashboards/nav.js` (repo `cutout-z/aemo-dashboards`, added 2026-10-10): the sidebar and phone top bar every AEMO dashboard shares. It changes there, not here, and a change there reaches this page with no PR here. It pads `body` by 232px at 1024px and wider, so check layout changes at that width. Keep the tag plain (not `defer`) at the end of `<head>` |
-| Data | `docs/data/**` — 31 MB, 1,088 generator JSONs + market/quarterly/FCAS/outage/reference files |
+| Data | `docs/data/**` — generator JSONs (one per unit, plus station files) + market/quarterly/FCAS/outage/reference files |
 | Presentation entry point | `docs/index.html` → `assets/css/tailwind.src.css` (tokens) → `docs/assets/app.css` (compiled) |
 | Chart colours | `assets/js/chart-tokens.js` (reads the CSS variables) → published to `docs/assets/js/chart-tokens.js` by `./scripts/build-css.sh` |
 | Deep links | selection is by URL hash: `#<DUID>` (e.g. `#CLRKCWF1`, raw, not URI-encoded: `#TARONG#1` works, `#TARONG%231` and `#/<DUID>` do not) — every unit in the search index is directly addressable. A portfolio is `#portfolio=<DUID>,<DUID>,…` (each DUID URI-encoded; `Portfolio.parseHash` in `assets/js/portfolio.js` reads it before the unit hash). The link carries the members only: a portfolio's name stays in the viewer's browser (localStorage `gcd:portfolios`), and the pipeline publishes nothing portfolio-specific (#21, 2026-10-28) |
@@ -263,7 +263,7 @@ theme-flip breakage. Exit code 1 means something is wrong; it must be 0 before y
   adding an AER panel breaks the build, on purpose.
 - **Tailwind purges unused component classes.** After adding classes, run `./scripts/build-css.sh` and
   commit `docs/assets/app.css`, or the styling silently does nothing. The same script republishes
-  `chart-tokens.js`; edit the source in `assets/js/`, never the copy in `docs/assets/js/`.
+  `chart-tokens.js` and `portfolio.js`; edit the source in `assets/js/`, never the copy in `docs/assets/js/`.
 - **Preflight is off** (`tailwind.config.js`) so the existing inline styles keep working. Forgetting to
   turn it on at the end means the page keeps two competing resets — the brief's step 1 covers this.
 - **`BIDPEROFFER_D` `BANDAVAIL` tranches are incremental** (each band adds MW to the one before): a bid stack
@@ -289,7 +289,7 @@ branch it is not. If you need a data file that does not exist, stop and say so �
 - [ ] `pytest -q` run, result stated (counts, and any failure named).
 - [ ] `scripts/verify-design.py --dashboard ADPBA1` and `scripts/verify-interactions.py` both exit 0.
 - [ ] `./scripts/build-css.sh` run after the last class change; `docs/assets/app.css` and
-      `docs/assets/js/chart-tokens.js` committed.
+      `docs/assets/js/*.js` committed.
 - [ ] Screenshots for every surface you changed, at desktop and phone width, in `design/screens/`
       (never `docs/` — that is the published site).
 - [ ] Presentation-only: `git diff --stat main` shows no `docs/data/**`, `src/**` or `deploy/**`.
