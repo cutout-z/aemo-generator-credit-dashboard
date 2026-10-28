@@ -201,7 +201,7 @@
      they stack, and the result list opens under the whole block so it never covers a filter.
      (.search-container spans the filters too: clicking one must not close the results.) -->
 <header class="z-30 border-b border-line bg-canvas min-[1280px]:sticky min-[1280px]:top-0 md:rounded-t-panel">
-    <div class="search-container relative flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 md:px-6 min-[1280px]:h-14 min-[1280px]:flex-nowrap min-[1280px]:py-0">
+    <div class="search-container relative flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 md:px-6 min-[1280px]:gap-x-3 min-[1440px]:gap-x-5 min-[1280px]:h-14 min-[1280px]:flex-nowrap min-[1280px]:py-0">
         <div class="flex shrink-0 items-center gap-2.5">
             <span class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-bg" aria-hidden="true">GC</span>
             <h1 class="text-[13px] font-semibold leading-tight text-ink">AEMO Generator Credit<span class="block text-[12px] font-normal text-faint">Dashboard</span></h1>
@@ -211,7 +211,7 @@
             <svg class="size-4 [[data-theme=light]_&]:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
             <svg class="hidden size-4 [[data-theme=light]_&]:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-        <div class="w-full min-[1280px]:relative min-[1280px]:w-auto min-[1280px]:min-w-[220px] min-[1280px]:max-w-[480px] min-[1280px]:flex-1">
+        <div class="w-full min-[1280px]:relative min-[1280px]:w-auto min-[1280px]:min-w-[200px] min-[1440px]:min-w-[220px] min-[1280px]:max-w-[480px] min-[1280px]:flex-1">
             <span class="relative block">
                 <svg class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
                 <input type="text" class="search-input input pl-8" id="searchInput"
@@ -240,8 +240,7 @@
         <button type="button" id="portfolioToggle" class="btn h-7 shrink-0 px-2.5 text-[12px] aria-expanded:border-transparent aria-expanded:bg-ink aria-expanded:text-bg"
                 aria-expanded="false" aria-controls="portfolioPanel" aria-label="Portfolio" title="Portfolio: combine units you pick into one view">
             <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>
-            <!-- Icon only where the one-row app bar is tight (sidebar beside it, below 1600px). -->
-            <span class="lg:hidden min-[1600px]:inline">Portfolio</span>
+            <span>Portfolio</span>
         </button>
         <div class="stats-bar num flex gap-4 whitespace-nowrap text-[12px] text-faint sm:ml-auto lg:hidden min-[1600px]:flex [&_strong]:font-medium [&_strong]:text-ink" id="statsBar">
             <span>Loading generator data…</span>
@@ -298,6 +297,10 @@
         <h2 class="text-[20px] font-semibold leading-7 text-ink">Generator credit risk</h2>
         <p class="mt-2 text-[14px] leading-6 text-muted">Search for any NEM generator by name or DUID to view its credit risk profile: revenue, capacity factor, loss factor trajectory, and price capture.</p>
         <p class="mt-4 text-[12px] text-faint">Every unit has its own link — e.g. <a href="#CLRKCWF1" class="kbd hover:border-line-strong hover:text-ink">#CLRKCWF1</a></p>
+        <div class="mt-8 border-t border-line pt-6">
+            <p class="text-[14px] leading-6 text-muted">Following several assets? Pick units or whole stations and see them combined as one portfolio.</p>
+            <button type="button" id="welcomePortfolio" class="btn btn-primary mt-3 h-8 px-3 text-[13px]">Build a portfolio</button>
+        </div>
         <div id="welcomeNotice" class="mx-auto mt-6 max-w-[480px] text-left" hidden></div>
     </div>
 
@@ -1506,6 +1509,7 @@ function setPortfolioBuilder(open) {
 
 document.getElementById('portfolioToggle').addEventListener('click', () => setPortfolioBuilder(!portfolioBuilderOpen()));
 document.getElementById('portfolioClose').addEventListener('click', () => setPortfolioBuilder(false));
+document.getElementById('welcomePortfolio').addEventListener('click', () => setPortfolioBuilder(true));
 document.getElementById('portfolioEdit').addEventListener('click', () => {
     if (portfolioState) {
         portfolioDraft = [...portfolioState.requested];
