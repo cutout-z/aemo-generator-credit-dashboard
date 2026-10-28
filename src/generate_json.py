@@ -1090,8 +1090,9 @@ def _aggregate_station_monthly(
 
         S3-04: no longer used for curtailment — station curtailment sums the
         member units' eligible actual/potential energy instead (nameplate is
-        not the available resource in a given month). Kept for the economic
-        curtailment estimate, which has no first-class energy fields.
+        not the available resource in a given month). Economic curtailment
+        is energy-weighted too (station_econ_curtailment); this stays as its
+        fallback for rows with no derivable potential.
         """
         valid = month_data.dropna(subset=[col])
         if valid.empty:
@@ -1116,6 +1117,25 @@ def _aggregate_station_monthly(
             return None, None, None
         act_sum = float(energy["_eligible_actual_mwh"].sum())
         return round(max(0.0, 1.0 - act_sum / pot_sum), 4), round(act_sum, 1), round(pot_sum, 1)
+
+    def station_econ_curtailment(month_data: pd.DataFrame) -> float | None:
+        """Station economic curtailment, energy-weighted: Σ (unit economic % ×
+        unit potential MWh) ÷ Σ potential, over the members with both. Each
+        unit's economic % is first capped at its own total shortfall, as its
+        unit file publishes it. The browser portfolio view uses the same rule
+        (docs/assets/js/portfolio.js), so a one-station portfolio matches the
+        station page. Members with no derivable potential fall back to
+        nameplate weighting only when no member has energy."""
+        energy = _curtailment_energy_columns(month_data)
+        econ = month_data["econ_curtailment_pct"]
+        total = month_data["curtailment_pct"] if "curtailment_pct" in month_data.columns else None
+        if total is not None:
+            econ = econ.where(econ.isna() | total.isna() | (econ <= total), total)
+        pot = energy["_potential_mwh"]
+        ok = econ.notna() & pot.notna() & (pot > 0)
+        if not ok.any():
+            return weighted_pct(month_data, "econ_curtailment_pct")
+        return round(float((econ[ok] * pot[ok]).sum() / pot[ok].sum()), 4)
 
     capacity_basis = []
     for m in months:
@@ -1144,7 +1164,7 @@ def _aggregate_station_monthly(
             curt_potential.append(pot_sum)
 
         if has_econ_curt:
-            econ = weighted_pct(month_data, "econ_curtailment_pct")
+            econ = station_econ_curtailment(month_data)
             # Economic curtailment is part of the total shortfall (see
             # aggregate_month), at station level too.
             total = curtailment[-1] if has_curtailment else None
@@ -1193,6 +1213,7 @@ def _aggregate_station_monthly(
         result["curtailment_potential_mwh"] = curt_potential
     if has_econ_curt:
         result["econ_curtailment_pct"] = econ_curtailment
+        result["econ_curtailment_weighting"] = "energy"
     if has_price:
         result["captured_price"] = captured_price
         result["avg_rrp"] = avg_rrp

@@ -64,7 +64,12 @@ def test_station_aggregation_includes_mechanical_and_constraints(tmp_path):
     assert station["monthly"]["curtailment_metric_version"] == "2.0-proxy"
     assert "grid_curtailment_pct" not in station["monthly"]
     assert "mechanical_curtailment_pct" not in station["monthly"]
-    assert station["monthly"]["econ_curtailment_pct"] == [0.05]
+    # Portfolio view (2026-10-28): economic curtailment is energy-weighted like
+    # the total, Σ (econ % × potential) ÷ Σ potential = (0.02·1250 + 0.06·5000)
+    # / 6250 = 0.052. The old nameplate weighting gave (0.02·100 + 0.06·300)/400
+    # = 0.05, so a one-station portfolio disagreed with its station page.
+    assert station["monthly"]["econ_curtailment_pct"] == [0.052]
+    assert station["monthly"]["econ_curtailment_weighting"] == "energy"
 
     top_by_id = {row["id"]: row for row in station["constraints"]["top_constraints"]}
     assert top_by_id["C_SHARED"]["total_hours"] == 10.0
