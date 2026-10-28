@@ -18,6 +18,7 @@
     </script>
     <link rel="stylesheet" href="assets/app.css">
     <script src="assets/js/chart-tokens.js"></script>
+    <script src="assets/js/portfolio.js"></script>
     <style>
         /* The hidden attribute always wins: a layout utility (grid, flex) on the same element would
            otherwise override the base [hidden] rule and leave the element on screen. */
@@ -205,7 +206,7 @@
             <span class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-bg" aria-hidden="true">GC</span>
             <h1 class="text-[13px] font-semibold leading-tight text-ink">AEMO Generator Credit<span class="block text-[12px] font-normal text-faint">Dashboard</span></h1>
         </div>
-        <button type="button" id="themeToggle" class="btn btn-ghost btn-icon ml-auto shrink-0 lg:order-last min-[1400px]:ml-0"
+        <button type="button" id="themeToggle" class="btn btn-ghost btn-icon ml-auto shrink-0 lg:order-last min-[1600px]:ml-0"
                 aria-label="Switch to light theme" title="Switch to light theme">
             <svg class="size-4 [[data-theme=light]_&]:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
             <svg class="hidden size-4 [[data-theme=light]_&]:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -236,13 +237,62 @@
             </select>
             <svg class="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </span>
-        <div class="stats-bar num flex gap-4 whitespace-nowrap text-[12px] text-faint sm:ml-auto lg:hidden min-[1400px]:flex [&_strong]:font-medium [&_strong]:text-ink" id="statsBar">
+        <button type="button" id="portfolioToggle" class="btn h-7 shrink-0 px-2.5 text-[12px] aria-expanded:border-transparent aria-expanded:bg-ink aria-expanded:text-bg"
+                aria-expanded="false" aria-controls="portfolioPanel" aria-label="Portfolio" title="Portfolio: combine units you pick into one view">
+            <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>
+            <!-- Icon only where the one-row app bar is tight (sidebar beside it, below 1600px). -->
+            <span class="lg:hidden min-[1600px]:inline">Portfolio</span>
+        </button>
+        <div class="stats-bar num flex gap-4 whitespace-nowrap text-[12px] text-faint sm:ml-auto lg:hidden min-[1600px]:flex [&_strong]:font-medium [&_strong]:text-ink" id="statsBar">
             <span>Loading generator data…</span>
         </div>
     </div>
 </header>
 
 <main class="content mx-auto max-w-[1400px] px-4 pb-16 pt-6 md:px-8">
+    <!-- Portfolio builder. While it is open, a search pick adds the unit here instead of opening it.
+         Membership never leaves the browser except in a link the viewer copies (DUIDs only, after
+         the '#', which is not sent to the server); the name stays in localStorage. -->
+    <section class="card mb-4" id="portfolioPanel" aria-labelledby="portfolioTitle" hidden>
+        <div class="card-head">
+            <div class="min-w-0 flex-1">
+                <h2 id="portfolioTitle" class="card-title">Build a portfolio</h2>
+                <p class="card-sub">Search above and pick units: while this panel is open a pick adds the unit here instead of opening it, and a station adds all its units. Pick a unit again to take it out.</p>
+            </div>
+            <button type="button" id="portfolioClose" class="btn btn-ghost btn-icon" aria-label="Close the portfolio builder" title="Close">
+                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        <div class="card-body">
+            <div class="grid gap-3 sm:grid-cols-2 lg:max-w-[760px]">
+                <label class="min-w-0">
+                    <span class="field-label">Name · kept in this browser only</span>
+                    <input type="text" id="portfolioName" class="input" maxlength="80" autocomplete="off" placeholder="e.g. Watchlist">
+                </label>
+                <div class="min-w-0">
+                    <label class="field-label" for="portfolioSaved">Saved in this browser</label>
+                    <div class="flex gap-2">
+                        <span class="relative min-w-0 flex-1">
+                            <select id="portfolioSaved" class="input cursor-pointer appearance-none pr-7"></select>
+                            <svg class="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                        </span>
+                        <button type="button" id="portfolioDelete" class="btn" disabled>Delete</button>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 text-[12px] font-medium text-muted" id="portfolioCount">No units yet</div>
+            <ul id="portfolioMembers" class="mt-1.5 flex flex-wrap gap-1.5" aria-label="Units in this portfolio"></ul>
+            <div class="mt-4 flex flex-wrap items-center gap-2">
+                <button type="button" id="portfolioView" class="btn btn-primary" disabled>View portfolio</button>
+                <button type="button" id="portfolioSave" class="btn" disabled>Save</button>
+                <button type="button" id="portfolioCopy" class="btn" disabled>Copy link</button>
+                <button type="button" id="portfolioClear" class="btn btn-ghost" disabled>Clear</button>
+            </div>
+            <p class="mt-2 text-[12px] leading-4 text-faint">A copied link lists the units by DUID, so anyone you send it to sees what the portfolio holds. The name is not in the link.</p>
+            <p id="portfolioStatus" class="mt-1 text-[12px] leading-4 text-muted" role="status"></p>
+        </div>
+    </section>
+
     <!-- Welcome state -->
     <div class="welcome mx-auto max-w-[560px] px-4 py-20 text-center" id="welcomeState">
         <h2 class="text-[20px] font-semibold leading-7 text-ink">Generator credit risk</h2>
@@ -259,7 +309,7 @@
                 <h2 id="genName" class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[22px] font-semibold leading-8 tracking-[-0.015em] text-ink"></h2>
                 <dl class="identity-meta mt-1.5 flex flex-wrap gap-x-5 gap-y-1 text-[13px] leading-5">
                     <div class="meta-item flex items-baseline gap-1.5">
-                        <dt class="text-faint">DUID</dt>
+                        <dt class="text-faint" id="genDUIDLabel">DUID</dt>
                         <dd class="font-mono text-[12px] text-ink" id="genDUID"></dd>
                     </div>
                     <div class="meta-item flex items-baseline gap-1.5">
@@ -267,14 +317,14 @@
                         <dd class="text-ink" id="genRegion"></dd>
                     </div>
                     <div class="meta-item flex items-baseline gap-1.5">
-                        <dt class="text-faint">Technology</dt>
+                        <dt class="shrink-0 text-faint" id="genTechLabel">Technology</dt>
                         <dd class="text-ink" id="genTech"></dd>
                     </div>
                     <div class="meta-item flex items-baseline gap-1.5">
                         <dt class="text-faint">Nameplate</dt>
                         <dd class="num text-ink" id="genCapacity"></dd>
                     </div>
-                    <div class="meta-item flex min-w-0 items-baseline gap-1.5">
+                    <div class="meta-item flex min-w-0 items-baseline gap-1.5" id="genConnectionItem">
                         <dt class="shrink-0 text-faint">Connection point</dt>
                         <dd class="min-w-0 break-words font-mono text-[12px] text-ink" id="genConnection"></dd>
                     </div>
@@ -292,6 +342,14 @@
             </div>
         </div>
 
+        <div id="portfolioOptions" class="mx-5 mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] leading-5 text-muted" hidden>
+            <span id="portfolioCoverage" class="min-w-0"></span>
+            <label id="commissioningWrap" class="inline-flex cursor-pointer items-center gap-2" hidden>
+                <span class="switch"><input type="checkbox" id="excludeCommissioning"></span>
+                <span id="commissioningLabel">Exclude months before full commercial use</span>
+            </label>
+            <button type="button" id="portfolioEdit" class="btn h-7 px-2.5 text-[12px]">Edit portfolio</button>
+        </div>
         <div id="loadStatus" class="load-status mx-5 mt-4 rounded-lg border border-line-soft bg-surface-2 px-3 py-2 text-[13px] text-muted data-[state=error]:border-transparent data-[state=error]:bg-bad-wash data-[state=error]:text-bad" role="status" style="display:none;"></div>
 
         <!-- KPI row. Tiles are separated by 1px gaps over the hairline colour; the row is hidden
@@ -362,6 +420,29 @@
                     </div>
                 </div>
                 <div id="chartCapacity"><div class="placeholder">No data yet</div></div>
+            </div>
+            <div class="chart-panel card" id="panelAssetGeneration" style="display:none;">
+                <div class="chart-title-wrap">
+                    <h3>Generation by Asset</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
+                    <div class="chart-tooltip">
+                        <div class="tooltip-title">Methodology</div>
+                        Each unit's monthly generation from its own published file, stacked. The stack's height is the portfolio's generation in the Generation panel. Each unit keeps its colour whatever the period. Up to eight units are named; past that, the seven largest by nameplate are named and the rest are grouped as Others.
+                        <div class="tooltip-caveat">A battery's figure is discharge only; charging is not netted.</div>
+                    </div>
+                </div>
+                <div id="chartAssetGeneration"><div class="placeholder">No data yet</div></div>
+            </div>
+            <div class="chart-panel card" id="panelAssetCF" style="display:none;">
+                <div class="chart-title-wrap">
+                    <h3>Capacity Factor by Asset</h3><button type="button" class="info-btn" aria-label="Methodology"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg></button>
+                    <div class="chart-tooltip">
+                        <div class="tooltip-title">Methodology</div>
+                        <div class="tooltip-formula">Portfolio CF = Σ MWh / (Σ nameplate MW × hours)</div>
+                        Each row is one unit's published monthly capacity factor; the last row is the portfolio's, over the nameplate of the units reporting that month. Batteries are listed but left out of the portfolio figure: their files report discharge only.
+                        <div class="tooltip-caveat">An empty cell means the unit published no figure that month (not yet registered, or no data); it is not a zero.</div>
+                    </div>
+                </div>
+                <div id="chartAssetCF"><div class="placeholder">No data yet</div></div>
             </div>
             <div class="chart-panel card" id="panelCurtailment">
                 <div class="chart-title-wrap">
@@ -766,7 +847,12 @@ function renderDropdown(results) {
             <span class="hidden w-[120px] shrink-0 sm:flex"><span class="badge">${g.fuel_category}</span></span>
             <span class="num hidden w-16 shrink-0 text-right text-[12px] text-muted sm:inline">${g.capacity_mw ? `${g.capacity_mw} MW` : ''}</span>
         `;
-        item.addEventListener('click', () => selectGenerator(g.duid));
+        if (portfolioBuilderOpen() && portfolioPickState(g)) {
+            item.insertAdjacentHTML('beforeend', '<span class="picked shrink-0">' + (portfolioPickState(g) === 'all' ? 'Added' : 'Part added') + '</span>');
+        }
+        // Stop here: a builder pick re-renders the list, and the page's outside-click handler
+        // would read the detached item as a click outside the search and close it.
+        item.addEventListener('click', e => { e.stopPropagation(); pickFromSearch(g); });
         searchDropdown.appendChild(item);
     });
 
@@ -811,7 +897,7 @@ searchInput.addEventListener('keydown', (e) => {
     } else if (e.key === 'Enter' && activeIndex >= 0) {
         e.preventDefault();
         const results = getFilteredGenerators(searchInput.value);
-        if (results[activeIndex]) selectGenerator(results[activeIndex].duid);
+        if (results[activeIndex]) pickFromSearch(results[activeIndex]);
     } else if (e.key === 'Escape') {
         searchDropdown.classList.remove('visible');
     }
@@ -852,7 +938,7 @@ const CHART_IDS = [
     'chartGeneration', 'chartCapacity', 'chartCurtailment',
     'chartEconCurtailment', 'chartMLF', 'chartPriceCapture',
     'chartPriceDistribution', 'chartFCAS', 'chartMarketSpread',
-    'chartDailyCF', 'offerCurveChart',
+    'chartDailyCF', 'offerCurveChart', 'chartAssetGeneration',
 ];
 
 function purgeChartsAndState() {
@@ -877,6 +963,9 @@ function purgeChartsAndState() {
     // Constraints are outside CHART_IDS (table + heatmap): clear them too.
     document.getElementById('chartConstraintsBar').innerHTML = '';
     Plotly.purge(document.getElementById('chartConstraintsHeatmap'));
+    // The asset CF grid is HTML, and portfolio coverage labels sit in panel titles.
+    document.getElementById('chartAssetCF').innerHTML = '<div class="placeholder"></div>';
+    document.querySelectorAll('.chart-coverage').forEach(el => el.remove());
     // A previous unit's "no data" message must not show while the next unit loads.
     document.querySelectorAll('.chart-panel .placeholder').forEach(ph => { ph.innerHTML = ''; });
     currentData = null;
@@ -984,7 +1073,17 @@ function setChartsLoading() {
 function updateOmittedNotes() {
     const d = currentData;
     const solarWind = d && (d.fuel_category === 'Solar' || d.fuel_category === 'Wind');
-    const reasons = {
+    const isPortfolio = !!(d && d.type === 'portfolio');
+    const multiRegion = isPortfolio && !d.region;
+    const reasons = isPortfolio ? {
+        panelCurtailment: 'curtailment proxy (no solar or wind units)',
+        panelEconCurtailment: 'economic curtailment (no data for these units)',
+        panelDailyCF: 'daily generation (no daily data for these units)',
+        panelOffers: 'energy offers (offers are per unit: open a unit to see them)',
+        panelFCAS: multiRegion ? 'regional FCAS prices (the units span more than one region)' : 'regional FCAS prices (fewer than 3 months of data)',
+        panelMarketSpread: multiRegion ? 'regional price spreads (the units span more than one region)' : 'regional price spreads (no daily price data for this region)',
+        panelConstraints: 'binding constraints (not combined across units: open a unit or station to see them)',
+    } : {
         panelCurtailment: 'curtailment proxy (solar and wind only)',
         panelEconCurtailment: solarWind ? 'economic curtailment (no data for this unit)' : 'economic curtailment (solar and wind only)',
         panelDailyCF: 'daily generation (no daily data for this unit)',
@@ -1000,7 +1099,7 @@ function updateOmittedNotes() {
             .filter(panel => panel.style.display === 'none' && reasons[panel.id])
             .map(panel => reasons[panel.id]) : [];
         note.hidden = !missing.length;
-        note.textContent = missing.length ? 'Not shown for this unit: ' + missing.join(' · ') + '.' : '';
+        note.textContent = missing.length ? 'Not shown for this ' + (isPortfolio ? 'portfolio' : 'unit') + ': ' + missing.join(' · ') + '.' : '';
     });
 }
 
@@ -1189,6 +1288,7 @@ async function selectGenerator(duid) {
     const gen = generators.find(g => g.duid === duid);
     if (!gen) return;
 
+    resetPortfolioView();
     searchInput.value = gen.station_name;
 
     // Cancel any in-flight load for a previous selection
@@ -1257,6 +1357,441 @@ async function selectGenerator(duid) {
         statusEl.style.display = 'block';
         console.error(`Error loading ${duid}:`, e);
     }
+}
+
+// ─── Portfolio ─────────────────────────────────────────────────────────
+// A portfolio is a set of units the viewer picks. assets/js/portfolio.js combines their public
+// files in the browser into a station-shaped doc, so every chart, KPI, period control and export
+// renders it unchanged. Nothing about a portfolio is published: membership lives in this browser
+// (localStorage, with its name) and in links the viewer chooses to copy, which carry DUIDs only.
+const PORTFOLIO_STORE = 'gcd:portfolios';
+const PORTFOLIO_MAX = 100;
+let portfolioDraft = [];        // DUIDs in the builder
+let portfolioState = null;      // the portfolio on screen: { requested, name, members, missing }
+
+const isUnitEntry = g => !!g && g.type !== 'station';
+const unitEntry = duid => generators.find(g => g.duid === duid && isUnitEntry(g));
+const portfolioBuilderOpen = () => !document.getElementById('portfolioPanel').hidden;
+const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
+
+function loadSavedPortfolios() {
+    try {
+        const v = JSON.parse(localStorage.getItem(PORTFOLIO_STORE) || '[]');
+        return Array.isArray(v) ? v.filter(p => p && typeof p.name === 'string' && Array.isArray(p.duids)) : [];
+    } catch (e) { return []; }   // private mode or a corrupt entry: nothing saved
+}
+
+function storeSavedPortfolios(list) {
+    try { localStorage.setItem(PORTFOLIO_STORE, JSON.stringify(list)); return true; }
+    catch (e) { return false; }
+}
+
+// The saved name of a link's units, when this browser has saved exactly that set.
+function savedNameFor(duids) {
+    const key = [...duids].sort().join(',');
+    const hit = loadSavedPortfolios().find(p => [...p.duids].sort().join(',') === key);
+    return hit ? hit.name : '';
+}
+
+// A station's units come from its own file: the index carries no member list.
+const stationMembersCache = new Map();
+async function stationMembers(g) {
+    if (!stationMembersCache.has(g.duid)) {
+        const resp = await fetch(`data/generators/${g.file || g.duid}.json`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const d = await resp.json();
+        stationMembersCache.set(g.duid, (d.duids || []).filter(unitEntry));
+    }
+    return stationMembersCache.get(g.duid);
+}
+
+// How much of a search result is in the draft: 'all', 'some' or ''.
+function portfolioPickState(g) {
+    const duids = isUnitEntry(g) ? [g.duid] : stationMembersCache.get(g.duid);
+    if (!duids || !duids.length) return '';
+    const n = duids.filter(d => portfolioDraft.includes(d)).length;
+    return n === duids.length ? 'all' : n ? 'some' : '';
+}
+
+// A search pick opens the unit, or, while the builder is open, adds it (a station adds all its
+// units) or takes it out again.
+async function pickFromSearch(g) {
+    if (!portfolioBuilderOpen()) { selectGenerator(g.duid); return; }
+    let duids;
+    try {
+        duids = isUnitEntry(g) ? [g.duid] : await stationMembers(g);
+    } catch (e) {
+        setPortfolioStatus(`Could not load the units of ${g.station_name} (${e.message}).`);
+        return;
+    }
+    if (portfolioPickState(g) === 'all') {
+        portfolioDraft = portfolioDraft.filter(d => !duids.includes(d));
+    } else {
+        const add = duids.filter(d => !portfolioDraft.includes(d));
+        if (portfolioDraft.length + add.length > PORTFOLIO_MAX) {
+            setPortfolioStatus(`A portfolio holds up to ${PORTFOLIO_MAX} units.`);
+            return;
+        }
+        portfolioDraft.push(...add);
+    }
+    setPortfolioStatus('');
+    renderPortfolioBuilder();
+    renderDropdown(getFilteredGenerators(searchInput.value));   // refresh the Added marks
+    searchInput.focus();
+}
+
+function setPortfolioStatus(text) {
+    document.getElementById('portfolioStatus').textContent = text;
+}
+
+const ICON_REMOVE = '<svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+
+function renderPortfolioBuilder() {
+    const entries = portfolioDraft.map(d => unitEntry(d) || { duid: d, station_name: 'Not in the index' });
+    document.getElementById('portfolioMembers').innerHTML = entries.map(g =>
+        '<li class="badge h-7 gap-1.5 pr-1">' +
+        `<span class="max-w-[220px] truncate text-ink">${esc(g.station_name)}</span>` +
+        `<span class="font-mono text-[11px] text-faint">${esc(g.duid)}</span>` +
+        `<button type="button" class="btn btn-ghost btn-icon size-5 rounded" data-remove="${esc(g.duid)}" aria-label="Remove ${esc(g.duid)}">${ICON_REMOVE}</button>` +
+        '</li>').join('');
+    const mw = entries.reduce((a, g) => a + (Number(g.capacity_mw) || 0), 0);
+    document.getElementById('portfolioCount').textContent = portfolioDraft.length
+        ? `${plural(portfolioDraft.length, 'unit')} · ${mw.toFixed(1)} MW nameplate`
+        : 'No units yet: search above and pick some';
+    const empty = !portfolioDraft.length;
+    for (const id of ['portfolioView', 'portfolioCopy', 'portfolioClear']) document.getElementById(id).disabled = empty;
+    document.getElementById('portfolioSave').disabled = empty || !document.getElementById('portfolioName').value.trim();
+}
+
+function renderSavedSelect(selected) {
+    const sel = document.getElementById('portfolioSaved');
+    const saved = loadSavedPortfolios();
+    const current = selected != null ? selected : sel.value;
+    sel.innerHTML = `<option value="">${saved.length ? 'Choose a saved portfolio' : 'None saved yet'}</option>` +
+        saved.map(p => `<option value="${esc(p.name)}">${esc(p.name)} · ${plural(p.duids.length, 'unit')}</option>`).join('');
+    sel.value = saved.some(p => p.name === current) ? current : '';
+    sel.disabled = !saved.length;
+    document.getElementById('portfolioDelete').disabled = !sel.value;
+}
+
+function setPortfolioBuilder(open) {
+    document.getElementById('portfolioPanel').hidden = !open;
+    document.getElementById('portfolioToggle').setAttribute('aria-expanded', String(open));
+    searchInput.placeholder = open ? 'Search to add units to the portfolio' : 'Search by generator name or DUID';
+    searchDropdown.classList.remove('visible');
+    if (!open) return;
+    if (!portfolioDraft.length && portfolioState) {
+        portfolioDraft = [...portfolioState.requested];
+        document.getElementById('portfolioName').value = portfolioState.name;
+    }
+    renderPortfolioBuilder();
+    renderSavedSelect();
+    searchInput.focus();
+}
+
+document.getElementById('portfolioToggle').addEventListener('click', () => setPortfolioBuilder(!portfolioBuilderOpen()));
+document.getElementById('portfolioClose').addEventListener('click', () => setPortfolioBuilder(false));
+document.getElementById('portfolioEdit').addEventListener('click', () => {
+    if (portfolioState) {
+        portfolioDraft = [...portfolioState.requested];
+        document.getElementById('portfolioName').value = portfolioState.name;
+    }
+    setPortfolioBuilder(true);
+    window.scrollTo({ top: 0 });
+});
+document.getElementById('portfolioMembers').addEventListener('click', e => {
+    const btn = e.target.closest('[data-remove]');
+    if (!btn) return;
+    portfolioDraft = portfolioDraft.filter(d => d !== btn.dataset.remove);
+    renderPortfolioBuilder();
+});
+document.getElementById('portfolioName').addEventListener('input', renderPortfolioBuilder);
+document.getElementById('portfolioSaved').addEventListener('change', e => {
+    const p = loadSavedPortfolios().find(x => x.name === e.target.value);
+    document.getElementById('portfolioDelete').disabled = !p;
+    if (!p) return;
+    portfolioDraft = [...new Set(p.duids)];
+    document.getElementById('portfolioName').value = p.name;
+    renderPortfolioBuilder();
+    setPortfolioStatus(`Loaded “${p.name}”. View it, or change it and save again.`);
+});
+document.getElementById('portfolioDelete').addEventListener('click', () => {
+    const name = document.getElementById('portfolioSaved').value;
+    if (!name || !window.confirm(`Delete “${name}” from this browser?`)) return;
+    storeSavedPortfolios(loadSavedPortfolios().filter(p => p.name !== name));
+    renderSavedSelect('');
+    setPortfolioStatus(`Deleted “${name}” from this browser.`);
+});
+document.getElementById('portfolioSave').addEventListener('click', () => {
+    const name = document.getElementById('portfolioName').value.trim();
+    if (!name || !portfolioDraft.length) return;
+    const list = loadSavedPortfolios().filter(p => p.name !== name);
+    list.push({ name, duids: [...portfolioDraft], savedAt: new Date().toISOString() });
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    if (storeSavedPortfolios(list)) {
+        renderSavedSelect(name);
+        setPortfolioStatus(`Saved “${name}” in this browser. It is not stored anywhere else.`);
+    } else {
+        setPortfolioStatus('This browser would not store it (private browsing blocks storage). Copy the link to keep it.');
+    }
+});
+document.getElementById('portfolioCopy').addEventListener('click', () => {
+    const url = location.origin + location.pathname + '#' + Portfolio.buildHash(portfolioDraft);
+    const done = () => setPortfolioStatus(`Link copied. It lists ${plural(portfolioDraft.length, 'unit')} by DUID and not the name.`);
+    const fail = () => setPortfolioStatus('Copy this link: ' + url);
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, fail);
+    else fail();
+});
+document.getElementById('portfolioClear').addEventListener('click', () => {
+    portfolioDraft = [];
+    document.getElementById('portfolioName').value = '';
+    renderSavedSelect('');
+    renderPortfolioBuilder();
+    setPortfolioStatus('');
+});
+document.getElementById('portfolioView').addEventListener('click', () => {
+    if (!portfolioDraft.length) return;
+    const name = document.getElementById('portfolioName').value.trim();
+    setPortfolioBuilder(false);
+    selectPortfolio([...portfolioDraft], name);
+});
+document.getElementById('excludeCommissioning').addEventListener('change', renderPortfolio);
+
+// Back to the unit view: labels, options and the portfolio-only panels.
+function resetPortfolioView() {
+    portfolioState = null;
+    document.getElementById('genDUIDLabel').textContent = 'DUID';
+    document.getElementById('genTechLabel').textContent = 'Technology';
+    document.getElementById('genConnectionItem').hidden = false;
+    document.getElementById('portfolioOptions').hidden = true;
+    for (const id of ['panelAssetGeneration', 'panelAssetCF']) document.getElementById(id).style.display = 'none';
+}
+
+async function selectPortfolio(requested, name) {
+    searchDropdown.classList.remove('visible');
+    const token = ++selectionToken;
+    if (selectionAbort) selectionAbort.abort();
+    selectionAbort = new AbortController();
+    const signal = selectionAbort.signal;
+
+    const entries = requested.map(unitEntry).filter(Boolean);
+    const missing = requested.filter(d => !unitEntry(d)).map(duid => ({ duid, reason: 'not in the published index' }));
+    resetPortfolioView();
+    portfolioState = { requested: [...requested], name: name || savedNameFor(requested), members: [], missing };
+    const hash = '#' + Portfolio.buildHash(requested);
+    if (window.location.hash !== hash) window.location.hash = hash;
+    // Default: commissioning months included (the owner's financial models allow for them).
+    document.getElementById('excludeCommissioning').checked = false;
+
+    purgeChartsAndState();
+    showWelcomeNotice(null);
+    searchInput.value = '';
+    if (!entries.length) {
+        portfolioState = null;
+        document.getElementById('identityCard').classList.remove('visible');
+        document.getElementById('chartGrid').classList.remove('visible');
+        document.getElementById('welcomeState').style.display = '';
+        showWelcomeNotice('info', 'None of the units in this portfolio link are in the index',
+            'The link names ' + plural(requested.length, 'DUID') + ' that the published index does not hold; they may have been renamed or deregistered.');
+        return;
+    }
+    setKPIsLoading();
+    setChartsLoading();
+    document.getElementById('welcomeState').style.display = 'none';
+    document.getElementById('identityCard').classList.add('visible');
+    document.getElementById('chartGrid').classList.add('visible');
+    document.getElementById('downloadButtons').style.display = 'none';
+
+    // Identity: the portfolio's own facts, from the index rows.
+    const regions = [...new Set(entries.map(g => g.region).filter(isKnownRegion))].sort();
+    const fuelMW = {};
+    entries.forEach(g => { fuelMW[g.fuel_category] = (fuelMW[g.fuel_category] || 0) + (Number(g.capacity_mw) || 0); });
+    const mw = entries.reduce((a, g) => a + (Number(g.capacity_mw) || 0), 0);
+    document.getElementById('genName').innerHTML =
+        `<span class="min-w-0">${esc(portfolioState.name || 'Portfolio')}</span><span class="badge">Portfolio</span>`;
+    document.getElementById('genDUIDLabel').textContent = 'Units';
+    document.getElementById('genDUID').textContent = String(entries.length);
+    document.getElementById('genRegion').textContent = regions.join(', ') || 'N/A';
+    document.getElementById('genTechLabel').textContent = 'Fuel mix';
+    document.getElementById('genTech').textContent = Object.entries(fuelMW)
+        .sort((a, b) => b[1] - a[1]).map(([f, v]) => `${f} ${Math.round(v * 10) / 10} MW`).join(' · ');
+    document.getElementById('genCapacity').textContent = mw ? `${Math.round(mw * 10) / 10} MW` : 'N/A';
+    document.getElementById('genConnectionItem').hidden = true;
+
+    const statusEl = document.getElementById('loadStatus');
+    statusEl.textContent = `Loading ${plural(entries.length, 'unit')}…`;
+    statusEl.dataset.state = 'loading';
+    statusEl.style.display = 'block';
+    const results = await Promise.allSettled(entries.map(g =>
+        fetch(`data/generators/${g.file || g.duid}.json`, { signal })
+            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })));
+    if (token !== selectionToken || signal.aborted) return;   // superseded while in flight
+    results.forEach((r, i) => {
+        if (r.status === 'fulfilled') portfolioState.members.push({ entry: entries[i], doc: r.value });
+        else missing.push({ duid: entries[i].duid, reason: 'its file did not load' });
+    });
+    if (!portfolioState.members.length) {
+        purgeChartsAndState();
+        document.getElementById('chartGrid').classList.remove('visible');
+        statusEl.textContent = 'Could not load data for any unit in this portfolio. The dataset may be mid-publish: reload to try again.';
+        statusEl.dataset.state = 'error';
+        return;
+    }
+    statusEl.style.display = 'none';
+    renderPortfolio();
+}
+
+function renderPortfolio() {
+    const st = portfolioState;
+    if (!st || !st.members.length) return;
+    const exclude = document.getElementById('excludeCommissioning').checked;
+    const doc = Portfolio.combine(st.members, { name: st.name || 'Portfolio', excludeCommissioning: exclude });
+    doc.excluded_commissioning = exclude;
+    const fuels = new Set(st.members.map(x => x.entry.fuel_category));
+    const solarWind = fuels.has('Solar') || fuels.has('Wind');
+    document.getElementById('panelCurtailment').style.display = solarWind ? 'block' : 'none';
+    document.getElementById('panelEconCurtailment').style.display = solarWind ? 'block' : 'none';
+    renderCharts(doc);
+    renderKPIs(doc);
+    document.getElementById('downloadButtons').style.display = 'flex';
+
+    const parts = [`${st.members.length} of ${plural(st.requested.length, 'unit')} loaded`];
+    if (st.missing.length) parts.push('not loaded: ' + st.missing.map(m => `${m.duid} (${m.reason})`).join(', '));
+    const batteries = doc.assets.filter(a => !a.in_cf).length;
+    if (batteries) parts.push(`capacity factor leaves out ${plural(batteries, 'battery', 'batteries')} (discharge only)`);
+    document.getElementById('portfolioCoverage').textContent = parts.join(' · ');
+    // The switch shows only when it changes something: a unit whose full commercial use month
+    // comes after its first published month.
+    const affected = st.members.filter(x => {
+        const fcu = Portfolio.fullCommercialUse(x.doc).date;
+        const months = x.doc.monthly && x.doc.monthly.months;
+        return fcu && months && months.length && months[0] < fcu.slice(0, 7);
+    }).length;
+    document.getElementById('commissioningWrap').hidden = !affected;
+    document.getElementById('commissioningLabel').textContent =
+        `Leave out months before full commercial use (${plural(affected, 'unit')})`;
+    document.getElementById('portfolioOptions').hidden = false;
+}
+
+// "N of M units" beside a panel title: how many of the portfolio's units the panel draws on.
+function setCoverage(chartId, n, m) {
+    const wrap = document.getElementById(chartId).closest('.chart-panel').querySelector('.chart-title-wrap');
+    let span = wrap.querySelector('.chart-coverage');
+    if (!span) {
+        span = document.createElement('span');
+        span.className = 'chart-period chart-coverage num';
+        wrap.insertBefore(span, wrap.querySelector('.info-btn'));
+    }
+    span.textContent = `${n} of ${plural(m, 'unit')}`;
+}
+
+const CF_STEP = 0.075;   // eight steps of 7.5 points: 0% up to 52.5% and above
+
+function renderPortfolioPanels(data, monthly) {
+    const genPanel = document.getElementById('panelAssetGeneration');
+    const cfPanel = document.getElementById('panelAssetCF');
+    if (!data || data.type !== 'portfolio' || !data.assets || !monthly || !monthly.months || !monthly.months.length) {
+        genPanel.style.display = 'none';
+        cfPanel.style.display = 'none';
+        return;
+    }
+    genPanel.style.display = 'block';
+    cfPanel.style.display = 'block';
+    const months = monthly.months;
+    const start = data.monthly.months.length - months.length;
+    const fmtMonths = months.map(fmtMonth);
+    const monthSet = new Set(months);
+    const total = portfolioState ? portfolioState.requested.length : data.assets.length;
+
+    // Colour follows the unit: slots go by nameplate (then DUID) and do not move with the period.
+    const ranked = [...data.assets].sort((a, b) => (b.capacity_mw || 0) - (a.capacity_mw || 0) || a.duid.localeCompare(b.duid))
+        .map(a => ({ ...a, gen: a.generation_mwh.slice(start), cf: a.capacity_factor.slice(start) }));
+    const named = ranked.length <= 8 ? ranked : ranked.slice(0, 7);
+    const others = ranked.slice(named.length);
+    const nameCount = {};
+    ranked.forEach(a => { nameCount[a.name] = (nameCount[a.name] || 0) + 1; });
+    const label = a => (nameCount[a.name] > 1 ? `${a.name} · ${a.duid}` : a.name) + (a.battery ? ' (battery)' : '');
+    const has = arr => arr.some(v => v != null);
+
+    // Coverage on the portfolio's own panels: units with a figure inside the window.
+    const memberHas = key => portfolioState ? portfolioState.members.filter(x => {
+        const m = x.doc.monthly;
+        if (!m || !m.months || !m[key]) return false;
+        const fcu = data.excluded_commissioning ? (Portfolio.fullCommercialUse(x.doc).date || '').slice(0, 7) : '';
+        return m.months.some((mo, i) => monthSet.has(mo) && mo >= fcu && m[key][i] != null);
+    }).length : 0;
+    setCoverage('chartGeneration', memberHas('generation_mwh'), total);
+    setCoverage('chartCapacity', ranked.filter(a => a.in_cf && has(a.cf)).length, total);
+    if (document.getElementById('panelCurtailment').style.display !== 'none') setCoverage('chartCurtailment', memberHas('curtailment_pct'), total);
+    if (document.getElementById('panelEconCurtailment').style.display !== 'none') setCoverage('chartEconCurtailment', memberHas('econ_curtailment_pct'), total);
+    setCoverage('chartPriceCapture', memberHas('captured_price'), total);
+
+    // Generation by asset: stacked bars, the units' own figures.
+    const reported = ranked.filter(a => has(a.gen));
+    setCoverage('chartAssetGeneration', reported.length, total);
+    if (reported.length) {
+        // A unit with nothing in the window gets no trace (and no legend entry); its slot stays its own.
+        const traces = named.map((a, i) => ({
+            x: fmtMonths, y: a.gen, type: 'bar', name: label(a),
+            marker: { color: C('--cat-' + i), line: { width: 0 } },
+            hovertemplate: `${esc(label(a))}: %{y:,.0f} MWh<extra></extra>`,
+        })).filter((t, i) => has(named[i].gen));
+        if (others.some(a => has(a.gen))) {
+            const sum = fmtMonths.map((_, j) => {
+                const vs = others.map(a => a.gen[j]).filter(v => v != null);
+                return vs.length ? vs.reduce((x, y) => x + y, 0) : null;
+            });
+            traces.push({
+                x: fmtMonths, y: sum, type: 'bar', name: `Others (${others.length})`,
+                marker: { color: C('--cat-other'), line: { width: 0 } },
+                hovertemplate: `Others (${others.length} units): %{y:,.0f} MWh<extra></extra>`,
+            });
+        }
+        Plotly.newPlot('chartAssetGeneration', traces, chartLayout({
+            height: H.lg,
+            barmode: 'stack',
+            xaxis: monthAxis(fmtMonths, 'chartAssetGeneration'),
+            yaxis: { title: { text: 'MWh' }, tickformat: '~s' },
+            showlegend: traces.length > 1,
+        }), PLOTLY_CONFIG);
+    } else {
+        Plotly.purge(document.getElementById('chartAssetGeneration'));
+        showChartState('chartAssetGeneration', 'No generation in this period',
+            'None of the units reported generation in the months shown. Choose a longer period.');
+    }
+
+    // Capacity factor by asset: an HTML grid on the sequential ramp, scale stated above it.
+    const withCF = ranked.filter(a => has(a.cf));
+    setCoverage('chartAssetCF', withCF.length, total);
+    const cfEl = document.getElementById('chartAssetCF');
+    if (!withCF.length && !has(monthly.capacity_factor || [])) {
+        cfEl.innerHTML = '<div class="placeholder"></div>';
+        showChartState('chartAssetCF', 'No capacity factor in this period',
+            'None of the units published a capacity factor in the months shown.');
+        return;
+    }
+    const step = v => (v == null || isNaN(v)) ? 'seq-none' : 'seq-' + Math.min(7, Math.max(0, Math.floor(v / CF_STEP)));
+    const cell = (v, who, i) => `<td class="${step(v)} h-6 min-w-10 px-1 text-center" title="${esc(who)} · ${fmtMonthLong(months[i])}: ${v == null ? 'no figure' : (v * 100).toFixed(1) + '%'}">${v == null ? '' : Math.round(v * 100)}</td>`;
+    const swatch = i => `<span class="swatch-bar mr-1.5 align-middle" style="background: var(${i < named.length ? '--cat-' + i : '--cat-other'})"></span>`;
+    const head = '<tr><th scope="col" class="sticky left-0 z-10 bg-surface pr-3 text-left font-medium text-faint">Unit</th>' +
+        fmtMonths.map(m => `<th scope="col" class="px-1 pb-1 font-normal text-faint">${m}</th>`).join('') + '</tr>';
+    const rows = ranked.map((a, r) => {
+        const note = [a.in_cf ? '' : 'not in portfolio CF', has(a.cf) ? '' : 'no figure in this period'].filter(Boolean).join(' · ');
+        return `<tr><th scope="row" class="sticky left-0 z-10 max-w-[240px] truncate bg-surface pr-3 text-left font-normal text-ink" title="${esc(label(a) + (note ? ' · ' + note : ''))}">${swatch(r)}${esc(label(a))}` +
+        (note ? ` <span class="text-faint">· ${note}</span>` : '') + '</th>' +
+        a.cf.map((v, i) => cell(v, label(a), i)).join('') + '</tr>';
+    }).join('');
+    const portfolioRow = '<tr><th scope="row" class="sticky left-0 z-10 bg-surface pr-3 pt-1 text-left font-semibold text-ink">Portfolio</th>' +
+        (monthly.capacity_factor || months.map(() => null)).map((v, i) => cell(v, 'Portfolio', i).replace('<td class="', '<td class="font-semibold ')).join('') + '</tr>';
+    const scale = '<div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] leading-4 text-faint">' +
+        '<span>Scale</span><span class="flex gap-px" aria-hidden="true">' +
+        [0, 1, 2, 3, 4, 5, 6, 7].map(i => `<span class="seq-${i} h-3 w-6 rounded-[2px]"></span>`).join('') + '</span>' +
+        '<span class="num">0% to 52.5% and above, in steps of 7.5 points · cells show the monthly CF in % · empty = no figure published</span></div>';
+    cfEl.innerHTML = scale + '<div class="overflow-x-auto"><table class="num w-max border-separate border-spacing-px text-[11px] leading-4">' +
+        '<thead>' + head + '</thead><tbody>' + rows + portfolioRow + '</tbody></table></div>';
+    // Open on the latest months, like the charts' right-hand end.
+    const scroller = cfEl.querySelector('.overflow-x-auto');
+    scroller.scrollLeft = scroller.scrollWidth;
 }
 
 // ─── Time Period Controls ──────────────────────────────────────────────
@@ -2123,11 +2658,20 @@ function renderCharts(data) {
     } else if (constraintPanel) {
         constraintPanel.style.display = 'none';
     }
+    renderPortfolioPanels(data, monthly);
     updateOmittedNotes();
 }
 
 // ─── Hash Routing ──────────────────────────────────────────────────────
 function handleHash() {
+    const pf = Portfolio.parseHash(window.location.hash);
+    if (pf) {
+        if (!generators.length) return;
+        // Our own hash write after a View: the portfolio is already loading or on screen.
+        if (portfolioState && portfolioState.requested.join(',') === pf.join(',')) return;
+        selectPortfolio(pf);
+        return;
+    }
     const hash = window.location.hash.replace('#', '');
     if (hash) {
         const gen = generators.find(g => g.duid === hash);
@@ -2137,6 +2681,7 @@ function handleHash() {
             // figures may stay on screen under it.
             if (selectionAbort) selectionAbort.abort();
             selectionToken++;
+            resetPortfolioView();
             purgeChartsAndState();
             document.getElementById('identityCard').classList.remove('visible');
             document.getElementById('chartGrid').classList.remove('visible');
@@ -2526,6 +3071,11 @@ function buildDailyRows(data) {
 }
 
 function getExportFilename() {
+    // A portfolio's hash lists its members: never put that in a file name.
+    if (currentData && currentData.type === 'portfolio') {
+        const slug = (portfolioState && portfolioState.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        return 'portfolio-' + (slug || currentData.duids.length + '-units');
+    }
     const hash = window.location.hash.replace('#', '');
     return hash || 'generator';
 }
@@ -2538,6 +3088,21 @@ function getExportFilename() {
 
 function buildInfoRows(data) {
     if (!data) return [];
+    if (data.type === 'portfolio') {
+        const missing = (portfolioState && portfolioState.missing) || [];
+        return [{
+            'Portfolio': data.station_name || '',
+            'Units': data.duids.length,
+            'Units Not Loaded': missing.map(x => x.duid).join(', '),
+            'Regions': (data.regions || []).join(', '),
+            'Fuel Mix (MW)': Object.entries(data.fuel_mix || {}).map(([f, mw]) => `${f} ${Math.round(mw * 10) / 10}`).join(', '),
+            'Nameplate (MW)': data.capacity_mw != null ? data.capacity_mw : '',
+            'Capacity Factor Basis': 'Nameplate of non-battery units reporting each month',
+            'Months Before Full Commercial Use': data.excluded_commissioning ? 'Excluded' : 'Included',
+            'LGC Eligible': data.lgc_eligible ? 'Yes (every unit)' : 'No (not every unit)',
+            'Revenue Basis': revenueBasisNote(data) || 'spot energy revenue',
+        }];
+    }
     return [{
         'DUID': data.duid || '',
         'Station': data.station_name || '',
@@ -2665,10 +3230,36 @@ function buildConstraintHeatmapRows(data) {
     return rows;
 }
 
+// One row per unit per month: the table behind the two asset panels.
+function buildAssetRows(data) {
+    if (!data || !data.assets || !data.monthly || !data.monthly.months) return [];
+    const rows = [];
+    for (const a of data.assets) {
+        data.monthly.months.forEach((month, i) => {
+            if (a.generation_mwh[i] == null && a.capacity_factor[i] == null && a.curtailment_pct[i] == null) return;
+            rows.push({
+                'DUID': a.duid,
+                'Station': a.name || '',
+                'Fuel Type': a.fuel_category || '',
+                'Region': a.region || '',
+                'Nameplate (MW)': a.capacity_mw != null ? a.capacity_mw : '',
+                'In Portfolio CF': a.in_cf ? 'Yes' : 'No (battery)',
+                'Full Commercial Use': a.full_commercial_use || '',
+                'Month': month,
+                'Generation (MWh)': a.generation_mwh[i],
+                'Capacity Factor': a.capacity_factor[i],
+                'Curtailment Proxy': a.curtailment_pct[i],
+            });
+        });
+    }
+    return rows;
+}
+
 function buildExportSections(data) {
     return [
         ['Info', buildInfoRows(data)],
         ['Monthly', buildMonthlyRows(data)],
+        ['Assets', buildAssetRows(data)],
         ['Daily', buildDailyRows(data)],
         ['MLF', buildMLFRows(data)],
         ['FCAS Regional Average', buildFCASRows(data)],

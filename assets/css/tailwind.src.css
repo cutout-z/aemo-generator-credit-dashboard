@@ -40,6 +40,11 @@
     --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 16px 48px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line);
     --scrim: rgba(0, 0, 0, 0.6);
+    /* Categorical slots (house palette, ai-dc-frontend docs/design-tokens.md): colour follows
+       the entity, slot order is fixed, everything past slot 7 is --cat-other. */
+    --cat-0: #3987e5; --cat-1: #d95926; --cat-2: #199e70; --cat-3: #c98500;
+    --cat-4: #d55181; --cat-5: #008300; --cat-6: #9085e9; --cat-7: #e66767;
+    --cat-other: #6b6b6b;
   }
 
   [data-theme="light"] {
@@ -68,6 +73,9 @@
     --warn-wash: #fef9e7;
     --bad-wash: #fef2f2;
     --neutral-wash: #f4f4f4;
+    --cat-0: #2a78d6; --cat-1: #eb6834; --cat-2: #1baf7a; --cat-3: #eda100;
+    --cat-4: #e87ba4; --cat-5: #008300; --cat-6: #4a3aa7; --cat-7: #e34948;
+    --cat-other: #a3a3a3;
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
     --shadow-pop: 0 16px 48px -12px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--line);
     --scrim: rgba(10, 10, 10, 0.28);
