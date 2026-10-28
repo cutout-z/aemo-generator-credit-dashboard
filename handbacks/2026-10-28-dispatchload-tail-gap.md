@@ -6,6 +6,7 @@ pr: cutout-z/aemo-generator-credit-dashboard#19
 pr: cutout-z/aemo-generator-credit-dashboard#20
 pr: cutout-z/aemo-generator-credit-dashboard#21
 pr: cutout-z/aemo-generator-credit-dashboard#23
+pr: cutout-z/aemo-generator-credit-dashboard#24
 status: #19, #20 and #21 merged; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8), discoverable (#23, 9735b23)
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
@@ -16,7 +17,8 @@ noticed:
   - "A parse failure after a successful Next_Day download is not cached, so a short in-window month would re-download ~215 MB each run -> done: accepted; heal fires only on a short archive month (one in 26 cached); revisit if it recurs"
   - "Daily CF chart: drag on its second x axis doesn't expand (verify-interactions 14/15, fails the same on main) -> tracked: proposed session 'AEMO credit: fix Daily CF axis drag and 1024px app bar' (task_a592d2ae)"
   - "App bar overflows at 1024px (1265 vs 1209 on main, slightly worse after #21) -> tracked: same proposed session"
-  - "AGENTS.md Facts say deep links are #/<DUID> (they are #DUID) and omit #portfolio= -> blocked: AGENTS.md edits need the owner's yes; Brain To-Do ca3d17aa9350897b4"
+  - "AGENTS.md Facts say deep links are #/<DUID> (they are #DUID) and omit #portfolio= -> done: owner said yes in session; cutout-z/aemo-generator-credit-dashboard#24 (1e656ca), review pass; To-Do ca3d17aa9350897b4 closed"
+  - "AGENTS.md Facts row says index.html has 2,521 lines (it is longer) -> done: accepted; descriptive only, outside the approved edit"
   - "Price distribution panel ignores the commissioning switch -> done: accepted; price_distribution is whole-history (bins, mwh) with no month axis, so the browser cannot filter it"
   - "Station econ_curtailment_pct now energy-weighted; published station files change at the next lane run -> tracked: tonight's 21:15Z daily run; test_portfolio_js's oracle then compares econ (it asserts once any station is marked energy)"
   - "Round-2 review: the econ fixture could not fail under nameplate weights (my first mutation claim was wrong) -> done: c964d1f, fails in JS (0.1267) and pipeline (0.1378)"
@@ -24,8 +26,7 @@ noticed:
   - "#23 review L: theme toggle overruns the bar's right padding by 13px at 1280-1292 and 1600-1612 -> done: accepted; on main it was 18px at 1280, and the toggle stays inside the bar"
   - "#23 review L: welcome block stays visible under the open builder -> done: accepted, cosmetic"
   - "Rolling 12-month trace crashed renderCharts for sets under 12 months (latent on main at #MULWASF1) -> done: c964d1f, guarded; live page renders 11 charts"
-outstanding:
-  - "to-do [mac-local] approve the AGENTS.md Facts fix (deep links #DUID; add #portfolio=); blocked on: the owner's yes for AGENTS.md edits (Brain To-Do ca3d17aa9350897b4)"
+outstanding: []
 ---
 
 # DISPATCHLOAD tail gap, September 2025
