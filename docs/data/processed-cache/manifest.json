@@ -12,13 +12,13 @@
     },
     {
       "name": "fcas_aggregates.feather",
-      "sha256": "c5fb7b1172e8b6a0d600e0e0d5130948dc61278267a0ea78e1042ea2e1207a4e",
-      "size_bytes": 18738
+      "sha256": "93b92e4a0dc8b6ecb15d5b1f57e1cdd8a2e3c19d2fc5e66815b68203273c8fd3",
+      "size_bytes": 19010
     },
     {
       "name": "fcas_factors.feather",
-      "sha256": "8149af10a573345a3fd04da6ce73603d9c4f94cc0004de1895c8c6e5a902c83a",
-      "size_bytes": 230082
+      "sha256": "417022e9a380337bcb47ec12527b0d1debda9081ab83b1c0f9365797cf672622",
+      "size_bytes": 298522
     },
     {
       "name": "generators.feather",
@@ -37,18 +37,18 @@
     },
     {
       "name": "monthly_aggregates.feather",
-      "sha256": "9cf6a53ee1263ab5314fe28365d55217d1408b3a8b3765c161efad142d2e5aec",
-      "size_bytes": 4627082
+      "sha256": "b3e68dfc99205908b88d792c8723950023d136a0ea9e3f8f0d2c94fc90e5ebdc",
+      "size_bytes": 4627074
     },
     {
       "name": "offer_curves.feather",
-      "sha256": "befb3bc2ce245bce915c68f73c2365ecea4d111f2e2b715481b72fb3e310322d",
-      "size_bytes": 1784722
+      "sha256": "d459e614d161ad51af840d9edcee44bb912f01fc40805d42b7fe5d16231bb070",
+      "size_bytes": 1884370
     },
     {
       "name": "offer_factors.feather",
-      "sha256": "f7030d6d55e808137251126ead571c6a12bd5c1f6ab26cd89f9dca3f598db24c",
-      "size_bytes": 289914
+      "sha256": "9ab0c7e4925b6cd70beffbbd370424a9c865e8e56dfe183d5ac3f6474207829f",
+      "size_bytes": 431178
     }
   ],
   "note": "Compact processed project history. Raw AEMO/NEMOSIS cache is intentionally excluded.",
