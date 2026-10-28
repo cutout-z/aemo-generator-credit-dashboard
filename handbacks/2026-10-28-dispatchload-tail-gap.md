@@ -5,7 +5,8 @@ branch: fix/dispatchload-tail-gap
 pr: cutout-z/aemo-generator-credit-dashboard#19
 pr: cutout-z/aemo-generator-credit-dashboard#20
 pr: cutout-z/aemo-generator-credit-dashboard#21
-status: #19, #20 and #21 merged; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8)
+pr: cutout-z/aemo-generator-credit-dashboard#23
+status: #19, #20 and #21 merged; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8), discoverable (#23, 9735b23)
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
   - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed -> done: reprocessed in 65c4b1c, diff below"
@@ -19,6 +20,9 @@ noticed:
   - "Price distribution panel ignores the commissioning switch -> done: accepted; price_distribution is whole-history (bins, mwh) with no month axis, so the browser cannot filter it"
   - "Station econ_curtailment_pct now energy-weighted; published station files change at the next lane run -> tracked: tonight's 21:15Z daily run; test_portfolio_js's oracle then compares econ (it asserts once any station is marked energy)"
   - "Round-2 review: the econ fixture could not fail under nameplate weights (my first mutation claim was wrong) -> done: c964d1f, fails in JS (0.1267) and pipeline (0.1378)"
+  - "Daily CF axis drag and 1024px app bar -> done: cutout-z/aemo-generator-credit-dashboard#22 (bc3f048), from the proposed session"
+  - "#23 review L: theme toggle overruns the bar's right padding by 13px at 1280-1292 and 1600-1612 -> done: accepted; on main it was 18px at 1280, and the toggle stays inside the bar"
+  - "#23 review L: welcome block stays visible under the open builder -> done: accepted, cosmetic"
   - "Rolling 12-month trace crashed renderCharts for sets under 12 months (latent on main at #MULWASF1) -> done: c964d1f, guarded; live page renders 11 charts"
 outstanding:
   - "to-do merge cutout-z/agent-contracts#175; blocked on: the owner's merge (land refuses agent-contracts)"
@@ -149,3 +153,20 @@ comparison that could never fail) and L1 to L3; all were fixed in a16e8c4. Round
 Live check (5e316f8 on Pages): `#portfolio=CLRKCWF1,WTAHB1,MULWASF1` renders 11 charts, including Generation by Asset
 and Capacity Factor by Asset, with "3 of 3 units loaded". With the switch on, Generation goes from 25 to 4 months.
 No console errors.
+
+## Making the portfolio view findable (#23), 28 Oct 2026
+
+The owner opened the site from the GitHub link and didn't see the portfolio view. The site was current, but
+from 1024 to 1599px the only way in was an unlabelled layers icon, and the landing screen didn't mention
+portfolios. #23 (9735b23) labels the button "Portfolio" at every width. To make room, from 1280 to 1439px the
+app bar's gaps narrow to 12px and the search box's minimum to 200px. The landing screen gains "Build a
+portfolio", which opens the builder with the search focused. The adversary's verdict was pass, with only L
+findings; the one that mattered (an error notice falling below the new button) was fixed before landing.
+Evidence: pytest gave 596 passed, with the same 22 known failures. verify-design passed, verify-interactions
+passed 15/15, and nothing overflows from 390 to 1600px. On the live site, at 1280 and 1440, the label shows,
+nothing overflows and the button opens the builder.
+
+Ruling: the label shows at every width rather than staying icon-only on laptops, because an unlabelled icon
+hid the feature from the person it was built for. If wrong, the bar is 8px tighter per gap between 1280 and
+1439.
+
