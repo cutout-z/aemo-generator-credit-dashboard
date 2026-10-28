@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-JS = ROOT / "docs" / "assets" / "js" / "portfolio.js"
+JS = ROOT / "assets" / "js" / "portfolio.js"   # the source; test_design_assets pins the published copy
 DATA = ROOT / "docs" / "data"
 NODE = shutil.which("node")
 
@@ -40,11 +40,12 @@ const units = new Map(index.filter(g => g.type !== 'station').map(g => [g.duid, 
 const load = f => JSON.parse(fs.readFileSync(path.join(D, 'generators', f + '.json')));
 const near = (a, b, tol) => (a == null && b == null) || (a != null && b != null && Math.abs(a - b) <= tol);
 const bad = [];
-let stations = 0, econCompared = 0;
+let stations = 0, noMonthly = 0, econCompared = 0, econMarked = 0;
 for (const st of index.filter(g => g.type === 'station')) {
     const s = load(st.file);
-    if (!s.monthly) continue;
+    if (!s.monthly) { noMonthly++; continue; }
     stations++;
+    if (s.monthly.econ_curtailment_weighting === 'energy') econMarked++;
     const members = s.duids.map(d => ({ entry: units.get(d), doc: load(units.get(d).file || d) }));
     const p = P.combine(members, { batteriesInCF: true });
     const n = members.length, sm = s.monthly, pm = p.monthly;
@@ -106,7 +107,7 @@ for (const st of index.filter(g => g.type === 'station')) {
     const sk = Object.keys(s.mlf_by_duid || {}).sort().join(), pk = Object.keys(p.mlf_by_duid || {}).sort().join();
     if (sk !== pk) bad.push(`${st.file} MLF members ${sk} vs ${pk}`);
 }
-const kinds = {}; bad.forEach(b => { const k = b.split(' ').slice(2).join(' ').split(':')[0]; kinds[k] = (kinds[k] || 0) + 1; }); console.log(JSON.stringify({ stations, econCompared, kinds, bad: bad.slice(0, 15), badCount: bad.length }));
+const kinds = {}; bad.forEach(b => { const k = b.split(' ').slice(2).join(' ').split(':')[0]; kinds[k] = (kinds[k] || 0) + 1; }); console.log(JSON.stringify({ stations, noMonthly, econCompared, econMarked, kinds, bad: bad.slice(0, 15), badCount: bad.length }));
 """
 
 
@@ -114,6 +115,83 @@ def test_every_station_rebuilds_from_its_unit_files():
     res = run_node(ORACLE)
     assert res["stations"] >= 60, res
     assert res["badCount"] == 0, "\n".join(res["bad"])
+    # Economic curtailment is compared only on stations published under the energy-weighted
+    # rule (the first lane run after it landed); once any carries the marker, it must bite.
+    if res["econMarked"]:
+        assert res["econCompared"] > 0, res
+
+
+# The pipeline and the combiner on the same units: generate_all writes the unit files and the
+# station file, node combines the unit files. Covers what the published-data oracle cannot until
+# stations carry the energy-weighted rule: energy weighting, the per-unit cap, legacy rows that
+# recover potential from generation, and the nameplate fallback when no member has energy.
+PIPELINE_VS_JS = r"""
+const fs = require('fs'), path = require('path');
+const P = require(process.env.PORTFOLIO_JS);
+const dir = process.env.GEN_DIR;
+const load = f => JSON.parse(fs.readFileSync(path.join(dir, f + '.json')));
+const station = load('station_Mix_Station');
+const members = station.duids.map(d => ({ entry: JSON.parse(process.env.ENTRIES)[d], doc: load(d) }));
+const p = P.combine(members, { batteriesInCF: true });
+console.log(JSON.stringify({ months: station.monthly.months, pipeline: station.monthly.econ_curtailment_pct,
+    browser: p.monthly.econ_curtailment_pct, pMonths: p.monthly.months }));
+"""
+
+
+def test_economic_curtailment_matches_pipeline(tmp_path):
+    import pandas as pd
+
+    from src.generate_json import generate_all
+
+    caps = {"GEN_A": 100.0, "GEN_B": 300.0, "GEN_C": 50.0}
+    generators = pd.DataFrame({
+        "DUID": list(caps), "STATION_NAME": ["Mix Station"] * 3, "REGION": ["QLD1"] * 3,
+        "FUEL_CATEGORY": ["Wind", "Wind", "Solar"], "CAPACITY_MW": list(caps.values()),
+        "TECHNOLOGY": ["Wind", "Wind", "Solar"], "CONNECTION_POINT": ["CP_A", "CP_B", "CP_C"],
+    })
+    nan = float("nan")
+    rows = [
+        # 2026-03: energy columns; GEN_C's economic % (0.3) is above its total (0.2) and is capped.
+        ("GEN_A", "2026-03", 900, 0.10, 0.02, 900, 1000),
+        ("GEN_B", "2026-03", 2400, 0.20, 0.15, 2400, 3000),
+        ("GEN_C", "2026-03", 400, 0.20, 0.30, 400, 500),
+        # 2026-04: legacy rows, potential recovered as generation / (1 − pct).
+        ("GEN_A", "2026-04", 800, 0.20, 0.05, nan, nan),
+        ("GEN_B", "2026-04", 2700, 0.10, 0.08, nan, nan),
+        ("GEN_C", "2026-04", 450, 0.10, 0.01, nan, nan),
+        # 2026-05: no total, so no derivable potential: nameplate-weighted fallback.
+        ("GEN_A", "2026-05", 1000, nan, 0.04, nan, nan),
+        ("GEN_B", "2026-05", 3000, nan, 0.12, nan, nan),
+        ("GEN_C", "2026-05", 500, nan, nan, nan, nan),
+        # 2026-06: GEN_B beats its availability, so the station total clips to 0 and the
+        # energy-weighted economic figure (0.5·1000/4000) is capped to it.
+        ("GEN_A", "2026-06", 500, 0.50, 0.50, 500, 1000),
+        ("GEN_B", "2026-06", 3600, 0.0, 0.0, 3600, 3000),
+    ]
+    monthly = pd.DataFrame(rows, columns=["duid", "month", "generation_mwh", "curtailment_pct",
+                                          "econ_curtailment_pct", "curtailment_actual_mwh",
+                                          "curtailment_potential_mwh"])
+    monthly = monthly.astype({c: float for c in monthly.columns if c not in ("duid", "month")})
+    monthly["revenue_aud"] = monthly["generation_mwh"] * 50.0
+    monthly["capacity_factor"] = 0.1
+    out = tmp_path / "generators"
+    generate_all(generators, monthly_aggregates=monthly, output_dir=str(out))
+
+    entries = {d: {"duid": d, "fuel_category": f, "capacity_mw": caps[d], "region": "QLD1"}
+               for d, f in zip(caps, ["Wind", "Wind", "Solar"])}
+    proc = subprocess.run(
+        [NODE, "-e", PIPELINE_VS_JS], capture_output=True, text=True, timeout=60,
+        env={"PORTFOLIO_JS": str(JS), "GEN_DIR": str(out), "ENTRIES": json.dumps(entries)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    r = json.loads(proc.stdout)
+    assert r["pMonths"] == r["months"] == ["2026-03", "2026-04", "2026-05", "2026-06"]
+    # March: (0.02·1000 + 0.15·3000 + 0.2·500) / 4500 = 0.1267 (GEN_C capped at 0.2).
+    assert r["pipeline"][0] == pytest.approx(0.1267, abs=1e-4)
+    # May: nameplate fallback (0.04·100 + 0.12·300) / 400 = 0.1.
+    assert r["pipeline"][2] == pytest.approx(0.1, abs=1e-4)
+    assert r["pipeline"][3] == 0.0
+    assert r["browser"] == [pytest.approx(v, abs=1e-4) for v in r["pipeline"]]
 
 
 UNIT = r"""
@@ -179,3 +257,38 @@ def test_combine_rules_and_link_format():
     assert r["notPortfolio"] is None
     # MLF status: the most conservative member's (unknown > prior-carry > exact).
     assert r["status"] == ["prior-carry", "unknown", "exact", "exact"]
+
+
+FCU = r"""
+const P = require(process.env.PORTFOLIO_JS);
+const row = (name, status, fcu) => ({ unit_name: name, commitment_status: status, full_commercial_use_date: fcu });
+const at = (duid, rows) => P.fullCommercialUse({ duid, gen_info: { units: rows } });
+console.log(JSON.stringify({
+    // ERB01's block: a Committed stage 2 due 2027 beside the in-service stage 1 (no date).
+    erb: at('ERB01', [row('ERARNGB2', 'Committed', '2027-03-31'), row('ERARNGB3', 'In Service', null), row('ERARNGB1', 'In Service', null)]),
+    // WAGGNSF1's block: two stages in commissioning, one undated: which is this unit is unknown.
+    wagga: at('WAGGNSF1', [row('WNS23-34', 'In Commissioning', '2023-07-01'), row('WNSF1-22', 'In Commissioning', null)]),
+    // A row named after the DUID wins over the project's other stages.
+    own: at('ABC1', [row('ABC2', 'In Commissioning', '2026-09-01'), row('abc1', 'In Service', '2024-05-10')]),
+    // Several dated operating stages, none named: the earliest (leaves out the fewest months).
+    stages: at('XYZ1', [row('X2', 'In Service', '2025-02-01'), row('X1', 'In Commissioning', '2024-11-15'), row('X3', 'Anticipated', '2028-01-01')]),
+    none: at('NONE1', []),
+    // MP2: in service since before our data, yet dated 2027 in the register: no usable date.
+    future: P.fullCommercialUse({ duid: 'MP2', monthly: { months: ['2021-09', '2026-09'] },
+        gen_info: { units: [row('Mt Piper 2', 'In Service', '2027-01-31')] } }),
+    // In commissioning and dated past our data: every month so far is commissioning.
+    commissioningAhead: P.fullCommercialUse({ duid: 'MCINTYR1', monthly: { months: ['2024-08', '2026-09'] },
+        gen_info: { units: [row('MIWF', 'In Commissioning', '2026-12-01')] } }),
+}));
+"""
+
+
+def test_full_commercial_use_reads_the_units_own_stage():
+    r = run_node(FCU)
+    assert r["erb"] == {"date": None, "commissioning": False}
+    assert r["wagga"] == {"date": None, "commissioning": True}
+    assert r["own"] == {"date": "2024-05-10", "commissioning": False}
+    assert r["stages"] == {"date": "2024-11-15", "commissioning": True}
+    assert r["none"] == {"date": None, "commissioning": False}
+    assert r["future"] == {"date": None, "commissioning": False}
+    assert r["commissioningAhead"] == {"date": "2026-12-01", "commissioning": True}

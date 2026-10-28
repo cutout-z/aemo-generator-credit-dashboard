@@ -56,14 +56,28 @@
         return new Date(Date.UTC(y, m, 0)).getUTCDate();
     }
 
-    // AEMO full commercial use month for a unit, from its Generation Information block.
+    // AEMO full commercial use date for a unit, from its Generation Information block. That
+    // block lists the unit's whole project, later stages included (ERB01 carries a Committed
+    // stage 2 due 2027), so: the row named after the DUID when there is one; otherwise only rows
+    // already In Service or In Commissioning, and no date at all if one of those has none (an
+    // undated stage is running, so which row is this unit can't be told); else the earliest.
+    // An In Service row dated after the unit's latest published month contradicts itself
+    // (MP2: in service, dated 2027) and counts as undated, so the switch can't wipe its history.
+    const OPERATING = /^in (service|commissioning)$/i;
     function fullCommercialUse(doc) {
-        const units = (doc && doc.gen_info && doc.gen_info.units) || [];
-        const dates = units.map(u => u.full_commercial_use_date).filter(Boolean).sort();
-        const status = units.map(u => u.commitment_status).filter(Boolean);
+        const rows = (doc && doc.gen_info && doc.gen_info.units) || [];
+        const duid = String((doc && doc.duid) || '').toUpperCase();
+        const months = (doc && doc.monthly && doc.monthly.months) || [];
+        const last = months.length ? months[months.length - 1] : null;
+        const own = rows.filter(u => duid && String(u.unit_name || '').toUpperCase() === duid);
+        const candidates = own.length ? own : rows.filter(u => OPERATING.test(u.commitment_status || ''));
+        const dates = candidates.map(u => {
+            const d = u.full_commercial_use_date;
+            return d && last && /^in service$/i.test(u.commitment_status || '') && d.slice(0, 7) > last ? null : d;
+        });
         return {
-            date: dates.length ? dates[dates.length - 1] : null,
-            commissioning: status.some(s => /commission/i.test(s)),
+            date: dates.length && dates.every(Boolean) ? [...dates].sort()[0] : null,
+            commissioning: candidates.some(u => /commission/i.test(u.commitment_status || '')),
         };
     }
 
@@ -148,6 +162,14 @@
             const withEcon = withEnergy.filter(p => isNum(row(p).econ));
             const econPot = withEcon.reduce((a, p) => a + row(p).pot, 0);
             let econ = econPot > 0 ? withEcon.reduce((a, p) => a + row(p).econ * row(p).pot, 0) / econPot : null;
+            if (econ == null) {
+                // No member has the energy: nameplate-weighted, as the pipeline's fallback.
+                const anyEcon = present.filter(p => isNum(row(p).econ));
+                const weighted = anyEcon.filter(p => isNum(capOf(p)));
+                const w = weighted.reduce((a, p) => a + capOf(p), 0);
+                if (weighted.length && w > 0) econ = weighted.reduce((a, p) => a + row(p).econ * capOf(p), 0) / w;
+                else if (anyEcon.length) econ = anyEcon.reduce((a, p) => a + row(p).econ, 0) / anyEcon.length;
+            }
             if (econ != null && pct != null) econ = Math.min(econ, pct);
             out.econ_curtailment_pct.push(round(econ, 4));
 

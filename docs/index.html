@@ -847,6 +847,14 @@ function renderDropdown(results) {
             <span class="hidden w-[120px] shrink-0 sm:flex"><span class="badge">${g.fuel_category}</span></span>
             <span class="num hidden w-16 shrink-0 text-right text-[12px] text-muted sm:inline">${g.capacity_mw ? `${g.capacity_mw} MW` : ''}</span>
         `;
+        if (portfolioBuilderOpen() && !isUnitEntry(g) && !stationMembersCache.has(g.duid)) {
+            // Learn the station's units so its Added mark (and a pick's add-or-remove) is right.
+            stationMembers(g).then(() => {
+                if (portfolioBuilderOpen() && portfolioPickState(g) && item.isConnected && !item.querySelector('.picked')) {
+                    item.insertAdjacentHTML('beforeend', '<span class="picked shrink-0">' + (portfolioPickState(g) === 'all' ? 'Added' : 'Part added') + '</span>');
+                }
+            }).catch(() => {});
+        }
         if (portfolioBuilderOpen() && portfolioPickState(g)) {
             item.insertAdjacentHTML('beforeend', '<span class="picked shrink-0">' + (portfolioPickState(g) === 'all' ? 'Added' : 'Part added') + '</span>');
         }
@@ -1106,11 +1114,14 @@ function updateOmittedNotes() {
 // Why a monthly chart is empty: nothing published at all, or nothing inside the chosen period.
 function monthlyAbsence(chartId, key, name, noneTitle, noneBody) {
     const full = currentData && currentData.monthly && currentData.monthly[key];
+    const isPortfolio = !!(currentData && currentData.type === 'portfolio');
     if (full && full.some(v => v != null)) {
         showChartState(chartId, 'No ' + name + ' in this period',
-            'The unit has ' + name + ' outside the months shown. Choose a longer period to see it.');
+            'The ' + (isPortfolio ? 'portfolio' : 'unit') + ' has ' + name + ' outside the months shown. Choose a longer period to see it.');
+    } else if (isPortfolio && currentData.excluded_commissioning) {
+        showChartState(chartId, noneTitle, 'Every month these units published falls before full commercial use, and the switch above leaves those months out.');
     } else {
-        showChartState(chartId, noneTitle, noneBody);
+        showChartState(chartId, noneTitle, isPortfolio ? noneBody.replace(/this unit/g, 'these units') : noneBody);
     }
 }
 
@@ -1417,6 +1428,9 @@ function portfolioPickState(g) {
 // units) or takes it out again.
 async function pickFromSearch(g) {
     if (!portfolioBuilderOpen()) { selectGenerator(g.duid); return; }
+    // Decide add or remove from what the list showed: a station whose units were not yet known
+    // showed no mark, so its pick adds.
+    const shown = portfolioPickState(g);
     let duids;
     try {
         duids = isUnitEntry(g) ? [g.duid] : await stationMembers(g);
@@ -1424,7 +1438,7 @@ async function pickFromSearch(g) {
         setPortfolioStatus(`Could not load the units of ${g.station_name} (${e.message}).`);
         return;
     }
-    if (portfolioPickState(g) === 'all') {
+    if (shown === 'all') {
         portfolioDraft = portfolioDraft.filter(d => !duids.includes(d));
     } else {
         const add = duids.filter(d => !portfolioDraft.includes(d));
@@ -1433,6 +1447,7 @@ async function pickFromSearch(g) {
             return;
         }
         portfolioDraft.push(...add);
+        if (!add.length) { setPortfolioStatus(`${g.station_name} is already in the portfolio; pick it again to take it out.`); renderDropdown(getFilteredGenerators(searchInput.value)); return; }
     }
     setPortfolioStatus('');
     renderPortfolioBuilder();
@@ -1662,14 +1677,17 @@ function renderPortfolio() {
     document.getElementById('portfolioCoverage').textContent = parts.join(' · ');
     // The switch shows only when it changes something: a unit whose full commercial use month
     // comes after its first published month.
-    const affected = st.members.filter(x => {
-        const fcu = Portfolio.fullCommercialUse(x.doc).date;
+    const affected = st.members.map(x => ({ x, fcu: Portfolio.fullCommercialUse(x.doc).date })).filter(({ x, fcu }) => {
         const months = x.doc.monthly && x.doc.monthly.months;
         return fcu && months && months.length && months[0] < fcu.slice(0, 7);
-    }).length;
-    document.getElementById('commissioningWrap').hidden = !affected;
+    });
+    const wrap = document.getElementById('commissioningWrap');
+    wrap.hidden = !affected.length;
+    // Name each unit and its date: they come from AEMO's Generation Information register.
+    wrap.title = 'Full commercial use, from AEMO Generation Information: ' +
+        affected.map(({ x, fcu }) => `${x.entry.duid} ${fcu}`).join(', ');
     document.getElementById('commissioningLabel').textContent =
-        `Leave out months before full commercial use (${plural(affected, 'unit')})`;
+        `Leave out months before full commercial use (${plural(affected.length, 'unit')})`;
     document.getElementById('portfolioOptions').hidden = false;
 }
 

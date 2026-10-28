@@ -1,20 +1,23 @@
 """The design layer's published assets match their sources.
 
 GitHub Pages serves docs/ with no build step, so the compiled CSS and the chart-token bridge are
-committed copies. scripts/build-css.sh writes both; this catches a source edit that was never
+committed copies. scripts/build-css.sh writes them; this catches a source edit that was never
 republished (the page would silently keep the old behaviour).
 """
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_chart_tokens_published_copy_matches_source():
-    src = ROOT / "assets" / "js" / "chart-tokens.js"
-    out = ROOT / "docs" / "assets" / "js" / "chart-tokens.js"
-    assert out.exists(), "docs/assets/js/chart-tokens.js missing — run ./scripts/build-css.sh"
+@pytest.mark.parametrize("name", ["chart-tokens.js", "portfolio.js"])
+def test_published_js_matches_source(name):
+    src = ROOT / "assets" / "js" / name
+    out = ROOT / "docs" / "assets" / "js" / name
+    assert out.exists(), f"docs/assets/js/{name} missing — run ./scripts/build-css.sh"
     assert out.read_bytes() == src.read_bytes(), (
-        "docs/assets/js/chart-tokens.js is stale — run ./scripts/build-css.sh and commit it"
+        f"docs/assets/js/{name} is stale — run ./scripts/build-css.sh and commit it"
     )
 
 
