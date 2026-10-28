@@ -4,16 +4,15 @@ agent: claude
 branch: fix/dispatchload-tail-gap
 pr: cutout-z/aemo-generator-credit-dashboard#19
 pr: cutout-z/aemo-generator-credit-dashboard#20
-status: #19 merged 4ee4ab9, #20 merged bfb8f67; Sep 2025 reprocess approved, waiting on the manual --months-back 14 lane run
+status: #19 and #20 merged; Sep 2025 reprocessed and published (65c4b1c); only Sep 2025 changed
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
-  - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed; run is outstanding below"
+  - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed -> done: reprocessed in 65c4b1c, diff below"
   - "Review L notes on #20 (legacy-row rounding drift up to 0.05 MWh per member; non-curtailable units carry all-null arrays like their pct) -> done: accepted, 0 legacy rows in the cache"
   - "Cross-repo fact (short settled MMSDM month; nemosis Next_Day reads Current only) -> tracked: cutout-z/agent-contracts#175, open for the owner's merge"
   - "download_intermittent.py stages its archive zip in /tmp (NAS RAM disk) -> done: unreachable, fetch_intermittent_month has no caller since S3-01 (grep src/)"
   - "A parse failure after a successful Next_Day download is not cached, so a short in-window month would re-download ~215 MB each run -> done: accepted; heal fires only on a short archive month (one in 26 cached); revisit if it recurs"
 outstanding:
-  - "to-do [mac-local] run the Sep 2025 reprocess (--months-back 14) from the QNAP admin shell; blocked on: the owner's hands (lane secrets, manual trigger)"
   - "to-do merge cutout-z/agent-contracts#175; blocked on: the owner's merge (land refuses agent-contracts)"
 ---
 
@@ -85,4 +84,22 @@ Ruling: the reprocess run pushes as normal (`PUSH_CHANGES=1`) and is diffed mont
 not held unpushed, because the lane pulls with `--ff-only || reset --hard origin/main`. An unpushed
 commit would be silently dropped the next time `main` moves. If wrong, a month outside Sep 2025 reaches
 the public site until it is reverted.
+
+## Sep 2025 reprocess, 28 Oct 2026
+
+The owner ran `--months-back 14` from the QNAP admin shell, on code at bfb8f67 (#19 and #20). The log shows
+the heal fired: `DISPATCHLOAD 2025-09: filled 240 of 240 missing intervals (126,960 rows) from
+Next_Day_Dispatch`. The guard reported `47 protected months unchanged`; 616 tests passed on the NAS, and the
+run pushed 65c4b1c.
+
+Diff bfb8f67 → 65c4b1c:
+- `monthly_aggregates.feather`: only rows for 2025-09 changed (190 units), and only in the four curtailment
+  columns (actual 190, potential 189, pct 174, econ 166). No row was added or removed, and no column changed.
+- The FCAS aggregates, FCAS factors, offer curves and offer factors caches were rewritten, but every row is
+  identical.
+- 495 unit and station JSONs: every one that publishes `curtailment_pct` now carries the two new arrays.
+  The only existing values that changed are in 2025-09 (`curtailment_pct` 187, `econ_curtailment_pct` 179).
+  No other top-level key changed. `curtailment_by_fy.csv` and `run_status.json` also changed.
+- Live site: for HD1WF1 in Sep 2025, actual is 31,328.4 MWh, which matches generation of 31,328 MWh
+  (30,538.7 before). The page at `#HD1WF1` renders all 12 charts, and the Sep 2025 point reads the new value.
 
