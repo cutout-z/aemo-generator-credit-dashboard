@@ -33,8 +33,8 @@ noticed:
   - "The agent-contracts README's re-stamp steps said to make the vault mirror's worktree in the vault and merge its PR; land refuses that repo (owner merges) and the family block says a live checkout gets a separate clone -> done: README fixed in cutout-z/agent-contracts#178; the stray worktree removed"
   - "Vault mirror re-stamp and the README fix -> done: the owner said merge them; cutout-z/ai-wif-brain-mirror#22 (708ae42) and cutout-z/agent-contracts#178 (6d593e7) merged; check_stamps --fetch exit 0, all 20 active repos ok"
   - "This note's status began with #, so it parsed as a YAML comment and was empty, and drift_scan did not notice -> done: quoted here; check added in cutout-z/agent-contracts#179"
-outstanding:
-  - "cutout-z/agent-contracts#179 (drift_scan flags an empty status) -> blocked on: the owner's merge (agent-contracts PRs are the owner's)"
+  - "cutout-z/agent-contracts#179 (drift_scan flags an empty status) -> done: merged as 84c47b2 on the owner's say-so; rollout agent-contracts ok, check_stamps exit 0, 308 tests pass"
+outstanding: []
 ---
 
 # DISPATCHLOAD tail gap, September 2025
