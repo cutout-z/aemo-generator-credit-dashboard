@@ -200,7 +200,7 @@
 <!-- App bar: brand, search, and the filters that narrow the search. One row at lg+; below that
      they stack, and the result list opens under the whole block so it never covers a filter.
      (.search-container spans the filters too: clicking one must not close the results.) -->
-<header class="z-30 border-b border-line bg-canvas lg:sticky lg:top-0 md:rounded-t-panel">
+<header class="z-30 border-b border-line bg-canvas min-[1280px]:sticky min-[1280px]:top-0 md:rounded-t-panel">
     <div class="search-container relative flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 md:px-6 min-[1280px]:h-14 min-[1280px]:flex-nowrap min-[1280px]:py-0">
         <div class="flex shrink-0 items-center gap-2.5">
             <span class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-bg" aria-hidden="true">GC</span>
@@ -219,7 +219,7 @@
                        aria-label="Search generators by name or DUID"
                        autocomplete="off">
             </span>
-            <div class="search-dropdown absolute inset-x-4 top-full z-50 mt-1.5 max-h-[400px] overflow-y-auto rounded-xl border border-line bg-surface shadow-pop md:inset-x-6 lg:right-auto lg:left-0 lg:w-[max(100%,640px)]" id="searchDropdown"></div>
+            <div class="search-dropdown absolute inset-x-4 top-full z-50 mt-1.5 max-h-[400px] overflow-y-auto rounded-xl border border-line bg-surface shadow-pop md:inset-x-6 min-[1280px]:right-auto min-[1280px]:left-0 min-[1280px]:w-[max(100%,640px)]" id="searchDropdown"></div>
         </div>
         <select class="filter-select" id="filterMarket" hidden>
             <option value="">All Markets</option>
@@ -383,7 +383,7 @@
         <!-- Monthly performance: the five panels the period control governs. The control lives in
              this group's header (sticky while the group is on screen), not in a floating strip. -->
         <section class="panel-group w-full" aria-labelledby="grpMonthly">
-            <div class="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-1.5 bg-canvas px-1 py-2 sm:py-3 lg:top-14">
+            <div class="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-1.5 bg-canvas px-1 py-2 sm:py-3 min-[1280px]:top-14">
                 <div class="min-w-0">
                     <h2 id="grpMonthly" class="text-[15px] font-semibold leading-6 text-ink">Monthly performance</h2>
                     <p class="text-[13px] leading-5 text-muted"><span class="hidden sm:inline">The period applies to every chart in this group</span><span id="periodSep" class="hidden sm:inline" hidden> · </span><span id="periodRange" class="num"></span></p>
@@ -2917,7 +2917,7 @@ function initAxisRangeDrag() {
         const isX = key[0] === 'x';
         drag = {
             gd,
-            key: ax === gd._fullLayout[key] ? key : axKey,
+            key: gd._fullLayout[axKey] ? axKey : key,
             isX,
             start: isX ? e.clientX : e.clientY,
             // Work in Plotly's linear units: a date axis keeps its range as date strings, and
