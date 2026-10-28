@@ -8,7 +8,7 @@ pr: cutout-z/aemo-generator-credit-dashboard#21
 pr: cutout-z/aemo-generator-credit-dashboard#23
 pr: cutout-z/aemo-generator-credit-dashboard#24
 pr: cutout-z/aemo-generator-credit-dashboard#25
-status: #19, #20 and #21 merged; Fix on sight rule merged and re-stamped in all 20 repos; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8), discoverable (#23, 9735b23)
+status: "PRs 19, 20 and 21 merged; Fix on sight rule merged and re-stamped in all 20 repos; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8), discoverable (#23, 9735b23)"
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
   - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed -> done: reprocessed in 65c4b1c, diff below"
