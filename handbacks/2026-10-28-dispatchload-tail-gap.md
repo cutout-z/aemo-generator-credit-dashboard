@@ -11,7 +11,7 @@ noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
   - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed -> done: reprocessed in 65c4b1c, diff below"
   - "Review L notes on #20 (legacy-row rounding drift up to 0.05 MWh per member; non-curtailable units carry all-null arrays like their pct) -> done: accepted, 0 legacy rows in the cache"
-  - "Cross-repo fact (short settled MMSDM month; nemosis Next_Day reads Current only) -> tracked: cutout-z/agent-contracts#175, open for the owner's merge"
+  - "Cross-repo fact (short settled MMSDM month; nemosis Next_Day reads Current only) -> done: cutout-z/agent-contracts#175 merged as 37c130a on the owner's say-so, 28 Oct"
   - "download_intermittent.py stages its archive zip in /tmp (NAS RAM disk) -> done: unreachable, fetch_intermittent_month has no caller since S3-01 (grep src/)"
   - "A parse failure after a successful Next_Day download is not cached, so a short in-window month would re-download ~215 MB each run -> done: accepted; heal fires only on a short archive month (one in 26 cached); revisit if it recurs"
   - "Daily CF chart: drag on its second x axis doesn't expand (verify-interactions 14/15, fails the same on main) -> tracked: proposed session 'AEMO credit: fix Daily CF axis drag and 1024px app bar' (task_a592d2ae)"
@@ -25,7 +25,6 @@ noticed:
   - "#23 review L: welcome block stays visible under the open builder -> done: accepted, cosmetic"
   - "Rolling 12-month trace crashed renderCharts for sets under 12 months (latent on main at #MULWASF1) -> done: c964d1f, guarded; live page renders 11 charts"
 outstanding:
-  - "to-do merge cutout-z/agent-contracts#175; blocked on: the owner's merge (land refuses agent-contracts)"
   - "to-do [mac-local] approve the AGENTS.md Facts fix (deep links #DUID; add #portfolio=); blocked on: the owner's yes for AGENTS.md edits (Brain To-Do ca3d17aa9350897b4)"
 ---
 
