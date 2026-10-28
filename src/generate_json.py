@@ -281,6 +281,15 @@ def generate_generator_json(
         if "curtailment_pct" in monthly_data.columns:
             doc["monthly"]["curtailment_pct"] = monthly_data["curtailment_pct"].round(4).tolist()
             doc["monthly"]["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
+            # The energy behind the percentage, so a reader can sum units into
+            # a portfolio: max(0, 1 − Σactual/Σpotential), the station rule.
+            # Unclipped: actual exceeds potential when output beats the
+            # availability forecast (pct publishes 0), so clip after summing.
+            # Rebuilding it from the rounded percentage fails in ramp-up and
+            # short-archive months.
+            energy = _curtailment_energy_columns(monthly_data)
+            doc["monthly"]["curtailment_actual_mwh"] = energy["_eligible_actual_mwh"].round(1).tolist()
+            doc["monthly"]["curtailment_potential_mwh"] = energy["_potential_mwh"].round(1).tolist()
         if "econ_curtailment_pct" in monthly_data.columns:
             econ = monthly_data["econ_curtailment_pct"]
             if "curtailment_pct" in monthly_data.columns:
@@ -1064,6 +1073,8 @@ def _aggregate_station_monthly(
     revenue = []
     cap_factor = []
     curtailment = []
+    curt_actual = []
+    curt_potential = []
     econ_curtailment = []
     captured_price = []
     avg_rrp = []
@@ -1094,16 +1105,17 @@ def _aggregate_station_monthly(
             value = valid[col].mean()
         return round(float(value), 4)
 
-    def station_curtailment(month_data: pd.DataFrame) -> float | None:
+    def station_curtailment(month_data: pd.DataFrame) -> tuple[float | None, float | None, float | None]:
         """S3-04 station-month curtailment = 1 − Σ eligible actual / Σ potential
         across the member units present that month (per-unit availability
-        energy denominators, never nameplate or actual-generation weights)."""
+        energy denominators, never nameplate or actual-generation weights).
+        Returns (pct, Σ actual MWh, Σ potential MWh)."""
         energy = _curtailment_energy_columns(month_data)
         pot_sum = float(energy["_potential_mwh"].sum())
         if not math.isfinite(pot_sum) or pot_sum <= 0:
-            return None
+            return None, None, None
         act_sum = float(energy["_eligible_actual_mwh"].sum())
-        return round(max(0.0, 1.0 - act_sum / pot_sum), 4)
+        return round(max(0.0, 1.0 - act_sum / pot_sum), 4), round(act_sum, 1), round(pot_sum, 1)
 
     capacity_basis = []
     for m in months:
@@ -1126,7 +1138,10 @@ def _aggregate_station_monthly(
             cap_factor.append(None)
 
         if has_curtailment:
-            curtailment.append(station_curtailment(month_data))
+            pct, act_sum, pot_sum = station_curtailment(month_data)
+            curtailment.append(pct)
+            curt_actual.append(act_sum)
+            curt_potential.append(pot_sum)
 
         if has_econ_curt:
             econ = weighted_pct(month_data, "econ_curtailment_pct")
@@ -1174,6 +1189,8 @@ def _aggregate_station_monthly(
     if has_curtailment:
         result["curtailment_pct"] = curtailment
         result["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
+        result["curtailment_actual_mwh"] = curt_actual
+        result["curtailment_potential_mwh"] = curt_potential
     if has_econ_curt:
         result["econ_curtailment_pct"] = econ_curtailment
     if has_price:
