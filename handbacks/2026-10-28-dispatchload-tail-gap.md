@@ -22,6 +22,7 @@ noticed:
   - "Rolling 12-month trace crashed renderCharts for sets under 12 months (latent on main at #MULWASF1) -> done: c964d1f, guarded; live page renders 11 charts"
 outstanding:
   - "to-do merge cutout-z/agent-contracts#175; blocked on: the owner's merge (land refuses agent-contracts)"
+  - "to-do [mac-local] approve the AGENTS.md Facts fix (deep links #DUID; add #portfolio=); blocked on: the owner's yes for AGENTS.md edits (Brain To-Do ca3d17aa9350897b4)"
 ---
 
 # DISPATCHLOAD tail gap, September 2025
