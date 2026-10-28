@@ -7,6 +7,7 @@ pr: cutout-z/aemo-generator-credit-dashboard#20
 pr: cutout-z/aemo-generator-credit-dashboard#21
 pr: cutout-z/aemo-generator-credit-dashboard#23
 pr: cutout-z/aemo-generator-credit-dashboard#24
+pr: cutout-z/aemo-generator-credit-dashboard#25
 status: #19, #20 and #21 merged; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8), discoverable (#23, 9735b23)
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
@@ -18,7 +19,7 @@ noticed:
   - "Daily CF chart: drag on its second x axis doesn't expand (verify-interactions 14/15, fails the same on main) -> tracked: proposed session 'AEMO credit: fix Daily CF axis drag and 1024px app bar' (task_a592d2ae)"
   - "App bar overflows at 1024px (1265 vs 1209 on main, slightly worse after #21) -> tracked: same proposed session"
   - "AGENTS.md Facts say deep links are #/<DUID> (they are #DUID) and omit #portfolio= -> done: owner said yes in session; cutout-z/aemo-generator-credit-dashboard#24 (1e656ca), review pass; To-Do ca3d17aa9350897b4 closed"
-  - "AGENTS.md Facts row says index.html has 2,521 lines (it is longer) -> done: accepted; descriptive only, outside the approved edit"
+  - "AGENTS.md Facts row says index.html has 2,521 lines (it is longer) -> done: cutout-z/aemo-generator-credit-dashboard#25 (1cad06e) after the owner said fix it; stale counts dropped, baseline re-measured at 596"
   - "Price distribution panel ignores the commissioning switch -> done: accepted; price_distribution is whole-history (bins, mwh) with no month axis, so the browser cannot filter it"
   - "Station econ_curtailment_pct now energy-weighted; published station files change at the next lane run -> tracked: tonight's 21:15Z daily run; test_portfolio_js's oracle then compares econ (it asserts once any station is marked energy)"
   - "Round-2 review: the econ fixture could not fail under nameplate weights (my first mutation claim was wrong) -> done: c964d1f, fails in JS (0.1267) and pipeline (0.1378)"
@@ -169,4 +170,8 @@ nothing overflows and the button opens the builder.
 Ruling: the label shows at every width rather than staying icon-only on laptops, because an unlabelled icon
 hid the feature from the person it was built for. If wrong, the bar is 8px tighter per gap between 1280 and
 1439.
+
+Lesson: I parked the stale line count as "accepted; outside the approved edit". The owner wants small defects
+like that fixed on the spot, or the yes asked for on the spot. The `-> done: accepted` wording passed
+drift_scan's disposition check. #25 fixed it and every other stale count in AGENTS.md.
 
