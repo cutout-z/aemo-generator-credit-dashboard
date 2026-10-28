@@ -282,8 +282,11 @@ def generate_generator_json(
             doc["monthly"]["curtailment_pct"] = monthly_data["curtailment_pct"].round(4).tolist()
             doc["monthly"]["curtailment_metric_version"] = config.CURTAILMENT_METRIC_VERSION
             # The energy behind the percentage, so a reader can sum units into
-            # a portfolio (1 − Σactual/Σpotential). Rebuilding it from the
-            # rounded percentage fails in ramp-up and short-archive months.
+            # a portfolio: max(0, 1 − Σactual/Σpotential), the station rule.
+            # Unclipped: actual exceeds potential when output beats the
+            # availability forecast (pct publishes 0), so clip after summing.
+            # Rebuilding it from the rounded percentage fails in ramp-up and
+            # short-archive months.
             energy = _curtailment_energy_columns(monthly_data)
             doc["monthly"]["curtailment_actual_mwh"] = energy["_eligible_actual_mwh"].round(1).tolist()
             doc["monthly"]["curtailment_potential_mwh"] = energy["_potential_mwh"].round(1).tolist()

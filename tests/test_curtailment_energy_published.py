@@ -58,16 +58,22 @@ def test_station_energy_is_sum_of_members_and_reproduces_pct(tmp_path):
         _month_row("WIND_B", "2026-04", 0.0, curt_pct=1.0, pot=1000.0, act=0.0),
         _month_row("WIND_A", "2026-05", 700.0, curt_pct=0.3, pot=1000.0, act=700.0),
         _month_row("WIND_B", "2026-05", 2400.0, curt_pct=0.2, pot=3000.0, act=2400.0),
+        # Output above the availability forecast: pct publishes 0, the energy
+        # stays unclipped, and the clip applies after summing.
+        _month_row("WIND_A", "2026-06", 1100.0, curt_pct=0.0, pot=1000.0, act=1100.0),
+        _month_row("WIND_B", "2026-06", 3200.0, curt_pct=0.0, pot=3000.0, act=3200.0),
     ]))
     out = tmp_path / "generators"
     generate_all(generators, monthly_aggregates=monthly, output_dir=str(out))
     station = json.loads((out / "station_Portfolio_Check_Wind.json").read_text())["monthly"]
-    assert station["curtailment_actual_mwh"] == [1000.0, 3100.0]
-    assert station["curtailment_potential_mwh"] == [2000.0, 4000.0]
+    assert station["curtailment_actual_mwh"] == [1000.0, 3100.0, 4300.0]
+    assert station["curtailment_potential_mwh"] == [2000.0, 4000.0, 4000.0]
+    assert station["curtailment_pct"] == [0.5, 0.225, 0.0]
 
-    # The portfolio identity: summing the unit files reproduces the station.
+    # The portfolio identity: summing the unit files and clipping at zero
+    # reproduces the station.
     units = [json.loads((out / f"{d}.json").read_text())["monthly"] for d in ("WIND_A", "WIND_B")]
     for i, pct in enumerate(station["curtailment_pct"]):
         act = sum(u["curtailment_actual_mwh"][i] for u in units)
         pot = sum(u["curtailment_potential_mwh"][i] for u in units)
-        assert 1 - act / pot == pytest.approx(pct, abs=1e-4)
+        assert max(0.0, 1 - act / pot) == pytest.approx(pct, abs=1e-4)
