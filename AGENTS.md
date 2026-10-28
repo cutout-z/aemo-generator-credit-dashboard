@@ -4,7 +4,7 @@ Read this before touching anything. The design brief (`BRIEF.md`) says *what* to
 work here is allowed to happen.
 
 <!-- BEGIN agent-contracts:family -->
-<!-- source: family/AGENTS.family.md sha256:ef0f0f373b26 — edit in cutout-z/agent-contracts, not here -->
+<!-- source: family/AGENTS.family.md sha256:636146e6b778 — edit in cutout-z/agent-contracts, not here -->
 ## Family conventions (every repo, every agent)
 
 *Generated from `agent-contracts/family/AGENTS.family.md`. Edit it there, never here: a drift check
@@ -51,8 +51,19 @@ the yes was for what the owner saw, not for what follows. A repo contract may re
 permission (e.g. "the agent merges to `main` once `check.sh` is green"). It counts only for the
 actions and the agents it names, only in the repo whose contract records it, and only as that text
 stands on `origin/main` when you start. It never covers adding, widening or rewording a standing
-permission, or any change to `AGENTS.md` or this block: those need the owner's yes in the current
-session, and so does any widening of a harness's permissions.
+permission, or any other change to `AGENTS.md` or this block: those need the owner's yes in the
+current session, and so does any widening of a harness's permissions. One kind of `AGENTS.md`
+change needs no yes: outside the stamped blocks, correcting a count, a path or a name to match what
+you checked by running or reading the code, with that check in the commit message. A sentence that
+says what an agent, a tool or a check does or may do is a rule, even when it reads as a fact, and a
+rule needs the yes.
+
+**Fix on sight.** A defect you notice while working that one small commit fixes (a stale fact, a
+typo, a broken link) goes into the change you are making, before that change's review, and lands
+the way its kind of change lands (below). When it needs the owner's yes, raise it in the same turn,
+the way the owner's private contract says decisions reach them (with none, a question in your
+reply). An instrument you find wrong is the exception: say so and leave it, as below. Being outside
+the task or the approved edit is a reason to ask, never a disposition.
 
 The owner wants to decide, not approve. Finish the work, land it and roll it out yourself where the
 owner's private contract or the repo contract says you may, and bring the owner only a **decision**:
