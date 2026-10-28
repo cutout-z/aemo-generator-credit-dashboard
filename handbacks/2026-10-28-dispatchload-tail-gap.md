@@ -4,7 +4,8 @@ agent: claude
 branch: fix/dispatchload-tail-gap
 pr: cutout-z/aemo-generator-credit-dashboard#19
 pr: cutout-z/aemo-generator-credit-dashboard#20
-status: #19 and #20 merged; Sep 2025 reprocessed and published (65c4b1c); only Sep 2025 changed
+pr: cutout-z/aemo-generator-credit-dashboard#21
+status: #19, #20 and #21 merged; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8)
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
   - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed -> done: reprocessed in 65c4b1c, diff below"
@@ -12,6 +13,13 @@ noticed:
   - "Cross-repo fact (short settled MMSDM month; nemosis Next_Day reads Current only) -> tracked: cutout-z/agent-contracts#175, open for the owner's merge"
   - "download_intermittent.py stages its archive zip in /tmp (NAS RAM disk) -> done: unreachable, fetch_intermittent_month has no caller since S3-01 (grep src/)"
   - "A parse failure after a successful Next_Day download is not cached, so a short in-window month would re-download ~215 MB each run -> done: accepted; heal fires only on a short archive month (one in 26 cached); revisit if it recurs"
+  - "Daily CF chart: drag on its second x axis doesn't expand (verify-interactions 14/15, fails the same on main) -> tracked: proposed session 'AEMO credit: fix Daily CF axis drag and 1024px app bar' (task_a592d2ae)"
+  - "App bar overflows at 1024px (1265 vs 1209 on main, slightly worse after #21) -> tracked: same proposed session"
+  - "AGENTS.md Facts say deep links are #/<DUID> (they are #DUID) and omit #portfolio= -> blocked: AGENTS.md edits need the owner's yes; Brain To-Do ca3d17aa9350897b4"
+  - "Price distribution panel ignores the commissioning switch -> done: accepted; price_distribution is whole-history (bins, mwh) with no month axis, so the browser cannot filter it"
+  - "Station econ_curtailment_pct now energy-weighted; published station files change at the next lane run -> tracked: tonight's 21:15Z daily run; test_portfolio_js's oracle then compares econ (it asserts once any station is marked energy)"
+  - "Round-2 review: the econ fixture could not fail under nameplate weights (my first mutation claim was wrong) -> done: c964d1f, fails in JS (0.1267) and pipeline (0.1378)"
+  - "Rolling 12-month trace crashed renderCharts for sets under 12 months (latent on main at #MULWASF1) -> done: c964d1f, guarded; live page renders 11 charts"
 outstanding:
   - "to-do merge cutout-z/agent-contracts#175; blocked on: the owner's merge (land refuses agent-contracts)"
 ---
@@ -103,3 +111,40 @@ Diff bfb8f67 → 65c4b1c:
 - Live site: for HD1WF1 in Sep 2025, actual is 31,328.4 MWh, which matches generation of 31,328 MWh
   (30,538.7 before). The page at `#HD1WF1` renders all 12 charts, and the Sep 2025 point reads the new value.
 
+## Portfolio view (#21), 28 Oct 2026
+
+The owner said "Yes, build PR2". #21 adds a portfolio view to the page. Viewers pick units or stations from
+the existing public list, and the browser combines their published unit files (`assets/js/portfolio.js`,
+`Portfolio.combine`). The pipeline knows nothing about portfolios. The link carries only DUIDs
+(`#portfolio=A,B`); the name stays in the viewer's own browser (localStorage `gcd:portfolios`), and Copy
+link warns that the link shows membership. No presets ship. Two panels are new: Generation by Asset and
+Capacity Factor by Asset. Every panel states its coverage ("N of M units"). Exports get an Assets
+section and a `portfolio-<name>` filename.
+
+One pipeline change: station `econ_curtailment_pct` is now energy-weighted, as the total already was
+(`econ_curtailment_weighting: "energy"`), so a one-station portfolio matches its station page. Station
+values shift slightly at the next lane run.
+
+Evidence: the combiner rebuilds the 63 published stations that have monthly data with 0 mismatches. A
+fixture test proves browser econ equals pipeline econ, and it fails under three mutations. The full suite
+gave 596 passed; all 22 non-passes are the known `tests/test_outputs.py` set (land's gate confirmed the same 22 on main). verify-design passed.
+verify-interactions passed 14 of 15 (`chartDailyCF.xaxis2` also fails on main). Browser checks covered
+both themes at desktop and phone width, with screenshots in `design/screens/portfolio-*`.
+
+Ruling: "months before full commercial use" uses the unit's own Generation Information row; for a
+multi-stage project with no own row it uses the operating rows, and it ignores an In Service date later
+than the latest published month. I chose this because taking the latest date across all rows wiped
+ERB01's history with a later stage's 2027 date. If wrong, a few units' early months are mislabelled, and
+only when the switch is on.
+Ruling: the stats bar shows from 1600px, and the Portfolio button is icon-only from 1024 to 1599px,
+because the app bar already overflowed at 1440 on main and the new button made it worse. If wrong, the
+stats bar is hidden on 1440–1599px screens.
+
+Review: the adversary ran two rounds, both "changes". Round 1 found M1 (wrong full-commercial-use row), M2 (an econ
+comparison that could never fail) and L1 to L3; all were fixed in a16e8c4. Round 2 found no H. Its two Ms
+(a rolling-average crash under 12 months, and a fixture that was proportional to nameplate) and one L
+(one-row register blocks) were fixed in c964d1f. The round-2 verdict is quoted in the merge commit.
+
+Live check (5e316f8 on Pages): `#portfolio=CLRKCWF1,WTAHB1,MULWASF1` renders 11 charts, including Generation by Asset
+and Capacity Factor by Asset, with "3 of 3 units loaded". With the switch on, Generation goes from 25 to 4 months.
+No console errors.
