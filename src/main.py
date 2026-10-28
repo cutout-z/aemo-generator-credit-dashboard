@@ -24,7 +24,7 @@ from .download_constraints import (
 )
 from .download_dispatch import fetch_dispatch_price_month, fetch_trading_price_month
 from .download_metadata import fetch_generators
-from .download_scada import fetch_dispatchload_month, fetch_scada_month
+from .download_scada import fetch_dispatchload_month, fetch_scada_month, heal_dispatchload_gaps
 from .fetch_mlf import fetch_mlf_data
 from .audit_cf import audit_capacity_factors, log_audit_results
 from .generate_json import generate_all
@@ -1115,6 +1115,9 @@ def main():
                     continue
 
                 dispatchload = fetch_dispatchload_month(year, month, str(data_dir), rebuild=args.full_refresh)
+                dispatchload = heal_dispatchload_gaps(
+                    dispatchload, year, month, str(data_dir), rebuild=args.full_refresh,
+                )
 
                 # S3-01: INTERMITTENT_GEN_SCADA quality summaries are no longer
                 # fetched here — the grid/mechanical curtailment split was
