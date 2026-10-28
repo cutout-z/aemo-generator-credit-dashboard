@@ -8,7 +8,7 @@ pr: cutout-z/aemo-generator-credit-dashboard#21
 pr: cutout-z/aemo-generator-credit-dashboard#23
 pr: cutout-z/aemo-generator-credit-dashboard#24
 pr: cutout-z/aemo-generator-credit-dashboard#25
-status: #19, #20 and #21 merged; Fix on sight follow-up cutout-z/agent-contracts#177 waits on the owner's merge; Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8), discoverable (#23, 9735b23)
+status: #19, #20 and #21 merged; Fix on sight rule merged and re-stamped (19 of 20 repos; the vault mirror and agent-contracts#178 wait on the owner's merge); Sep 2025 reprocessed (65c4b1c); portfolio view live (5e316f8), discoverable (#23, 9735b23)
 noticed:
   - "AEMO MMSDM Sep 2025 DISPATCHLOAD archive ends 2025/09/30 04:00 (240 intervals) -> done: PR 19 fills whole missing intervals from Next_Day_Dispatch"
   - "Sep 2025 settled aggregates still computed on 29.2 of 30 days -> decision: card c56b9b118f16fac68 answered (reprocess), closed -> done: reprocessed in 65c4b1c, diff below"
@@ -29,8 +29,11 @@ noticed:
   - "Rolling 12-month trace crashed renderCharts for sets under 12 months (latent on main at #MULWASF1) -> done: c964d1f, guarded; live page renders 11 charts"
   - "This session parked the stale 2,521-line count as a scope call before fixing it; the owner asked for such defects to be fixed on the spot -> done: family rule and checks in cutout-z/agent-contracts#176 (merged by the owner); review fixes in cutout-z/agent-contracts#177"
   - "Ruling: fixed the round-2 H on #177 (the hook's new passes switched off its ask check) without a third review because reviews cap at two rounds and 18 synthetic transcripts prove the pre-#176 ask behaviour is back; if wrong: a turn that asks shows as idle -> done: recorded on #177"
+  - "agent-contracts#177 merged by the owner; family block re-stamped and landed in 19 repos (this repo: cutout-z/aemo-generator-credit-dashboard#26, 85a6d21); live checkouts rolled out; check_stamps 19 ok -> done"
+  - "The agent-contracts README's re-stamp steps said to make the vault mirror's worktree in the vault and merge its PR; land refuses that repo (owner merges) and the family block says a live checkout gets a separate clone -> done: README fixed in cutout-z/agent-contracts#178; the stray worktree removed"
 outstanding:
-  - "cutout-z/agent-contracts#177 (Fix on sight review fixes) -> blocked on: the owner's merge (agent-contracts PRs are the owner's); after it, the family block is re-stamped into every stamped repo"
+  - "cutout-z/ai-wif-brain-mirror#22 (family re-stamp) -> blocked on: the owner's merge (land refuses the repo: owner merges); check_stamps shows that repo as drift until then"
+  - "cutout-z/agent-contracts#178 (README vault re-stamp steps) -> blocked on: the owner's merge (agent-contracts PRs are the owner's)"
 ---
 
 # DISPATCHLOAD tail gap, September 2025
