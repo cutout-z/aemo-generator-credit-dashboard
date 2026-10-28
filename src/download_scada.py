@@ -257,7 +257,7 @@ def fetch_next_day_unit_solution(days, cache_dir: str, rebuild: bool = False) ->
             todo.append(day)
 
     for (year, month), month_days in _group_by_month(todo).items():
-        found = _next_day_files_from_archive(year, month, month_days)
+        found = _next_day_files_from_archive(year, month, month_days, cache_dir)
         for day in month_days:
             day_zip = found.get(day) or _next_day_file_from_current(day)
             if day_zip is None:
@@ -291,6 +291,7 @@ def _get(url: str, *, stream: bool = False) -> requests.Response | None:
                 headers={"User-Agent": config.USER_AGENT},
             )
             if resp.status_code == 404:
+                resp.close()
                 return None
             resp.raise_for_status()
             return resp
@@ -303,12 +304,16 @@ def _get(url: str, *, stream: bool = False) -> requests.Response | None:
     return None
 
 
-def _next_day_files_from_archive(year: int, month: int, days) -> dict:
-    """Return {day: daily zip bytes} for the days found in that month's ARCHIVE bundle."""
+def _next_day_files_from_archive(year: int, month: int, days, cache_dir: str) -> dict:
+    """Return {day: daily zip bytes} for the days found in that month's ARCHIVE bundle.
+
+    The ~215 MB bundle is staged under cache_dir, not /tmp (a small RAM disk on the NAS).
+    """
     resp = _get(_NEXT_DAY_ARCHIVE_URL.format(year=year, month=month), stream=True)
     if resp is None:
         return {}
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False, dir=cache_dir) as tmp:
         tmp_path = tmp.name
         with resp:
             for chunk in resp.iter_content(chunk_size=1 << 20):

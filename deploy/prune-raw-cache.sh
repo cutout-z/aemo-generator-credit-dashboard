@@ -26,6 +26,8 @@
 #
 # data/gencondata.feather and data/spdcp_constraint_versions.feather sit
 # outside the nemosis cache and match neither pass.
+# So do data/next_day_unit_solution_<YYYYMMDD>.feather (~3 MB per market day,
+# written only when an MMSDM DISPATCHLOAD month is short; src/download_scada.py).
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/workspace/repos/aemo-generator-credit-dashboard}"
