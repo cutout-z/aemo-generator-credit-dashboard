@@ -10,23 +10,23 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-11-02T19:06:18Z",
+  "finished_utc": "2026-11-02T21:19:24Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-11-02T19:00:04Z"
+  "started_utc": "2026-11-02T21:15:03Z"
  },
  "schema_version": 1,
  "sources": {
   "aer_qa": {
-   "asof_month": null,
-   "attempted_months": 0,
+   "asof_month": "2026Q2",
+   "attempted_months": 1,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-aer-qa",
+   "months_with_data": 1,
+   "note": "edition unchanged (content hashes match the cache)",
    "retained_last_good": false,
-   "status": "skipped"
+   "status": "ok"
   },
   "constraints": {
    "asof_month": "2026-09",
@@ -37,33 +37,33 @@
    },
    "error": null,
    "months_with_data": 30,
+   "note": "explicit --skip-constraints; cached constraint history kept",
+   "retained_last_good": false,
+   "status": "skipped"
+  },
+  "fcas_factors": {
+   "asof_month": "2026-10",
+   "attempted_months": 3,
+   "error": null,
+   "months_with_data": 3,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
   },
-  "fcas_factors": {
-   "asof_month": "2026-10",
-   "attempted_months": 0,
-   "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-fcas-factors; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
-  },
   "geninfo": {
    "asof_month": "2026-10",
-   "attempted_months": 0,
+   "attempted_months": 1,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-geninfo; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 1,
+   "note": "same edition, source unchanged (size + last-modified match)",
+   "retained_last_good": false,
+   "status": "ok"
   },
   "loss_factors": {
    "asof_month": "2026-09",
    "attempted_months": 1,
    "details": {
-    "source": "cache"
+    "source": "download"
    },
    "error": null,
    "months_with_data": 1,
@@ -85,41 +85,41 @@
    "attempted_months": 1,
    "details": {
     "draft_fy": null,
-    "last_modified": null,
-    "source": "cache"
+    "last_modified": "Wed, 28 Oct 2026 08:05:31 GMT",
+    "source": "download"
    },
    "error": null,
    "months_with_data": 1,
-   "note": "cached tracker summary used (no --refresh-mlf)",
+   "note": null,
    "retained_last_good": false,
    "status": "ok"
   },
   "network_outages": {
    "asof_month": "2026-09",
-   "attempted_months": 0,
+   "attempted_months": 2,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-network-outages; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 3,
+   "note": "same month, source unchanged (size + last-modified match)",
+   "retained_last_good": false,
+   "status": "ok"
   },
   "offer_curves": {
    "asof_month": "2026-09",
-   "attempted_months": 0,
+   "attempted_months": 3,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-offer-factors; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 2,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
   },
   "offer_factors": {
    "asof_month": "2026-10",
-   "attempted_months": 0,
+   "attempted_months": 3,
    "error": null,
-   "months_with_data": 0,
-   "note": "explicit --skip-offer-factors; last-known-good history retained from cache",
-   "retained_last_good": true,
-   "status": "skipped"
+   "months_with_data": 3,
+   "note": null,
+   "retained_last_good": false,
+   "status": "ok"
   }
  }
 }
