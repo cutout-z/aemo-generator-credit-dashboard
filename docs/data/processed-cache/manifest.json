@@ -2,8 +2,8 @@
   "files": [
     {
       "name": "constraint_aggregates.feather",
-      "sha256": "9b7644b301ba9e8c37747e078aac0c621fd1304f9302509a313d159b88f830ed",
-      "size_bytes": 4399362
+      "sha256": "a81da0eedbdd190c91a4a722400e26e451cf939cee02d942d12fb1fb6635187e",
+      "size_bytes": 4628290
     },
     {
       "name": "daily_aggregates.feather",
