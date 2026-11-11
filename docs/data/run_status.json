@@ -1,8 +1,8 @@
 {
  "guards": {
-  "daily_age_days": 41,
+  "daily_age_days": 11,
   "daily_freshness": "pass",
-  "monthly_age_days": 41,
+  "monthly_age_days": 11,
   "monthly_freshness": "pass"
  },
  "outputs": {
@@ -10,12 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-11-10T21:19:34Z",
+  "finished_utc": "2026-11-11T21:22:21Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-11-10T21:15:06Z"
+  "started_utc": "2026-11-11T21:15:07Z"
  },
  "schema_version": 1,
  "sources": {
@@ -60,7 +60,7 @@
    "status": "ok"
   },
   "loss_factors": {
-   "asof_month": "2026-09",
+   "asof_month": "2026-10",
    "attempted_months": 1,
    "details": {
     "source": "download"
@@ -72,10 +72,10 @@
    "status": "ok"
   },
   "market_factors": {
-   "asof_month": "2026-09",
-   "attempted_months": 26,
+   "asof_month": "2026-10",
+   "attempted_months": 27,
    "error": null,
-   "months_with_data": 26,
+   "months_with_data": 27,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
@@ -95,19 +95,19 @@
    "status": "ok"
   },
   "network_outages": {
-   "asof_month": "2026-09",
+   "asof_month": "2026-10",
    "attempted_months": 2,
    "error": null,
-   "months_with_data": 3,
-   "note": "same month, source unchanged (size + last-modified match)",
+   "months_with_data": 4,
+   "note": "parsed 12008 window(s) from 2026-10 full-history archive; 3585 window-month row(s) had no region join (rating + substation detail) and are excluded from the regional rollup",
    "retained_last_good": false,
    "status": "ok"
   },
   "offer_curves": {
-   "asof_month": "2026-09",
+   "asof_month": "2026-10",
    "attempted_months": 3,
    "error": null,
-   "months_with_data": 2,
+   "months_with_data": 3,
    "note": null,
    "retained_last_good": false,
    "status": "ok"
