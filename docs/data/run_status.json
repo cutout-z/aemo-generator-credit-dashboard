@@ -1,8 +1,8 @@
 {
  "guards": {
-  "daily_age_days": 11,
+  "daily_age_days": 12,
   "daily_freshness": "pass",
-  "monthly_age_days": 11,
+  "monthly_age_days": 12,
   "monthly_freshness": "pass"
  },
  "outputs": {
@@ -10,12 +10,12 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-11-11T21:22:21Z",
+  "finished_utc": "2026-11-12T21:20:53Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-11-11T21:15:07Z"
+  "started_utc": "2026-11-12T21:15:07Z"
  },
  "schema_version": 1,
  "sources": {
@@ -99,7 +99,7 @@
    "attempted_months": 2,
    "error": null,
    "months_with_data": 4,
-   "note": "parsed 12008 window(s) from 2026-10 full-history archive; 3585 window-month row(s) had no region join (rating + substation detail) and are excluded from the regional rollup",
+   "note": "same month, source unchanged (size + last-modified match)",
    "retained_last_good": false,
    "status": "ok"
   },
