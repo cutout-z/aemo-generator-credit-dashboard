@@ -4,7 +4,7 @@ Read this before touching anything. The design brief (`BRIEF.md`) says *what* to
 work here is allowed to happen.
 
 <!-- BEGIN agent-contracts:family -->
-<!-- source: family/AGENTS.family.md sha256:636146e6b778 — edit in cutout-z/agent-contracts, not here -->
+<!-- source: family/AGENTS.family.md sha256:03ed1aa793eb — edit in cutout-z/agent-contracts, not here -->
 ## Family conventions (every repo, every agent)
 
 *Generated from `agent-contracts/family/AGENTS.family.md`. Edit it there, never here: a drift check
@@ -99,14 +99,13 @@ handback notes get copied and published.
 
 ### Verification standard
 
-- A change is done when you have seen the evidence yourself: tests run (exact counts, failures
-  named, pre-existing failures shown to exist on `main`), and for UI, a real browser render, or a
-  plain statement that it wasn't rendered and why. A reviewer can check evidence, not belief.
+- A change is done when you have seen the evidence yourself, in this turn: name the command that
+  proves it, run it, and read its full output and exit code (tests: exact counts, failures named,
+  pre-existing failures shown to exist on `main`; UI: a real browser render, or a plain statement that
+  it wasn't rendered and why). "Should work" is not a status (adapted from obra/superpowers
+  `verification-before-completion`).
 - For a fix, show its test fails with the fix reverted and passes with it applied; otherwise nothing
   shows the test exercises the fix.
-- Before any claim of done, fixed or passing, name the command that proves it and run it in this turn,
-  then read its full output and exit code. "Should work" is not a status: say what was run, or that
-  it wasn't (adapted from obra/superpowers `verification-before-completion`).
 - Don't relay another agent's or subagent's numbers. Re-run or read the evidence yourself: a relayed
   number can't be traced, and you are the one signing the handback.
 
