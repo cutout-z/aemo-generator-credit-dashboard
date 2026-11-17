@@ -89,6 +89,7 @@ echo "gate: setup venv $((SECONDS - t0))s"
 
 # ── setup 3: browser prerequisites and servers on free ports ─────────────────
 "$PY" -c 'import playwright.sync_api' 2>&1 | prefix setup || setup_fail "playwright missing from $PY"
+command -v node >/dev/null 2>&1 || setup_fail "node not on PATH (tests/page_js.py would skip every page-JS test)"
 
 serve() {  # serve <name> <dir>: start http.server on a free port, set PORT
   local log="$TMP/$1.log" i=0
