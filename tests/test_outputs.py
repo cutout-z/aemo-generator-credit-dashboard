@@ -5,6 +5,7 @@ These are fast, deterministic checks — no re-derivation from raw data.
 """
 
 import json
+import os
 from calendar import monthrange
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,13 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 DOCS_DATA_DIR = ROOT / "docs" / "data"
 GENERATORS_DIR = DOCS_DATA_DIR / "generators"
+
+
+def _now() -> datetime:
+    """The clock the as-of checks read. AEMO_TEST_NOW (an ISO timestamp) pins it so a run is repeatable
+    against a fixed dataset; unset, it is the wall clock, so the data lane still fails on stale data."""
+    pinned = os.environ.get("AEMO_TEST_NOW")
+    return datetime.fromisoformat(pinned) if pinned else datetime.now()
 
 
 def _published_or_local(name: str):
@@ -515,7 +523,7 @@ class TestMlfLiveFrame:
         this today; the live tracker CSV carries FY26-27.
         """
         frame = self._live_frame()
-        now = datetime.now()
+        now = _now()
         expected_final_fy = now.year if now.month >= 4 else now.year - 1
         fys = sorted(frame["fy_start_year"].unique())
         assert len(fys) >= 10, f"MLF history too shallow: {fys}"
@@ -548,14 +556,14 @@ class TestFreshness:
     def test_monthly_data_is_current(self):
         agg = pd.read_feather(_published_or_local("monthly_aggregates.feather"))
         # Raises RuntimeError when the latest month is too far behind
-        check_monthly_freshness(agg, now=datetime.now())
+        check_monthly_freshness(agg, now=_now())
 
     def test_daily_data_is_current(self):
         path = _published_or_local("daily_aggregates.feather")
         if not path.exists():
             pytest.skip("daily_aggregates.feather not present")
         daily = pd.read_feather(path)
-        check_daily_freshness(daily, now=datetime.now())
+        check_daily_freshness(daily, now=_now())
 
 
 # ─── Completeness ─────────────────────────────────────────────────────────────
@@ -788,7 +796,7 @@ class TestCurtailmentByFY:
         """Must publish both of the last 2 complete FYs for >=100 DUIDs each."""
         import datetime as _dt
         df = pd.read_csv(DOCS_DATA_DIR / "curtailment_by_fy.csv")
-        now = _dt.datetime.now()
+        now = _now()
         current_fy = now.year if now.month >= 7 else now.year - 1
         for fy_start in (current_fy - 2, current_fy - 1):
             complete = df[(df["fy_start"] == fy_start) & (df["months_covered"] == 12)]

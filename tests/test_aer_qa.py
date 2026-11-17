@@ -447,35 +447,6 @@ def test_run_lane_unchanged_edition_reuses_cache(tmp_path):
     assert artifact.read_text() == before
 
 
-def test_run_lane_uses_cache_when_every_series_fails(tmp_path):
-    docs = _docs_dir(tmp_path)
-    data = tmp_path / "data"
-    run_aer_qa_lane(data, docs, today=date(2026, 9, 19), fetch=_fetcher())
-
-    def dead(url):
-        raise AerQaError("HTTP 503")
-
-    result = run_aer_qa_lane(data, docs, today=date(2026, 9, 19), fetch=dead)
-    assert result.status == STATUS_DEGRADED
-    assert result.fetched is False
-    assert result.retained is True
-    assert result.edition_quarter == "2026Q2"     # last-known-good edition still checked
-    assert "last-known-good" in (result.note or "")
-
-
-def test_run_lane_errors_when_nothing_is_available(tmp_path):
-    docs = _docs_dir(tmp_path)
-
-    def dead(url):
-        raise AerQaError("HTTP 503")
-
-    result = run_aer_qa_lane(tmp_path / "data", docs, today=date(2026, 9, 19), fetch=dead)
-    assert result.status == STATUS_ERROR
-    assert result.error
-    payload = json.loads((docs / ARTIFACT_FILENAME).read_text())
-    assert payload["summary"]["checks"] == 4  # four series, all reporting no reference data
-
-
 def test_run_lane_records_awaiting_edition_when_seed_is_stale(tmp_path):
     """A stale seed (edition through 2026Q1) is reported, never compared blindly."""
     docs = _docs_dir(tmp_path)

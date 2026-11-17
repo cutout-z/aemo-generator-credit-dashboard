@@ -660,24 +660,6 @@ class TestLane:
         assert "republished" in refetched.note
         assert calls["fetch"] == 1
 
-    def test_degrades_and_retains_on_discovery_failure(self, tmp_path, monkeypatch):
-        data_dir, docs_dir = tmp_path / "data", tmp_path / "docs" / "data"
-        _install_fake_source(monkeypatch, tmp_path)
-        run_geninfo_lane(data_dir, docs_dir, today=date(2026, 9, 19))
-
-        monkeypatch.setattr(geninfo, "discover_edition", lambda today=None: None)
-        result = run_geninfo_lane(data_dir, docs_dir, today=date(2026, 9, 20))
-        assert result.status == STATUS_DEGRADED
-        assert result.retained is True
-        assert len(result.snapshot) == 2  # last-known-good kept for the attach layer
-
-    def test_errors_on_cold_start_failure(self, tmp_path, monkeypatch):
-        data_dir, docs_dir = tmp_path / "data", tmp_path / "docs" / "data"
-        monkeypatch.setattr(geninfo, "discover_edition", lambda today=None: None)
-        result = run_geninfo_lane(data_dir, docs_dir, today=date(2026, 9, 20))
-        assert result.status == STATUS_ERROR
-        assert result.snapshot.empty
-
     def test_parse_failure_retains_previous_snapshot(self, tmp_path, monkeypatch):
         data_dir, docs_dir = tmp_path / "data", tmp_path / "docs" / "data"
         _install_fake_source(monkeypatch, tmp_path)

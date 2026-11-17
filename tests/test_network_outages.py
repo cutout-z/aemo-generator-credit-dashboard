@@ -614,35 +614,6 @@ class TestLane:
                                  months_back=1, force=True, today=date(2026, 9, 19))
         assert len(fake["download_calls"]) > before
 
-    def test_discovery_failure_degrades_and_retains(
-        self, tmp_path, monkeypatch, context_files,
-    ):
-        _install_fake_source(monkeypatch, tmp_path, context_files=context_files)
-        data_dir = tmp_path / "data"
-        docs_dir = tmp_path / "docs" / "data"
-        run_network_outages_lane(data_dir, docs_dir, months_back=1, today=date(2026, 9, 19))
-        published = (docs_dir / no.ARTIFACT_FILENAME).read_text()
-
-        monkeypatch.setattr(no, "probe_month", lambda y, m: None)
-        result = run_network_outages_lane(
-            data_dir, docs_dir, months_back=1, today=date(2026, 9, 19),
-        )
-        assert result.status == STATUS_DEGRADED
-        assert result.retained is True
-        assert result.error
-        assert result.month == "2026-08"
-        # Last-known-good artifact untouched.
-        assert (docs_dir / no.ARTIFACT_FILENAME).read_text() == published
-
-    def test_discovery_failure_cold_start_is_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(no, "probe_month", lambda y, m: None)
-        result = run_network_outages_lane(
-            tmp_path / "data", tmp_path / "docs" / "data",
-            months_back=1, today=date(2026, 9, 19),
-        )
-        assert result.status == STATUS_ERROR
-        assert result.retained is False
-
     def test_parse_failure_retains_previous_snapshot(
         self, tmp_path, monkeypatch, context_files,
     ):

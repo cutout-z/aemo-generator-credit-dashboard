@@ -41,12 +41,26 @@ def _env(tmp_path: Path, wait: int) -> dict:
     }
 
 
+def _hold_lock(lock: Path, seconds: int) -> subprocess.Popen:
+    """Start a process that holds `lock`, and return once it says it holds it (a ready file written
+    inside the flock), so the run under test never races the holder's start."""
+    ready = lock.parent / "holder-ready"
+    holder = subprocess.Popen(["flock", str(lock), "sh", "-c", f'touch "{ready}"; exec sleep {seconds}'])
+    deadline = time.monotonic() + 30  # bounds a hang only; the handshake is the synchronisation
+    while not ready.exists():
+        if holder.poll() is not None or time.monotonic() > deadline:
+            holder.kill()
+            holder.wait()
+            pytest.fail("lock holder never signalled that it holds the lock")
+        time.sleep(0.01)
+    return holder
+
+
 def test_second_run_gives_up_without_touching_git(tmp_path):
     env = _env(tmp_path, wait=1)
     lock = Path(env["APP_DIR"]) / ".git" / "run-update.lock"
-    holder = subprocess.Popen(["flock", str(lock), "sleep", "10"])
+    holder = _hold_lock(lock, 10)
     try:
-        time.sleep(0.5)
         run = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=30)
     finally:
         holder.kill()
@@ -59,9 +73,8 @@ def test_second_run_gives_up_without_touching_git(tmp_path):
 def test_waiting_run_continues_once_lock_frees(tmp_path):
     env = _env(tmp_path, wait=20)
     lock = Path(env["APP_DIR"]) / ".git" / "run-update.lock"
-    holder = subprocess.Popen(["flock", str(lock), "sleep", "2"])
+    holder = _hold_lock(lock, 2)
     try:
-        time.sleep(0.5)
         run = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
     finally:
         holder.wait()
