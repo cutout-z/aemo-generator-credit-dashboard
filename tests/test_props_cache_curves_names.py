@@ -79,6 +79,8 @@ _vol = st.one_of(st.just(0.0), st.floats(0, 500, allow_nan=False), st.floats(-50
 _price = st.floats(-1000, 15500, allow_nan=False, allow_infinity=False)
 
 
+# Hours stay in 5..23, so trading day == calendar day here; the 04:00 trading-day boundary is
+# owned by tests/test_offer_stack_trading_day.py (test_trading_day_boundaries).
 @st.composite
 def _bids(draw):
     duids = draw(st.lists(st.sampled_from(["A1", "B2", "C3"]), min_size=1, max_size=3, unique=True))
@@ -104,9 +106,10 @@ def test_daily_cum_mw_is_non_decreasing_and_ends_at_tranche_sum(bids):
         return
     for (duid, date), g in out.groupby(["duid", "date"]):
         g = g.sort_values("band")
+        prow = prices[(prices["DUID"] == duid) & (prices["SETTLEMENTDATE"].dt.strftime("%Y-%m-%d") == date)].iloc[0]
+        assert g["price"].tolist() == [float(prow[f"PRICEBAND{b}"]) for b in g["band"]]
         cum = g["cum_mw"].tolist()
         assert all(b >= a for a, b in zip(cum, cum[1:])), cum
-        assert cum[0] >= 0  # a sub-0.0005 MW first tranche rounds to 0.0 (cosmetic, see report)
         day_vol = volumes[
             (volumes["DUID"] == duid)
             & (volumes["INTERVAL_DATETIME"].dt.strftime("%Y-%m-%d") == date)
@@ -123,6 +126,33 @@ def test_daily_cum_mw_skips_non_positive_tranches():
     out = compute_offer_curves_daily(p, v, "2026-03")
     assert out["band"].tolist() == [2, 7]
     assert out["cum_mw"].tolist() == [10.0, 15.0]
+    assert out["price"].tolist() == [1.0, 6.0]  # PRICEBAND2 and PRICEBAND7, not a shared price
+
+
+def _one_day(avail):
+    p = pd.DataFrame([{"SETTLEMENTDATE": pd.Timestamp(2026, 3, 5), "DUID": "A1",
+                       **{c: float(i) for i, c in enumerate(BAND_PRICE_COLS)}}])
+    v = pd.DataFrame([{"INTERVAL_DATETIME": pd.Timestamp(2026, 3, 5, 12), "DUID": "A1",
+                       **{c: avail.get(c, 0.0) for c in BAND_AVAIL_COLS}}])
+    return compute_offer_curves_daily(p, v, "2026-03")
+
+
+_TINY = {"BANDAVAIL1": 1e-5, "BANDAVAIL2": 10.0, "BANDAVAIL3": 1e-4, "BANDAVAIL4": 5.0}
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError,
+    reason="bands 1e-5, 10, 1e-4, 5 MW emit cum_mw [0.0, 10.0, 10.0, 15.0]: a tranche between 1e-9 and "
+    "0.0005 MW passes the 1e-9 skip but round(cum, 3) puts it on the previous value, contradicting the "
+    "docstring (zero-width bands are dropped). Proposed fix: skip a tranche whose rounded cum equals "
+    "the previous cum.",
+)
+@given(st.just(_TINY))
+@example(_TINY)
+def test_daily_cum_mw_strictly_increases(avail):
+    cum = _one_day(avail)["cum_mw"].tolist()
+    assert cum[0] > 0
+    assert all(b > a for a, b in zip(cum, cum[1:])), cum
 
 
 # ---- E10: _safe_filename ----------------------------------------------------
@@ -156,7 +186,7 @@ def test_safe_filename_collides_iff_inputs_differ_only_in_replaced_chars(a, data
 @given(st.text(alphabet="AB19/#\\_-", max_size=6), st.text(alphabet="AB19/#\\_-", max_size=6))
 @example("A#1", "A_1")
 @pytest.mark.xfail(
-    strict=True,
+    strict=True, raises=AssertionError,
     reason="DUIDs 'A#1' and 'A_1' both map to 'A_1': _safe_filename is not injective, so two units "
     "would overwrite one JSON file. Proposed fix: percent-encode '/', '#', '\\\\' and '_' "
     "(or append a short hash of the raw DUID when the name was changed).",
