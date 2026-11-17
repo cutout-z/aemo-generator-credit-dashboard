@@ -27,7 +27,10 @@ def test_calendar_day_is_end_minus_one_ns_date(stamps):
 
 
 def test_sub_minute_stamp_differs_from_ns_rule_by_design():
-    """Off-grid stamps (never produced by AEMO) use the one-minute shift."""
+    """Ruling (lead), not a divergence: the module docstring of src/interval_days.py
+    (lines 1-35) defines interval_calendar_day as a one-minute shift, and AEMO never
+    emits off-grid stamps. A sub-minute stamp therefore differs from the 1 ns rule by
+    design; this test pins that documented behaviour."""
     s = pd.Series([pd.Timestamp("2000-01-01 00:00:30")])
     assert interval_calendar_day(s).tolist() == [pd.Timestamp("1999-12-31").date()]
     assert (s[0] - pd.Timedelta(1, "ns")).date() == pd.Timestamp("2000-01-01").date()

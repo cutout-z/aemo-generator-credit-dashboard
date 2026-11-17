@@ -58,5 +58,9 @@ def test_dedupe_is_idempotent_and_one_row_per_key(fr, ds, extra):
     once = dedupe_interval_keys(df, KEYS, label="t", value_cols=["SCADAVALUE"])
     twice = dedupe_interval_keys(once, KEYS, label="t", value_cols=["SCADAVALUE"])
     assert not once.duplicated(subset=KEYS).any()
+    # keep-last: every key that got a conflicting later row carries the later value
+    conflicted = once.merge(conflict[KEYS].drop_duplicates(), on=KEYS)
+    assert (conflicted["SCADAVALUE"] == 99.0).all()
+    assert len(conflicted) == len(conflict[KEYS].drop_duplicates())
     pd.testing.assert_frame_equal(once, twice)
     assert set(map(tuple, once[KEYS].values)) == set(map(tuple, df[KEYS].values))

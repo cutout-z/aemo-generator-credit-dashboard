@@ -46,8 +46,11 @@ def test_stamp_only_change_is_equal(payload, new_stamp, perm):
     assert facts_equal(payload, other, (STAMP,))
     assert facts_equal(payload, other, STAMP)  # bare-string form
     # key order is irrelevant
-    shuffled = dict(reversed(list(other.items())))
+    items = list(other.items())
+    order = sorted(range(len(items)), key=lambda i: perm[i % 8])
+    shuffled = dict(items[i] for i in order)
     assert facts_equal(payload, shuffled, (STAMP,))
+    assert facts_equal(shuffled, payload, (STAMP,))
 
 
 @given(payloads, st.data())
