@@ -203,14 +203,6 @@ class TestIndexEmission:
         regions = {e["region"] for e in entries.values() if e.get("type") != "station"}
         assert regions == EXPECTED_REGIONS
 
-    def test_region_filter_values_from_index_are_five_nem_regions(self, tmp_path):
-        # Mirrors docs/index.html populateFilters(): region options come from
-        # unique region values in index.json — exactly the five NEM regions.
-        path = self._gen_index(tmp_path, _clean_frame())
-        entries = json.loads(path.read_text())
-        options = {e["region"] for e in entries}
-        assert options == {"NSW1", "QLD1", "VIC1", "SA1", "TAS1"}
-
 
 # ─── generate_all metadata files: null not 'nan' ────────────────────────────
 

@@ -190,16 +190,16 @@ Location: `agent-contracts/facts/AEMO-FACTS.md` (git, `cutout-z/agent-contracts`
 4. **Verify in a browser, not by grep.** A change is done when a real browser renders it with real
    data: element present, height > 0, content non-empty. An HTTP 200 on the HTML file proves nothing.
 5. **Keep the tests green.** The suite is `tests/` (`pytest -q`). Many of its files read
-   `docs/index.html`; three pin its DOM — see *Pitfalls*. If a change breaks one, the change or the test
+   `docs/index.html`; three find its panels by id — see *Pitfalls*. If a change breaks one, the change or the test
    is wrong, deliberately: say which in the commit message.
 
-   **Baseline on a fresh clone (2026-10-28, `1e656ca`, after the portfolio view; Mac anaconda:
-   nemosis 3.8.1, pandas 2.3.3, pyarrow 23): `596 passed, 12 failed, 3 skipped, 10 errors`.** All 22
+   **Baseline on a fresh clone (2026-11-17, `c7266df49` less one duplicate test (audit X1); Mac anaconda:
+   nemosis 3.8.1, pandas 2.3.3, pyarrow 23): `595 passed, 12 failed, 3 skipped, 10 errors`.** All 22
    non-passes are in `tests/test_outputs.py`: a `FileNotFoundError` on generated data that git ignores
    (`data/**`), which only exists on the lane machine. That is environmental, not a regression. The
    lane runs the versions pinned in `requirements.txt` (pandas 3, pyarrow 24). `docs/data/processed-cache/**`
    is *tracked*, by design (`src/processed_cache.py`: a cold runner restores from it). Your bar: the
-   596 keep passing and you add no new failure.
+   595 keep passing and you add no new failure.
 
 ## Facts
 
@@ -267,10 +267,13 @@ theme-flip breakage. Exit code 1 means something is wrong; it must be 0 before y
 - **`initAxisRangeDrag()`** in `docs/index.html` is a hand-written capture-phase axis-drag handler
   (grab an axis to scale the range; it preserves box-zoom, wheel and double-click reset). It is
   load-bearing for how this page is used — if you restructure the charts, keep it working.
-- **Three tests pin the page's DOM**: `tests/test_offer_curve_panel.py` asserts `#offerCurveWrap` sits
-  inside `#offersBox`, `tests/test_s306_genset_removal.py` mirrors `populateFilters()`, and
-  `tests/test_aer_qa.py` asserts the AER QA lane adds **no** panel or chart. Renaming those ids or
-  adding an AER panel breaks the build, on purpose.
+- **Three tests find the page's panels by id**: `tests/test_offer_curve_panel.py` asserts
+  `#offerCurveWrap` sits inside `#offersBox` and neither inside `#panelFCAS`;
+  `tests/test_curtailment_copy.py` reads from `#panelEconCurtailment` to `#chartEconCurtailment`, and
+  `tests/test_spread_day_basis.py` from `#panelMarketSpread` to `#spreadDuration`. Renaming those ids
+  breaks the build, on purpose. No test reads the region filter or checks the page for an AER panel:
+  `tests/test_aer_qa.py` checks only that the AER QA lane writes nothing but `aer_qa.json` into a
+  temporary docs dir.
 - **Tailwind purges unused component classes.** After adding classes, run `./scripts/build-css.sh` and
   commit `docs/assets/app.css`, or the styling silently does nothing. The same script republishes
   `chart-tokens.js` and `portfolio.js`; edit the source in `assets/js/`, never the copy in `docs/assets/js/`.
