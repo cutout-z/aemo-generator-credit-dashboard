@@ -22,7 +22,10 @@ own ``--skip-*`` flags), and the processed-cache snapshot
 from __future__ import annotations
 
 import json
+import os
 import socket
+import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -37,8 +40,34 @@ SKIP_FLAGS = [
     "--skip-geninfo", "--skip-network-outages", "--skip-aer-qa",
     "--no-processed-cache-snapshot", "--months-back", "0",
 ]
+REPO = Path(__file__).resolve().parents[1]
+# main._months_to_process reads now - 20 days, so the processed month depends on the day of
+# the month. main's clock is pinned to day E2E_DAY (default 17) of the REAL current month: the
+# freshness guard in src/freshness.py reads the real clock, so the pinned date must stay near it.
+FIXED_NOW = datetime.now().replace(
+    day=int(os.environ.get("E2E_DAY", "17")), hour=12, minute=0, second=0, microsecond=0)
 REGIONS = ["NSW1", "QLD1"]
 DUIDS = {"SOLAR1": ("NSW1", "Solar", 100.0), "WIND1": ("QLD1", "Wind", 80.0)}
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FIXED_NOW if tz is None else FIXED_NOW.replace(tzinfo=tz)
+
+
+def _repo_state() -> tuple[str, dict]:
+    """git status of the real data dirs plus a (size, mtime) map of every file in them."""
+    status = subprocess.run(
+        ["git", "-C", str(REPO), "status", "--porcelain", "--ignored", "--", "docs", "data"],
+        capture_output=True, text=True, check=True).stdout
+    files = {}
+    for top in ("docs/data", "data"):
+        for p in (REPO / top).rglob("*"):
+            if p.is_file():
+                st = p.stat()
+                files[str(p)] = (st.st_size, st.st_mtime_ns)
+    return status, files
 
 
 def _month() -> tuple[int, int]:
@@ -100,10 +129,18 @@ def pipeline_run(tmp_path, monkeypatch):
     # Re-root EVERY repo-relative path constant (DATA_DIR, DOCS_DATA_DIR,
     # GENERATORS_JSON_DIR, INDEX_JSON, caches...) into tmp_path, so the run can
     # never write to the real data/ or docs/data/.
-    for name, val in list(vars(config).items()):
-        if isinstance(val, str) and val.startswith(("data/", "docs/")) or val in ("data", "docs"):
-            monkeypatch.setattr(config, name, str(tmp_path / val))
+    repo_paths = {
+        name: val for name, val in vars(config).items()
+        if isinstance(val, str) and (val in ("data", "docs") or val.startswith(("data/", "docs/")))
+    }
+    assert {"DATA_DIR", "DOCS_DATA_DIR", "GENERATORS_JSON_DIR", "INDEX_JSON",
+            "NEMOSIS_CACHE_DIR"} <= set(repo_paths)
+    for name, val in repo_paths.items():
+        monkeypatch.setattr(config, name, str(tmp_path / val))
+    for name in repo_paths:  # every repo-relative constant now points inside tmp_path
+        assert Path(getattr(config, name)).is_relative_to(tmp_path), name
     assert Path(config.DATA_DIR) == data_dir and Path(config.DOCS_DATA_DIR) == docs_dir
+    monkeypatch.setattr(pipeline, "datetime", _FrozenDatetime)
     # build_market_factors lists DISPATCHPRICE months from the raw cache names.
     year, month = _month()
     cache = data_dir / "nemosis_cache"
@@ -129,7 +166,9 @@ def pipeline_run(tmp_path, monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", no_network)
     monkeypatch.setattr("sys.argv", ["src.main", *SKIP_FLAGS])
+    before = _repo_state()
     pipeline.main()
+    assert _repo_state() == before, "main() touched the real docs/data or data/ (re-rooting failed)"
     return data_dir, docs_dir, f"{year}-{month:02d}"
 
 
@@ -190,6 +229,7 @@ def test_market_and_manifest_outputs(pipeline_run):
         assert all(v is not None for v in e["spread_decile"])
     manifest = json.loads((docs_dir / "run_status.json").read_text())
     from src.run_status import validate_manifest
-    validate_manifest(manifest)
+    assert validate_manifest(manifest) == []
     assert manifest["outputs"]["generator_files"] == len(DUIDS)
-    assert manifest["guards"]["monthly_freshness"] == "pass"
+    expected = FIXED_NOW - pd.Timedelta(days=20)
+    assert _month() == (expected.year, expected.month)
