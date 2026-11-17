@@ -138,17 +138,18 @@ def _one_day(avail):
 
 
 _TINY = {"BANDAVAIL1": 1e-5, "BANDAVAIL2": 10.0, "BANDAVAIL3": 1e-4, "BANDAVAIL4": 5.0}
+_SUB_QUANTUM = {"BANDAVAIL1": 0.0006, "BANDAVAIL2": 0.0008}
 
 
 @pytest.mark.xfail(
     strict=True, raises=AssertionError,
-    reason="bands 1e-5, 10, 1e-4, 5 MW emit cum_mw [0.0, 10.0, 10.0, 15.0]: a tranche between 1e-9 and "
-    "0.0005 MW passes the 1e-9 skip but round(cum, 3) puts it on the previous value, contradicting the "
-    "docstring (zero-width bands are dropped). Proposed fix: skip a tranche whose rounded cum equals "
-    "the previous cum.",
+    reason="bands 1e-5, 10, 1e-4, 5 MW emit cum_mw [0.0, 10.0, 10.0, 15.0], and 0.0006, 0.0008 MW emit "
+    "[0.001, 0.001]: a tranche below the 0.001 MW rounding quantum passes the 1e-9 skip but round(cum, 3) "
+    "puts it on the previous value, contradicting the docstring (zero-width bands are dropped). Proposed "
+    "fix: skip a tranche whose rounded cum equals the previous cum (a threshold such as inc < 0.0005 does "
+    "not fix the second case).",
 )
-@given(st.just(_TINY))
-@example(_TINY)
+@pytest.mark.parametrize("avail", [_TINY, _SUB_QUANTUM], ids=["tiny-first-band", "sub-quantum-pair"])
 def test_daily_cum_mw_strictly_increases(avail):
     cum = _one_day(avail)["cum_mw"].tolist()
     assert cum[0] > 0
