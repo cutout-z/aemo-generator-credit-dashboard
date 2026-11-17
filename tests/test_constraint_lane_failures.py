@@ -91,9 +91,13 @@ class TestReferenceTables:
         monkeypatch.setattr(dc, "dynamic_data_compiler", _compiler(calls))
         dc.fetch_spdconnectionpointconstraint(str(tmp_path), max_age_days=dc.REFERENCE_MAX_AGE_DAYS)
         _age(tmp_path / dc.SPDCP_CACHE, 26)
+        # The re-pull writes "now": bracket it with the clock on both sides, so a run straddling 00:00 UTC
+        # cannot disagree with itself.
+        before = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         dc.fetch_spdconnectionpointconstraint(str(tmp_path), max_age_days=dc.REFERENCE_MAX_AGE_DAYS)
+        after = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         assert calls == ["SPDCONNECTIONPOINTCONSTRAINT"] * 2
-        assert dc.reference_cache_date(tmp_path / dc.SPDCP_CACHE) == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        assert dc.reference_cache_date(tmp_path / dc.SPDCP_CACHE) in {before, after}
 
     def test_failed_refresh_keeps_the_stale_cache_and_says_so(self, tmp_path, monkeypatch):
         calls = []
