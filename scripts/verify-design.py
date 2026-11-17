@@ -119,7 +119,7 @@ def check_dashboard(pg, duid: str, failures: list[str], shots: bool) -> None:
 def main() -> int:
     global PROOF_BASE, DOCS_BASE
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dashboard", metavar="DUID", help="also verify the dashboard at #<DUID> (server on 9350)")
+    ap.add_argument("--dashboard", metavar="DUID", help="also verify the dashboard at #<DUID> (docs/ server, --docs-base)")
     ap.add_argument("--screens", action="store_true",
                     help="write screenshots to design/screens/ (default: check only, write nothing)")
     ap.add_argument("--proof-base", default=PROOF_BASE, help=f"URL serving the repo root (default {PROOF_BASE})")
@@ -135,13 +135,13 @@ def main() -> int:
         pg = b.new_page(viewport={"width": 1440, "height": 960})
         pg.on("pageerror", lambda e: failures.append(f"page error: {str(e)[:100]}"))
         pg.on("response", lambda r: failures.append(f"HTTP {r.status} {r.url[-50:]}") if r.status >= 400 else None)
-        print("proof page (design/tokens.html on :9351)")
+        print(f"proof page ({PROOF_BASE}design/tokens.html)")
         try:
             check_proof_page(pg, failures, args.screens)
         except Exception as exc:  # noqa: BLE001
             failures.append(f"proof page could not be checked: {type(exc).__name__}: {exc}")
         if args.dashboard:
-            print(f"dashboard (#{args.dashboard} on :9350)")
+            print(f"dashboard ({DOCS_BASE}#{args.dashboard})")
             try:
                 check_dashboard(pg, args.dashboard, failures, args.screens)
             except Exception as exc:  # noqa: BLE001
