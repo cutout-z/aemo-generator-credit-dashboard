@@ -12,6 +12,10 @@
     # check never dirties the tree)
     /opt/anaconda3/bin/python3 scripts/verify-design.py --dashboard ADPBA1 --screens
 
+    # servers on other ports (scripts/gate.sh picks free ones):
+    /opt/anaconda3/bin/python3 scripts/verify-design.py --proof-base http://127.0.0.1:<p1>/ \
+        --docs-base http://127.0.0.1:<p2>/ --dashboard ADPBA1
+
 Why a script and not a screenshot-by-eye: "looks done" and "is done" diverge on this page in known
 ways — a component class that Tailwind purged, a chart created inside a hidden panel (0px), a chart
 still using hard-coded colours instead of the tokens. All three are invisible in a diff and obvious here.
@@ -28,6 +32,8 @@ from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCREENS = ROOT / "design" / "screens"   # unpublished: docs/ is the public GitHub Pages tree
+PROOF_BASE = "http://127.0.0.1:9351/"   # the repo root (design/tokens.html)
+DOCS_BASE = "http://127.0.0.1:9350/"    # docs/ as the site root (the GitHub Pages equivalent)
 
 
 def rgb(value: str) -> tuple[int, int, int]:
@@ -45,7 +51,7 @@ def rgb(value: str) -> tuple[int, int, int]:
 
 
 def check_proof_page(pg, failures: list[str], shots: bool) -> None:
-    pg.goto("http://127.0.0.1:9351/design/tokens.html", wait_until="networkidle", timeout=60000)
+    pg.goto(PROOF_BASE + "design/tokens.html", wait_until="networkidle", timeout=60000)
     pg.wait_for_timeout(2000)
 
     surface = pg.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()")
@@ -85,7 +91,7 @@ def check_proof_page(pg, failures: list[str], shots: bool) -> None:
 
 
 def check_dashboard(pg, duid: str, failures: list[str], shots: bool) -> None:
-    pg.goto(f"http://127.0.0.1:9350/#{duid}", wait_until="networkidle", timeout=60000)
+    pg.goto(f"{DOCS_BASE}#{duid}", wait_until="networkidle", timeout=60000)
     pg.wait_for_timeout(1500)
     if pg.eval_on_selector_all(".js-plotly-plot", "e => e.length") == 0:
         pg.evaluate(f"selectGenerator('{duid}')")
@@ -111,11 +117,16 @@ def check_dashboard(pg, duid: str, failures: list[str], shots: bool) -> None:
 
 
 def main() -> int:
+    global PROOF_BASE, DOCS_BASE
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dashboard", metavar="DUID", help="also verify the dashboard at #<DUID> (server on 9350)")
+    ap.add_argument("--dashboard", metavar="DUID", help="also verify the dashboard at #<DUID> (docs/ server, --docs-base)")
     ap.add_argument("--screens", action="store_true",
                     help="write screenshots to design/screens/ (default: check only, write nothing)")
+    ap.add_argument("--proof-base", default=PROOF_BASE, help=f"URL serving the repo root (default {PROOF_BASE})")
+    ap.add_argument("--docs-base", default=DOCS_BASE, help=f"URL serving docs/ (default {DOCS_BASE})")
     args = ap.parse_args()
+    PROOF_BASE = args.proof_base.rstrip("/") + "/"
+    DOCS_BASE = args.docs_base.rstrip("/") + "/"
     if args.screens:
         SCREENS.mkdir(parents=True, exist_ok=True)
     failures: list[str] = []
@@ -124,13 +135,13 @@ def main() -> int:
         pg = b.new_page(viewport={"width": 1440, "height": 960})
         pg.on("pageerror", lambda e: failures.append(f"page error: {str(e)[:100]}"))
         pg.on("response", lambda r: failures.append(f"HTTP {r.status} {r.url[-50:]}") if r.status >= 400 else None)
-        print("proof page (design/tokens.html on :9351)")
+        print(f"proof page ({PROOF_BASE}design/tokens.html)")
         try:
             check_proof_page(pg, failures, args.screens)
         except Exception as exc:  # noqa: BLE001
             failures.append(f"proof page could not be checked: {type(exc).__name__}: {exc}")
         if args.dashboard:
-            print(f"dashboard (#{args.dashboard} on :9350)")
+            print(f"dashboard ({DOCS_BASE}#{args.dashboard})")
             try:
                 check_dashboard(pg, args.dashboard, failures, args.screens)
             except Exception as exc:  # noqa: BLE001

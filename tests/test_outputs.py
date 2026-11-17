@@ -306,36 +306,9 @@ class TestUnadjustedRevenueDetector:
         assert out[["duid", "month"]].values.tolist() == [["BAT1", "2025-01"]]
 
 
-class TestValueBounds:
-    @pytest.fixture(autouse=True)
-    def load_data(self):
-        self.agg = pd.read_feather(DATA_DIR / "monthly_aggregates.feather")
-        self.gen = pd.read_feather(DATA_DIR / "generators.feather")
-
-    def test_capacity_factor_range(self):
-        """Monthly CF bounded near 1, fuel-aware (hydro is the exception class).
-
-        CF is a ratio in [0, ~1]; the old assertion allowed 100 — a synthetic
-        CF of 50 (5000%) sailed through. Now the fuel-aware monthly policy runs
-        (see _fuel_aware_monthly_cf_offenders): non-hydro hard-fails above 1.10,
-        hydro above 1.25, with CAPACITY_OVERRIDES recomputed for producer parity
-        and the documented 2022-06 market-suspension anomaly month exempted.
-        """
-        cf = self.agg["capacity_factor"].dropna()
-        assert (cf >= 0).all(), "Negative capacity factors found"
-        offenders = _fuel_aware_monthly_cf_offenders(self.agg, self.gen)
-        assert offenders.empty, (
-            "Monthly CF breaches fuel-aware bounds: "
-            f"{offenders.to_dict('records')[:10]}"
-        )
-
-    def test_generation_non_negative(self):
-        gen = self.agg["generation_mwh"].dropna()
-        assert (gen >= 0).all(), "Negative generation_mwh found"
-
-    def test_capacity_mw_positive(self):
-        cap = self.gen["CAPACITY_MW"].dropna()
-        assert (cap > 0).all(), "Non-positive CAPACITY_MW found"
+class TestValueBoundsHermetic:
+    """The value-bound policies on synthetic rows. They need no data/, so they sit outside
+    TestValueBounds (whose autouse fixture reads data/*.feather) and judge every run."""
 
     def test_monthly_cf_rejects_nonsense_scale(self):
         """S3-10 negative regression: CF 50 (percent scale) must FAIL the policy.
@@ -396,27 +369,6 @@ class TestValueBounds:
         offenders = _fuel_aware_monthly_cf_offenders(monthly, gen)
         assert offenders.empty
 
-    def test_mlf_range(self):
-        """MLF values in the LIVE long frame (mlf column) stay in [0.5, 1.5].
-
-        The old check looped over wide FY* columns of the legacy
-        data/mlf_history.feather, which is long-schema — the loop found no
-        columns and asserted nothing (MLF -999 sailed through). The live frame
-        is fetch_mlf_data()'s melt of the tracker CSV; validate_mlf_history
-        (also invoked by the fetch itself) enforces the schema and range.
-        """
-        frame = _live_mlf_frame()
-        assert validate_mlf_history(frame) is not None
-
-    def test_revenue_is_mlf_adjusted_where_a_factor_exists(self):
-        """No settled row may carry unadjusted revenue (implied factor 1.000)
-        while its FY has a factor != 1."""
-        new = _unadjusted_revenue_offenders(self.agg, _live_mlf_frame())
-        assert new.empty, (
-            "revenue_aud not MLF-adjusted: "
-            f"{new[['duid', 'month', 'implied', 'mlf']].head(10).to_dict('records')}"
-        )
-
     def test_mlf_sentinel_negative_fails(self, tmp_path):
         """S3-10 negative regression: MLF -999 in the live long schema must fail.
 
@@ -445,6 +397,59 @@ class TestValueBounds:
         )
         with pytest.raises(ValueError, match="plausible range"):
             fetch_mlf_data(str(tmp_path), force=False)
+
+
+class TestValueBounds:
+    @pytest.fixture(autouse=True)
+    def load_data(self):
+        self.agg = pd.read_feather(DATA_DIR / "monthly_aggregates.feather")
+        self.gen = pd.read_feather(DATA_DIR / "generators.feather")
+
+    def test_capacity_factor_range(self):
+        """Monthly CF bounded near 1, fuel-aware (hydro is the exception class).
+
+        CF is a ratio in [0, ~1]; the old assertion allowed 100 — a synthetic
+        CF of 50 (5000%) sailed through. Now the fuel-aware monthly policy runs
+        (see _fuel_aware_monthly_cf_offenders): non-hydro hard-fails above 1.10,
+        hydro above 1.25, with CAPACITY_OVERRIDES recomputed for producer parity
+        and the documented 2022-06 market-suspension anomaly month exempted.
+        """
+        cf = self.agg["capacity_factor"].dropna()
+        assert (cf >= 0).all(), "Negative capacity factors found"
+        offenders = _fuel_aware_monthly_cf_offenders(self.agg, self.gen)
+        assert offenders.empty, (
+            "Monthly CF breaches fuel-aware bounds: "
+            f"{offenders.to_dict('records')[:10]}"
+        )
+
+    def test_generation_non_negative(self):
+        gen = self.agg["generation_mwh"].dropna()
+        assert (gen >= 0).all(), "Negative generation_mwh found"
+
+    def test_capacity_mw_positive(self):
+        cap = self.gen["CAPACITY_MW"].dropna()
+        assert (cap > 0).all(), "Non-positive CAPACITY_MW found"
+
+    def test_mlf_range(self):
+        """MLF values in the LIVE long frame (mlf column) stay in [0.5, 1.5].
+
+        The old check looped over wide FY* columns of the legacy
+        data/mlf_history.feather, which is long-schema — the loop found no
+        columns and asserted nothing (MLF -999 sailed through). The live frame
+        is fetch_mlf_data()'s melt of the tracker CSV; validate_mlf_history
+        (also invoked by the fetch itself) enforces the schema and range.
+        """
+        frame = _live_mlf_frame()
+        assert validate_mlf_history(frame) is not None
+
+    def test_revenue_is_mlf_adjusted_where_a_factor_exists(self):
+        """No settled row may carry unadjusted revenue (implied factor 1.000)
+        while its FY has a factor != 1."""
+        new = _unadjusted_revenue_offenders(self.agg, _live_mlf_frame())
+        assert new.empty, (
+            "revenue_aud not MLF-adjusted: "
+            f"{new[['duid', 'month', 'implied', 'mlf']].head(10).to_dict('records')}"
+        )
 
     def test_no_placeholder_duids(self):
         assert "-" not in self.gen["DUID"].values, "DUID '-' placeholder still present"
