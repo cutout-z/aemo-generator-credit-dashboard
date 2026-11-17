@@ -34,7 +34,7 @@ from src.geninfo import (
     select_current_edition,
     snapshot_fingerprint,
 )
-from src.run_status import LaneRun, check_factor_block_continuity, STATUS_DEGRADED, STATUS_ERROR, STATUS_OK
+from src.run_status import LaneRun, check_factor_block_continuity, STATUS_DEGRADED, STATUS_OK
 
 # Header names as they appear in the real workbook (some carry a leading
 # space — parse must strip). Header lives in row 4 of the 'Generator
