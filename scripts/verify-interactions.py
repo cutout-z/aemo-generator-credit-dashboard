@@ -7,10 +7,14 @@ offer-day select, drag-to-reorder and panel resize — plus touch scrolling on a
     cd <repo>/docs && python3 -m http.server 9350 --bind 127.0.0.1 &
     /opt/anaconda3/bin/python3 scripts/verify-interactions.py
 
+    # docs/ served elsewhere (scripts/gate.sh picks a free port):
+    /opt/anaconda3/bin/python3 scripts/verify-interactions.py --base http://127.0.0.1:<port>/
+
 Reads only; writes nothing. Exit code 1 if any interaction is broken.
 """
 from __future__ import annotations
 
+import argparse
 import sys
 
 from playwright.sync_api import sync_playwright
@@ -77,6 +81,10 @@ def axis_sweep(pg) -> list[str]:
 
 
 def main() -> int:
+    global BASE
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", default=BASE, help=f"URL serving docs/ as the site root (default {BASE})")
+    BASE = ap.parse_args().base.rstrip("/") + "/"
     with sync_playwright() as p:
         b = p.chromium.launch()
         errors: list[str] = []
