@@ -1,0 +1,1 @@
+{"type":"station","station_name":"Horsham Renewable Energy Park","duids":["FULSF1","FULBESS1"],"region":"VIC1","fuel_category":"Battery","capacity_mw":200.0,"technology":"Storage","connection_points":[],"lgc_eligible":false,"fuel_mix":{"Battery":100.0,"Solar":100.0}}

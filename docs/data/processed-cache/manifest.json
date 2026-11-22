@@ -22,8 +22,8 @@
     },
     {
       "name": "generators.feather",
-      "sha256": "579a7285de4005e01bf24711798cde8631867aa79a7287b0fbd1881e16a1b671",
-      "size_bytes": 39146
+      "sha256": "d47ce0c36a06d5a37c85cfdbe5a08bff22d4709e6e6012a6716594509f4175ec",
+      "size_bytes": 39410
     },
     {
       "name": "market_factors_daily.feather",

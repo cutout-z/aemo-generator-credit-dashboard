@@ -6,16 +6,16 @@
   "monthly_freshness": "pass"
  },
  "outputs": {
-  "generator_files": 568,
+  "generator_files": 572,
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-11-22T21:19:27Z",
+  "finished_utc": "2026-11-22T21:54:28Z",
   "mode": "incremental",
   "months_back": 2,
   "problems": [],
   "result": "ok",
-  "started_utc": "2026-11-22T21:15:03Z"
+  "started_utc": "2026-11-22T21:50:04Z"
  },
  "schema_version": 1,
  "sources": {
