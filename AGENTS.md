@@ -4,7 +4,7 @@ Read this before touching anything. The design brief (`BRIEF.md`) says *what* to
 work here is allowed to happen.
 
 <!-- BEGIN agent-contracts:family -->
-<!-- source: family/AGENTS.family.md sha256:70dec07a9b96 — edit in cutout-z/agent-contracts, not here -->
+<!-- source: family/AGENTS.family.md sha256:4ac117338e00 — edit in cutout-z/agent-contracts, not here -->
 ## Family conventions (every repo, every agent)
 
 *Generated from `agent-contracts/family/AGENTS.family.md`. Edit it there, never here: a drift check
@@ -108,6 +108,20 @@ handback notes get copied and published.
   shows the test exercises the fix.
 - Don't relay another agent's or subagent's numbers. Re-run or read the evidence yourself: a relayed
   number can't be traced, and you are the one signing the handback.
+- A repo's **verify recipe** is the end-to-end check its `AGENTS.md` names: the steps that run the
+  real app or pipeline and inspect the result. Run it before you call a change done. When a repo has
+  none and you worked out how to run it, put those steps in the handback as a proposed recipe.
+- Three fix attempts on the same failing check is the limit, unless a narrower one applies (a
+  review's round cap). An attempt is a change made as the fix; a diagnostic probe is not one. When the
+  third still fails, the cause isn't understood: stop fixing and bring the owner a decision, with
+  options and your pick, the failing output and what each attempt changed (the private contract says
+  where; with none, a question in your reply).
+- A flaky test is a defect to report. Re-run it to show the flake and report every run, green and
+  red, on the base as well as on your change: a test that flakes only with your change is your
+  change's failure. Then trace the cause. In the code under test, it is a defect to fix like any
+  other; in the test itself, it is an instrument found wrong: say so and record it where it will be
+  picked up. A failure shown flaky on the base doesn't block your change. A retry, sleep or skip added
+  to the code or config hides the failure from every later run.
 
 ### Attribution and handback
 
