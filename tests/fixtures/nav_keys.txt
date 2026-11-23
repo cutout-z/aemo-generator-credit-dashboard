@@ -1,0 +1,11 @@
+# Keys the shared nav (https://cutout-z.github.io/aemo-dashboards/nav.js) knows: the `key:` of each item in
+# its DASHBOARDS array, plus nothing else (`home` is the aemo-dashboards overview and no dashboard page sends it).
+# Source: cutout-z/aemo-dashboards nav.js. The pages load that URL from Pages `main`, which moves, so this is a
+# copy. Refresh after a dashboard is added or renamed:
+#   grep -o "key: '[^']*'" <aemo-dashboards checkout>/nav.js | cut -d"'" -f2
+# aemo-dashboards' own tests/test_nav_links.py fails if nav.js and its list of keys disagree.
+historical-prices
+negative-prices
+generator-credit
+renewable-generators
+mlf-tracker
