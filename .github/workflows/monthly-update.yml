@@ -77,13 +77,12 @@ jobs:
             git push
           fi
 
-  deploy-pages:
+  # Upload and deploy run in separate jobs: deploy-pages lists the run's artifacts by name,
+  # and right after an upload in the same job that list can come back empty
+  # (actions/deploy-pages#451). A re-run then fails on two "github-pages" artifacts.
+  build-pages:
     needs: update
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -98,6 +97,14 @@ jobs:
         with:
           path: docs
 
+  deploy-pages:
+    needs: build-pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
