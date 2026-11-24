@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
   pages: write
   id-token: write
 
@@ -77,9 +78,11 @@ jobs:
             git push
           fi
 
-  # Upload and deploy run in separate jobs: deploy-pages lists the run's artifacts by name,
-  # and right after an upload in the same job that list can come back empty
-  # (actions/deploy-pages#451). A re-run then fails on two "github-pages" artifacts.
+  # Upload and deploy run in separate jobs, and deploy waits until the artifact is listed:
+  # deploy-pages looks the artifact up by name, and that lookup can come back empty right
+  # after the upload (actions/deploy-pages#451). If deploy still fails, use "Re-run failed
+  # jobs" (within 3 days, while the artifact is kept), not "Re-run all jobs", which
+  # uploads a second "github-pages" artifact and fails on the duplicate.
   build-pages:
     needs: update
     runs-on: ubuntu-latest
@@ -96,15 +99,31 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs
+          retention-days: 3
 
   deploy-pages:
     needs: build-pages
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+      - name: Wait for the Pages artifact to be listed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 24); do
+            n=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?name=github-pages" --jq '.total_count' || echo 0)
+            if [ "$n" -ge 1 ]; then echo "github-pages listed ($n) after $(( (i - 1) * 5 ))s"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::github-pages artifact still not listed after 2 minutes (actions/deploy-pages#451). Re-run failed jobs, or start a fresh run."
+          exit 1
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
