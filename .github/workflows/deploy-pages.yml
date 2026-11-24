@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
   pages: write
   id-token: write
 
@@ -18,11 +17,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Upload and deploy run in separate jobs, and deploy waits until the artifact is listed:
-  # deploy-pages looks the artifact up by name, and that lookup can come back empty right
-  # after the upload (actions/deploy-pages#451). If deploy still fails, use "Re-run failed
-  # jobs" (within 3 days, while the artifact is kept), not "Re-run all jobs", which
-  # uploads a second "github-pages" artifact and fails on the duplicate.
+  # Upload and deploy run in separate jobs, and deploy retries twice: deploy-pages looks the
+  # artifact up by name, and that lookup can come back empty right after the upload
+  # (actions/deploy-pages#451). A failed lookup creates no deployment, so a retry is safe.
+  # If all three tries fail, start a fresh run (workflow_dispatch). "Re-run all jobs" uploads a
+  # second "github-pages" artifact and then fails on the duplicate.
   build:
     runs-on: ubuntu-latest
     steps:
@@ -40,20 +39,28 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry1.outputs.page_url || steps.deployment_retry2.outputs.page_url }}
     steps:
-      - name: Wait for the Pages artifact to be listed
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for i in $(seq 1 24); do
-            n=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?name=github-pages" --jq '.total_count' || echo 0)
-            if [ "$n" -ge 1 ]; then echo "github-pages listed ($n) after $(( (i - 1) * 5 ))s"; exit 0; fi
-            sleep 5
-          done
-          echo "::error::github-pages artifact still not listed after 2 minutes (actions/deploy-pages#451). Re-run failed jobs, or start a fresh run."
-          exit 1
-
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retrying the deploy
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy to GitHub Pages (retry 1)
+        id: deployment_retry1
+        if: steps.deployment.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before the last retry
+        if: steps.deployment_retry1.outcome == 'failure'
+        run: sleep 90
+
+      - name: Deploy to GitHub Pages (retry 2)
+        id: deployment_retry2
+        if: steps.deployment_retry1.outcome == 'failure'
         uses: actions/deploy-pages@v4
