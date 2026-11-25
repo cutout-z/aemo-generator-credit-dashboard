@@ -1,8 +1,8 @@
 {
  "guards": {
-  "daily_age_days": 24,
+  "daily_age_days": 25,
   "daily_freshness": "pass",
-  "monthly_age_days": 24,
+  "monthly_age_days": 25,
   "monthly_freshness": "pass"
  },
  "outputs": {
@@ -10,23 +10,25 @@
   "processed_cache_snapshot": true
  },
  "run": {
-  "finished_utc": "2026-11-24T21:19:36Z",
+  "finished_utc": "2026-11-25T21:19:30Z",
   "mode": "incremental",
   "months_back": 2,
-  "problems": [],
-  "result": "ok",
-  "started_utc": "2026-11-24T21:15:05Z"
+  "problems": [
+   "aer_qa: degraded \u2014 AER edition 2026Q2 older than expected 2026Q3"
+  ],
+  "result": "degraded",
+  "started_utc": "2026-11-25T21:15:03Z"
  },
  "schema_version": 1,
  "sources": {
   "aer_qa": {
    "asof_month": "2026Q2",
    "attempted_months": 1,
-   "error": null,
+   "error": "AER edition 2026Q2 older than expected 2026Q3",
    "months_with_data": 1,
    "note": "edition unchanged (content hashes match the cache)",
    "retained_last_good": false,
-   "status": "ok"
+   "status": "degraded"
   },
   "constraints": {
    "asof_month": "2026-09",
